@@ -1,6 +1,14 @@
 # Ignore the OpenFrontIO source folder (reference only, not part of this repo)
 OpenFrontIO/
 
+# Ignore Mars Chrome Extension (reference only)
+MarsOpenFrontChromeExtension-main/
+MARS OpenFrontChromeExtension-main/
+
+# Ignore analysis documents
+*_analysis.md
+analysis_*.md
+
 # Node modules
 node_modules/
 npm-debug.log*
