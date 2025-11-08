@@ -1,0 +1,487 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>OpenFront Helper - Usage Examples</title>
+  <style>
+    body {
+      font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+      max-width: 1200px;
+      margin: 0 auto;
+      padding: 20px;
+      background: #1a1a1a;
+      color: #e0e0e0;
+    }
+
+    h1 {
+      color: #4CAF50;
+      border-bottom: 2px solid #4CAF50;
+      padding-bottom: 10px;
+    }
+
+    h2 {
+      color: #2196F3;
+      margin-top: 30px;
+    }
+
+    h3 {
+      color: #FF9800;
+    }
+
+    pre {
+      background: #2a2a2a;
+      padding: 15px;
+      border-radius: 5px;
+      overflow-x: auto;
+      border-left: 4px solid #4CAF50;
+    }
+
+    code {
+      font-family: 'Courier New', monospace;
+      color: #a5d6a7;
+    }
+
+    .example {
+      background: #252525;
+      padding: 20px;
+      margin: 20px 0;
+      border-radius: 8px;
+      border: 1px solid #333;
+    }
+
+    .note {
+      background: #1e3a5f;
+      padding: 15px;
+      margin: 15px 0;
+      border-radius: 5px;
+      border-left: 4px solid #2196F3;
+    }
+
+    .warning {
+      background: #5f3a1e;
+      padding: 15px;
+      margin: 15px 0;
+      border-radius: 5px;
+      border-left: 4px solid #FF9800;
+    }
+
+    button {
+      background: #4CAF50;
+      color: white;
+      border: none;
+      padding: 10px 20px;
+      border-radius: 5px;
+      cursor: pointer;
+      font-size: 14px;
+      margin: 5px;
+    }
+
+    button:hover {
+      background: #45a049;
+    }
+
+    button.danger {
+      background: #f44336;
+    }
+
+    button.danger:hover {
+      background: #da190b;
+    }
+
+    .output {
+      background: #000;
+      padding: 10px;
+      margin: 10px 0;
+      border-radius: 5px;
+      font-family: monospace;
+      min-height: 50px;
+      color: #0f0;
+    }
+
+    a {
+      color: #64B5F6;
+    }
+
+    a:hover {
+      color: #90CAF9;
+    }
+  </style>
+</head>
+<body>
+  <h1>OpenFront Helper - Usage Examples</h1>
+
+  <div class="note">
+    <strong>Note:</strong> This page demonstrates OpenFront Helper usage. To actually use the helper,
+    you must load it on <a href="https://openfront.io" target="_blank">OpenFront.io</a> game page.
+  </div>
+
+  <h2>Installation</h2>
+
+  <div class="example">
+    <h3>Step 1: Copy the Script</h3>
+    <p>Copy the entire contents of <code>of-helper.v1.js</code></p>
+
+    <h3>Step 2: Open Game</h3>
+    <p>Navigate to <a href="https://openfront.io" target="_blank">OpenFront.io</a> and start or join a game</p>
+
+    <h3>Step 3: Open Console</h3>
+    <p>Press <strong>F12</strong> or <strong>Ctrl+Shift+J</strong> to open browser console</p>
+
+    <h3>Step 4: Paste & Run</h3>
+    <p>Paste the script and press Enter</p>
+
+    <h3>Step 5: Verify</h3>
+    <p>You should see console messages and a HUD overlay appear in top-right corner</p>
+  </div>
+
+  <h2>Basic API Usage</h2>
+
+  <div class="example">
+    <h3>Get Current State</h3>
+    <pre><code>// Get current game state
+const state = OFHelper.getState();
+
+console.log('Tick:', state.tick);
+console.log('My tiles:', state.my.tiles);
+console.log('My troops:', state.my.troops);
+console.log('My gold:', state.my.gold);</code></pre>
+
+    <h3>Listen to Tick Events</h3>
+    <pre><code>// Log troops every tick
+OFHelper.on('turn:tick', ({ tick, state }) => {
+  console.log(`Tick ${tick}: ${state.my.troops} troops`);
+});</code></pre>
+
+    <h3>Use Selectors</h3>
+    <pre><code>const state = OFHelper.getState();
+
+// Get my player info
+const me = OFHelper.selectors.getMyPlayer(state);
+console.log('My name:', me.name);
+
+// Get allies
+const allies = OFHelper.selectors.getAllies(state);
+console.log('Allies:', allies.map(a => a.name));
+
+// Get leaderboard
+const top10 = OFHelper.selectors.getLeaderboard(state).slice(0, 10);
+top10.forEach((p, i) => {
+  console.log(`${i+1}. ${p.name}: ${p.tiles} tiles`);
+});</code></pre>
+  </div>
+
+  <h2>Custom Feature Examples</h2>
+
+  <div class="example">
+    <h3>Example 1: Alliance Monitor</h3>
+    <pre><code>OFHelper.featureRegistry.registerFeature('AllianceMonitor', (api) => {
+  const PANEL_ID = 'alliance-monitor';
+
+  function updateAlliances({ state }) {
+    const allies = api.selectors.getAllies(state);
+
+    if (allies.length === 0) {
+      api.UI.setPanelText(PANEL_ID, 'No allies');
+      return;
+    }
+
+    const allyInfo = allies.map(a =>
+      `${a.name}: ${a.tiles} tiles, ${a.troops} troops`
+    ).join('&lt;br&gt;');
+
+    api.UI.setPanelHTML(PANEL_ID, `
+      &lt;b&gt;Allies (${allies.length})&lt;/b&gt;&lt;br&gt;
+      ${allyInfo}
+    `);
+  }
+
+  function init() {
+    api.UI.createPanel(PANEL_ID);
+    api.on('turn:tick', updateAlliances);
+    console.log('[AllianceMonitor] Started');
+  }
+
+  function destroy() {
+    api.UI.removePanel(PANEL_ID);
+    console.log('[AllianceMonitor] Stopped');
+  }
+
+  return { init, destroy };
+});</code></pre>
+  </div>
+
+  <div class="example">
+    <h3>Example 2: Income Rate Display</h3>
+    <pre><code>OFHelper.featureRegistry.registerFeature('IncomeDisplay', (api) => {
+  const PANEL_ID = 'income';
+
+  function updateIncome({ state }) {
+    const rates = api.selectors.getIncomeRates(state);
+
+    api.UI.setPanelHTML(PANEL_ID, `
+      &lt;b&gt;Income Rates&lt;/b&gt;&lt;br&gt;
+      Gold: ${Math.floor(rates.gold)}/sec&lt;br&gt;
+      Troops: ${Math.floor(rates.troops)}/sec
+    `);
+  }
+
+  function init() {
+    api.UI.createPanel(PANEL_ID);
+    api.on('turn:tick', updateIncome);
+  }
+
+  function destroy() {
+    api.UI.removePanel(PANEL_ID);
+  }
+
+  return { init, destroy };
+});</code></pre>
+  </div>
+
+  <div class="example">
+    <h3>Example 3: Troop Capacity Warning</h3>
+    <pre><code>OFHelper.featureRegistry.registerFeature('TroopWarning', (api) => {
+  const PANEL_ID = 'troop-warning';
+  const THRESHOLD = 0.9;
+  let lastWarnTick = -1;
+
+  function checkCapacity({ tick, state }) {
+    const ratio = state.my.troops / state.my.troopCap;
+
+    if (ratio >= THRESHOLD) {
+      const percentage = Math.floor(ratio * 100);
+      api.UI.setPanelHTML(PANEL_ID, `
+        &lt;span style="color: #ff0"&gt;
+          ⚠️ Troops at ${percentage}%!
+        &lt;/span&gt;
+      `);
+
+      // Console warning once per 100 ticks
+      if (tick - lastWarnTick >= 100) {
+        console.warn('[TroopWarning] Approaching troop capacity!');
+        lastWarnTick = tick;
+      }
+    } else {
+      api.UI.setPanelHTML(PANEL_ID, `
+        &lt;span style="color: #0f0"&gt;
+          ✓ Troops OK (${Math.floor(ratio * 100)}%)
+        &lt;/span&gt;
+      `);
+    }
+  }
+
+  function init() {
+    api.UI.createPanel(PANEL_ID);
+    api.on('turn:tick', checkCapacity);
+  }
+
+  function destroy() {
+    api.UI.removePanel(PANEL_ID);
+  }
+
+  return { init, destroy };
+});</code></pre>
+  </div>
+
+  <div class="example">
+    <h3>Example 4: Leaderboard Panel</h3>
+    <pre><code>OFHelper.featureRegistry.registerFeature('Leaderboard', (api) => {
+  const PANEL_ID = 'leaderboard';
+  const TOP_N = 5;
+
+  function updateLeaderboard({ state }) {
+    const top = api.selectors.getLeaderboard(state).slice(0, TOP_N);
+
+    const html = top.map((player, index) => {
+      const isMe = player.smallID === state.myPlayerId;
+      const color = isMe ? '#ff0' : '#fff';
+      return `&lt;span style="color: ${color}"&gt;${index + 1}. ${player.name}: ${player.tiles}&lt;/span&gt;`;
+    }).join('&lt;br&gt;');
+
+    api.UI.setPanelHTML(PANEL_ID, `
+      &lt;b&gt;Top ${TOP_N}&lt;/b&gt;&lt;br&gt;
+      ${html}
+    `);
+  }
+
+  function init() {
+    api.UI.createPanel(PANEL_ID);
+    api.on('turn:tick', updateLeaderboard);
+  }
+
+  function destroy() {
+    api.UI.removePanel(PANEL_ID);
+  }
+
+  return { init, destroy };
+});</code></pre>
+  </div>
+
+  <h2>Feature Management</h2>
+
+  <div class="example">
+    <h3>List Features</h3>
+    <pre><code>// Get list of registered features
+const features = OFHelper.featureRegistry.listFeatures();
+console.log('Registered features:', features);</code></pre>
+
+    <h3>Unregister Feature</h3>
+    <pre><code>// Remove a feature
+OFHelper.featureRegistry.unregisterFeature('AllianceMonitor');</code></pre>
+
+    <h3>Get Feature Instance</h3>
+    <pre><code>// Access feature instance
+const summaryHUD = OFHelper.featureRegistry.getFeature('SummaryHUD');
+console.log('SummaryHUD:', summaryHUD);</code></pre>
+  </div>
+
+  <h2>Advanced Examples</h2>
+
+  <div class="example">
+    <h3>Example: Territory Percentage Tracker</h3>
+    <pre><code>OFHelper.featureRegistry.registerFeature('TerritoryTracker', (api) => {
+  const PANEL_ID = 'territory';
+  const MAP_SIZE = 10000; // 100x100 tiles
+
+  function updateTerritory({ state }) {
+    const myPercent = (state.my.tiles / MAP_SIZE * 100).toFixed(2);
+    const alive = api.selectors.getAlivePlayers(state);
+    const avgPercent = (MAP_SIZE / alive.length / MAP_SIZE * 100).toFixed(2);
+
+    api.UI.setPanelHTML(PANEL_ID, `
+      &lt;b&gt;Territory&lt;/b&gt;&lt;br&gt;
+      Me: ${myPercent}%&lt;br&gt;
+      Avg: ${avgPercent}%&lt;br&gt;
+      Players: ${alive.length}
+    `);
+  }
+
+  function init() {
+    api.UI.createPanel(PANEL_ID);
+    api.on('turn:tick', updateTerritory);
+  }
+
+  function destroy() {
+    api.UI.removePanel(PANEL_ID);
+  }
+
+  return { init, destroy };
+});</code></pre>
+  </div>
+
+  <div class="example">
+    <h3>Example: Interactive Feature with Toggle</h3>
+    <pre><code>OFHelper.featureRegistry.registerFeature('ToggleablePanel', (api) => {
+  const PANEL_ID = 'toggle-panel';
+  let enabled = true;
+
+  function toggleDisplay() {
+    enabled = !enabled;
+    api.UI.setPanelVisible(PANEL_ID, enabled);
+    console.log('[ToggleablePanel]', enabled ? 'Shown' : 'Hidden');
+  }
+
+  // Expose toggle to global scope
+  window.togglePanel = toggleDisplay;
+
+  function updatePanel({ state }) {
+    if (!enabled) return;
+    api.UI.setPanelHTML(PANEL_ID, `
+      &lt;b&gt;Interactive Panel&lt;/b&gt;&lt;br&gt;
+      Tick: ${state.tick}&lt;br&gt;
+      &lt;small&gt;Type 'togglePanel()' in console to toggle&lt;/small&gt;
+    `);
+  }
+
+  function init() {
+    api.UI.createPanel(PANEL_ID, { interactive: true });
+    api.on('turn:tick', updatePanel);
+    console.log('[ToggleablePanel] Use togglePanel() to show/hide');
+  }
+
+  function destroy() {
+    api.UI.removePanel(PANEL_ID);
+    delete window.togglePanel;
+  }
+
+  return { init, destroy };
+});</code></pre>
+  </div>
+
+  <h2>Debugging & Development</h2>
+
+  <div class="example">
+    <h3>Debug: Log All Events</h3>
+    <pre><code>// Listen to all events for debugging
+['wire:gameUpdate', 'state:updated', 'turn:tick'].forEach(event => {
+  OFHelper.on(event, (payload) => {
+    console.log(`[${event}]`, payload);
+  });
+});</code></pre>
+
+    <h3>Debug: State Snapshots</h3>
+    <pre><code>// Take periodic state snapshots
+let snapshots = [];
+
+OFHelper.on('turn:tick', ({ tick, state }) => {
+  if (tick % 100 === 0) {  // Every 100 ticks (10 seconds)
+    snapshots.push({
+      tick,
+      tiles: state.my.tiles,
+      troops: state.my.troops,
+      gold: state.my.gold
+    });
+    console.log('Snapshot taken at tick', tick);
+  }
+});
+
+// View snapshots
+console.table(snapshots);</code></pre>
+  </div>
+
+  <div class="warning">
+    <strong>Warning:</strong> These examples are for educational purposes. When creating automation
+    features, be mindful of game rules and fair play. The helper is designed primarily for
+    information display, not automation.
+  </div>
+
+  <h2>Troubleshooting</h2>
+
+  <div class="example">
+    <h3>Common Issues</h3>
+
+    <h4>HUD Not Showing</h4>
+    <ul>
+      <li>Make sure you're on the game page (not lobby)</li>
+      <li>Check console for errors</li>
+      <li>Verify script loaded: <code>console.log(window.OFHelper)</code></li>
+    </ul>
+
+    <h4>No Updates Happening</h4>
+    <ul>
+      <li>Ensure game is running (not paused)</li>
+      <li>Check if events are firing: <code>OFHelper.on('turn:tick', () => console.log('tick'))</code></li>
+      <li>Verify Wiretap initialized: check for "[Wiretap] Initialized" message</li>
+    </ul>
+
+    <h4>Script Errors</h4>
+    <ul>
+      <li>Clear console and reload page</li>
+      <li>Paste script again</li>
+      <li>Check browser compatibility (need ES6 support)</li>
+    </ul>
+  </div>
+
+  <h2>Resources</h2>
+
+  <ul>
+    <li><a href="../README.md">README</a> - Quick start guide</li>
+    <li><a href="../docs/ARCHITECTURE.md">Architecture</a> - System design</li>
+    <li><a href="../docs/API.md">API Reference</a> - Complete API documentation</li>
+    <li><a href="../docs/GAME_TYPES.md">Game Types</a> - OpenFront data structures</li>
+    <li><a href="https://github.com/openfrontio/OpenFrontIO" target="_blank">OpenFrontIO</a> - Game repository</li>
+  </ul>
+
+</body>
+</html>

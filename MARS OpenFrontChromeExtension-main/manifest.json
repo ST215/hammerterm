@@ -1,0 +1,51 @@
+{
+  "manifest_version": 3,
+  "name": "OpenFront HAXs 2000 v3",
+  "version": "3.0.0",
+  "description": "Displays current gold per minute by intercepting game updates.",
+  "permissions": ["scripting", "activeTab", "storage"],
+  "host_permissions": ["<all_urls>"],
+  "action": {
+    "default_title": "OpenFront Gold Rate",
+    "default_popup": "popup.html"
+  },
+  "background": { "service_worker": "background.js" },
+  "commands": {
+    "toggle-sam": {
+      "suggested_key": { "default": "Ctrl+Shift+F" },
+      "description": "Toggle SAM Ranges"
+    },
+    "toggle-atom": {
+      "suggested_key": { "default": "Alt+A" },
+      "description": "Toggle Atom Bomb Radius"
+    },
+    "toggle-hydrogen": {
+      "suggested_key": { "default": "Alt+H" },
+      "description": "Toggle Hydrogen Bomb Radius"
+    },
+    "capture-mouse-player": {
+      "suggested_key": { "default": "Alt+M" },
+      "description": "Set Scope Feeder target from mouse-over territory"
+    }
+  },
+  "content_scripts": [
+    {
+      "matches": ["<all_urls>"],
+      "js": ["content.js"],
+      "run_at": "document_start"
+    }
+  ],
+  "icons": {
+    "16": "icons/icon16.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
+  },
+  "web_accessible_resources": [
+    {
+      "resources": ["injector.js"],
+      "matches": ["<all_urls>"]
+    }
+  ]
+}
+
+
