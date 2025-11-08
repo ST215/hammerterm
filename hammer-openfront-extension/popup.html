@@ -58,7 +58,7 @@
 </head>
 <body>
   <div class="header">
-    <h1>🏆 Openfront Haxs2000</h1>
+    <h1>🔨 Hammer OpenFront Helper</h1>
   </div>
 
   <div class="controls">
@@ -138,6 +138,50 @@
       </div>
       <div id="as-status" style="font-size:12px;color:#ddd;min-height:18px">Waiting…</div>
     </div>
+    <details style="background:rgba(0,0,0,0.15);padding:10px;border-radius:8px;margin-top:10px">
+      <summary style="cursor:pointer;font-weight:600;color:#FFD700">⌨️ Keyboard Shortcuts</summary>
+      <div style="display:flex;flex-direction:column;gap:8px;margin-top:12px;font-size:13px">
+        <div style="opacity:0.8;font-size:11px;margin-bottom:4px">Click a button to change the keybind, then press your desired key combo. Supports numpad!</div>
+
+        <div style="display:flex;justify-content:space-between;align-items:center">
+          <span>SAM Overlay:</span>
+          <button class="btn secondary" id="keybind-sam" style="padding:6px 10px;font-size:12px">Ctrl+Shift+F</button>
+        </div>
+
+        <div style="display:flex;justify-content:space-between;align-items:center">
+          <span>Atom Bomb:</span>
+          <button class="btn secondary" id="keybind-atom" style="padding:6px 10px;font-size:12px">Alt+A</button>
+        </div>
+
+        <div style="display:flex;justify-content:space-between;align-items:center">
+          <span>Hydrogen Bomb:</span>
+          <button class="btn secondary" id="keybind-hydrogen" style="padding:6px 10px;font-size:12px">Alt+H</button>
+        </div>
+
+        <div style="display:flex;justify-content:space-between;align-items:center">
+          <span>Alliances:</span>
+          <button class="btn secondary" id="keybind-alliances" style="padding:6px 10px;font-size:12px">Alt+T</button>
+        </div>
+
+        <div style="display:flex;justify-content:space-between;align-items:center">
+          <span>Capture Target:</span>
+          <button class="btn secondary" id="keybind-captureTarget" style="padding:6px 10px;font-size:12px">Alt+M</button>
+        </div>
+
+        <div style="display:flex;justify-content:space-between;align-items:center">
+          <span>Scope Feeder:</span>
+          <button class="btn secondary" id="keybind-scopeFeeder" style="padding:6px 10px;font-size:12px">Alt+F</button>
+        </div>
+
+        <div style="display:flex;justify-content:space-between;align-items:center">
+          <span>Embargo All:</span>
+          <button class="btn secondary" id="keybind-embargoAll" style="padding:6px 10px;font-size:12px">Alt+E</button>
+        </div>
+
+        <button class="btn" id="reset-keybinds" style="margin-top:8px">Reset to Defaults</button>
+        <div id="keybind-status" style="font-size:11px;color:#FFD700;min-height:16px;text-align:center"></div>
+      </div>
+    </details>
   </div>
 
   <script src="popup.js"></script>

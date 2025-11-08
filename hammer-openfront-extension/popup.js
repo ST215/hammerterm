@@ -336,6 +336,164 @@
       renderPlayersList(res?.of_players_list || []);
     }).catch(() => {});
   } catch {}
+
+  // ========== KEYBOARD SHORTCUTS CUSTOMIZATION ==========
+  const DEFAULT_KEYBINDS = {
+    sam: "Ctrl+Shift+KeyF",
+    atom: "Alt+KeyA",
+    hydrogen: "Alt+KeyH",
+    captureTarget: "Alt+KeyM",
+    scopeFeeder: "Alt+KeyF",
+    alliances: "Alt+KeyT",
+    embargoAll: "Alt+KeyE"
+  };
+
+  let currentKeybinds = { ...DEFAULT_KEYBINDS };
+  let capturingKey = null; // Which keybind is currently being captured
+
+  // Load saved keybinds and update button labels
+  function loadKeybinds() {
+    try {
+      chrome.storage?.local?.get(["of_keybinds"], (result) => {
+        if (result && result.of_keybinds) {
+          currentKeybinds = { ...DEFAULT_KEYBINDS, ...result.of_keybinds };
+        }
+        updateKeybindButtons();
+      });
+    } catch (e) {
+      log('Failed to load keybinds:', e);
+    }
+  }
+
+  // Update button labels to show current keybinds
+  function updateKeybindButtons() {
+    Object.keys(currentKeybinds).forEach(key => {
+      const btn = document.getElementById(`keybind-${key}`);
+      if (btn) {
+        btn.textContent = formatKeybind(currentKeybinds[key]);
+      }
+    });
+  }
+
+  // Format keybind string for display (e.g., "Ctrl+Shift+KeyF" -> "Ctrl+Shift+F")
+  function formatKeybind(keybindStr) {
+    return keybindStr.replace(/Key([A-Z])/g, '$1')
+                     .replace(/Digit(\d)/g, '$1')
+                     .replace(/Numpad(\w+)/g, 'Num$1');
+  }
+
+  // Convert key event to normalized string
+  function keyEventToString(ev) {
+    const parts = [];
+    if (ev.ctrlKey) parts.push('Ctrl');
+    if (ev.altKey) parts.push('Alt');
+    if (ev.shiftKey) parts.push('Shift');
+    if (ev.metaKey) parts.push('Meta');
+    parts.push(ev.code);
+    return parts.join('+');
+  }
+
+  // Save keybinds to storage
+  function saveKeybinds() {
+    try {
+      chrome.storage?.local?.set({ of_keybinds: currentKeybinds }, () => {
+        showKeybindStatus('Saved!', 2000);
+        log('Keybinds saved:', currentKeybinds);
+      });
+    } catch (e) {
+      showKeybindStatus('Error saving', 2000);
+      log('Failed to save keybinds:', e);
+    }
+  }
+
+  // Show status message
+  function showKeybindStatus(message, duration = 2000) {
+    const statusEl = document.getElementById('keybind-status');
+    if (statusEl) {
+      statusEl.textContent = message;
+      setTimeout(() => { statusEl.textContent = ''; }, duration);
+    }
+  }
+
+  // Check if keybind is already in use
+  function isKeybindInUse(keybindStr, excludeKey) {
+    for (const [key, value] of Object.entries(currentKeybinds)) {
+      if (key !== excludeKey && value === keybindStr) {
+        return key;
+      }
+    }
+    return null;
+  }
+
+  // Set up keybind capture buttons
+  Object.keys(DEFAULT_KEYBINDS).forEach(key => {
+    const btn = document.getElementById(`keybind-${key}`);
+    if (!btn) return;
+
+    btn.addEventListener('click', () => {
+      if (capturingKey) {
+        // Cancel previous capture
+        const prevBtn = document.getElementById(`keybind-${capturingKey}`);
+        if (prevBtn) {
+          prevBtn.textContent = formatKeybind(currentKeybinds[capturingKey]);
+          prevBtn.style.background = '';
+        }
+      }
+
+      capturingKey = key;
+      btn.textContent = 'Press key...';
+      btn.style.background = '#FF6B6B';
+      showKeybindStatus('Press your desired key combination');
+    });
+  });
+
+  // Global keydown listener for capturing keys
+  document.addEventListener('keydown', (ev) => {
+    if (!capturingKey) return;
+
+    ev.preventDefault();
+    ev.stopPropagation();
+
+    const btn = document.getElementById(`keybind-${capturingKey}`);
+    const newKeybind = keyEventToString(ev);
+
+    // Check if this keybind is already in use
+    const inUseBy = isKeybindInUse(newKeybind, capturingKey);
+    if (inUseBy) {
+      showKeybindStatus(`Already used by ${inUseBy}!`, 3000);
+      if (btn) {
+        btn.textContent = formatKeybind(currentKeybinds[capturingKey]);
+        btn.style.background = '';
+      }
+      capturingKey = null;
+      return;
+    }
+
+    // Update keybind
+    currentKeybinds[capturingKey] = newKeybind;
+    if (btn) {
+      btn.textContent = formatKeybind(newKeybind);
+      btn.style.background = '';
+    }
+
+    saveKeybinds();
+    capturingKey = null;
+  });
+
+  // Reset to defaults button
+  const resetBtn = document.getElementById('reset-keybinds');
+  if (resetBtn) {
+    resetBtn.addEventListener('click', () => {
+      currentKeybinds = { ...DEFAULT_KEYBINDS };
+      updateKeybindButtons();
+      saveKeybinds();
+      showKeybindStatus('Reset to defaults', 2000);
+    });
+  }
+
+  // Load keybinds on popup open
+  loadKeybinds();
+  // ========== END KEYBOARD SHORTCUTS CUSTOMIZATION ==========
 })();
 
 

@@ -1,5 +1,5 @@
 (function () {
-  const DEBUG = false;
+  const DEBUG = true;
   const log = (...args) => { if (DEBUG) console.log("[OF-Ext][content]", ...args); };
   const OVERLAY_ID = "of-gold-overlay";
   const EVENT_NAME = "__of_gold_update";

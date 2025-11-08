@@ -1,7 +1,7 @@
 // Background script: lives in the extension service worker context.
 // Responsible for global keyboard shortcuts and manual injection.
 // No direct DOM access here; communicates with content scripts via chrome.tabs.sendMessage.
-const DEBUG = false;
+const DEBUG = true;
 const log = (...a) => { if (DEBUG) console.log("[OF-Ext][bg]", ...a); };
 
 // Clicking the extension icon force-injects the main-world injector into the active tab.

@@ -1,6 +1,6 @@
 (function () {
-  const DEBUG = false;
-  const SAM_DEBUG = false;
+  const DEBUG = true;
+  const SAM_DEBUG = true;
   const log = (...args) => { if (DEBUG) console.log("[OF-Ext][injector]", ...args); };
   const slog = (...args) => { if (SAM_DEBUG) console.log("[OF-Ext][SAM]", ...args); };
   if (window.__ofGoldTapInstalled) return;
@@ -35,45 +35,45 @@
     if (cid && typeof cid === "string") currentClientID = cid;
   } catch {}
 
-  // --- In-page keyboard: Alt+T toggles Alliances overlay ---
-  try {
-    window.addEventListener('keydown', (ev) => {
-      try {
-        const tag = (ev.target && ev.target.tagName || '').toLowerCase();
-        if (tag === 'input' || tag === 'textarea' || (ev.target && ev.target.isContentEditable)) return;
-      } catch {}
-      try {
-        const isAltT = ev.altKey && (ev.key?.toLowerCase() === 't' || ev.code === 'KeyT');
-        if (!isAltT) return;
-        try { console.log('[OF-Ext][Alliances] Alt+T detected', { alliancesOverlayEnabled }); } catch {}
-        ev.preventDefault();
-        ev.stopPropagation();
-        const next = !alliancesOverlayEnabled;
-        alliancesOverlayEnabled = next;
-        if (next) { ensureAlliancesOverlay(); renderAlliancesOverlay(); startAlliancesLoop(); }
-        else { hideAlliancesOverlay(); stopAlliancesLoop(); }
-        try { chrome?.storage?.local?.set({ of_alliances_enabled: next }); } catch {}
-      } catch {}
-    }, true);
-  } catch {}
+  // --- DISABLED: Old Alt+T keyboard listener (now handled by unified keyboard handler) ---
+  // try {
+  //   window.addEventListener('keydown', (ev) => {
+  //     try {
+  //       const tag = (ev.target && ev.target.tagName || '').toLowerCase();
+  //       if (tag === 'input' || tag === 'textarea' || (ev.target && ev.target.isContentEditable)) return;
+  //     } catch {}
+  //     try {
+  //       const isAltT = ev.altKey && (ev.key?.toLowerCase() === 't' || ev.code === 'KeyT');
+  //       if (!isAltT) return;
+  //       try { console.log('[OF-Ext][Alliances] Alt+T detected', { alliancesOverlayEnabled }); } catch {}
+  //       ev.preventDefault();
+  //       ev.stopPropagation();
+  //       const next = !alliancesOverlayEnabled;
+  //       alliancesOverlayEnabled = next;
+  //       if (next) { ensureAlliancesOverlay(); renderAlliancesOverlay(); startAlliancesLoop(); }
+  //       else { hideAlliancesOverlay(); stopAlliancesLoop(); }
+  //       try { chrome?.storage?.local?.set({ of_alliances_enabled: next }); } catch {}
+  //     } catch {}
+  //   }, true);
+  // } catch {}
 
-  // --- In-page keyboard: Alt+E -> Embargo all ---
-  try {
-    window.addEventListener('keydown', (ev) => {
-      try {
-        const tag = (ev.target && ev.target.tagName || '').toLowerCase();
-        if (tag === 'input' || tag === 'textarea' || (ev.target && ev.target.isContentEditable)) return;
-      } catch {}
-      try {
-        const isAltE = ev.altKey && (ev.key?.toLowerCase() === 'e' || ev.code === 'KeyE');
-        if (!isAltE) return;
-        ev.preventDefault();
-        ev.stopPropagation();
-        try { console.log('[OF-Ext][Trade] Alt+E embargo all'); } catch {}
-        embargoAllPlayers();
-      } catch {}
-    }, true);
-  } catch {}
+  // --- DISABLED: Old Alt+E keyboard listener (now handled by unified keyboard handler) ---
+  // try {
+  //   window.addEventListener('keydown', (ev) => {
+  //     try {
+  //       const tag = (ev.target && ev.target.tagName || '').toLowerCase();
+  //       if (tag === 'input' || tag === 'textarea' || (ev.target && ev.target.isContentEditable)) return;
+  //     } catch {}
+  //     try {
+  //       const isAltE = ev.altKey && (ev.key?.toLowerCase() === 'e' || ev.code === 'KeyE');
+  //       if (!isAltE) return;
+  //       ev.preventDefault();
+  //       ev.stopPropagation();
+  //       try { console.log('[OF-Ext][Trade] Alt+E embargo all'); } catch {}
+  //       embargoAllPlayers();
+  //     } catch {}
+  //   }, true);
+  // } catch {}
 
   const OriginalWorker = window.Worker;
   log("installing Worker wrapper");
@@ -1214,6 +1214,193 @@
     }
   }
 
+  // ========== CUSTOM KEYBOARD HANDLER SYSTEM ==========
+  // Default keybinds - user can customize these
+  const DEFAULT_KEYBINDS = {
+    sam: "Ctrl+Shift+KeyF",
+    atom: "Alt+KeyA",
+    hydrogen: "Alt+KeyH",
+    captureTarget: "Alt+KeyM",
+    scopeFeeder: "Alt+KeyF",
+    alliances: "Alt+KeyT",
+    embargoAll: "Alt+KeyE"
+  };
+
+  // Current keybinds (loaded from storage or defaults)
+  let currentKeybinds = { ...DEFAULT_KEYBINDS };
+
+  // Load custom keybinds from storage
+  function loadKeybinds() {
+    try {
+      chrome?.storage?.local?.get(['of_keybinds'], (result) => {
+        if (result && result.of_keybinds) {
+          currentKeybinds = { ...DEFAULT_KEYBINDS, ...result.of_keybinds };
+          log('[Keyboard] Loaded custom keybinds:', currentKeybinds);
+        } else {
+          log('[Keyboard] Using default keybinds');
+        }
+      });
+    } catch (e) {
+      log('[Keyboard] Failed to load keybinds:', e);
+    }
+  }
+
+  // Convert key event to normalized string (e.g., "Ctrl+Shift+KeyF")
+  function keyEventToString(ev) {
+    const parts = [];
+    if (ev.ctrlKey) parts.push('Ctrl');
+    if (ev.altKey) parts.push('Alt');
+    if (ev.shiftKey) parts.push('Shift');
+    if (ev.metaKey) parts.push('Meta');
+    parts.push(ev.code);
+    return parts.join('+');
+  }
+
+  // Check if key event matches a keybind string
+  function matchesKeybind(ev, keybindStr) {
+    return keyEventToString(ev) === keybindStr;
+  }
+
+  // Toggle SAM overlay
+  function toggleSAMOverlay() {
+    samOverlayEnabled = !samOverlayEnabled;
+    log('[Keyboard] SAM overlay:', samOverlayEnabled);
+    if (samOverlayEnabled) {
+      ensureSamOverlay();
+      scheduleSamDraw();
+    } else {
+      hideSamOverlay();
+    }
+    try { chrome?.storage?.local?.set({ of_sam_enabled: samOverlayEnabled }); } catch {}
+  }
+
+  // Toggle Atom overlay
+  function toggleAtomOverlay() {
+    atomOverlayEnabled = !atomOverlayEnabled;
+    log('[Keyboard] Atom overlay:', atomOverlayEnabled);
+    if (atomOverlayEnabled) {
+      ensureAtomOverlay();
+      scheduleAtomDraw();
+    } else {
+      hideAtomOverlay();
+    }
+    try { chrome?.storage?.local?.set({ of_atom_enabled: atomOverlayEnabled }); } catch {}
+  }
+
+  // Toggle Hydrogen overlay
+  function toggleHydrogenOverlay() {
+    hydrogenOverlayEnabled = !hydrogenOverlayEnabled;
+    log('[Keyboard] Hydrogen overlay:', hydrogenOverlayEnabled);
+    if (hydrogenOverlayEnabled) {
+      ensureAtomOverlay(); // Reuses same canvas
+      scheduleAtomDraw();
+    } else {
+      hideAtomOverlay();
+    }
+    try { chrome?.storage?.local?.set({ of_hydrogen_enabled: hydrogenOverlayEnabled }); } catch {}
+  }
+
+  // Toggle Alliances overlay
+  function toggleAlliancesOverlay() {
+    alliancesOverlayEnabled = !alliancesOverlayEnabled;
+    log('[Keyboard] Alliances overlay:', alliancesOverlayEnabled);
+    if (alliancesOverlayEnabled) {
+      ensureAlliancesOverlay();
+      renderAlliancesOverlay();
+      startAlliancesLoop();
+    } else {
+      hideAlliancesOverlay();
+      stopAlliancesLoop();
+    }
+    try { chrome?.storage?.local?.set({ of_alliances_enabled: alliancesOverlayEnabled }); } catch {}
+  }
+
+  // Capture mouse-over territory as auto-send target
+  function captureMouseTarget(ev) {
+    try {
+      const tileRef = getTileRefFromClient(ev.clientX, ev.clientY);
+      if (tileRef === null) return;
+      const ownerID = tileOwnerByRef.get(tileRef);
+      if (!ownerID) return;
+      const owner = playersBySmallID.get(ownerID);
+      if (!owner) return;
+      asTargetID = owner.id;
+      asTargetName = owner.displayName || owner.name || '';
+      log('[Keyboard] Captured target:', asTargetName, 'ID:', asTargetID);
+      try { chrome?.storage?.local?.set({ of_as_target_id: asTargetID, of_as_target_name: asTargetName }); } catch {}
+    } catch (e) {
+      log('[Keyboard] Capture target failed:', e);
+    }
+  }
+
+  // Toggle Scope Feeder (auto-send)
+  function toggleScopeFeeder() {
+    asEnabled = !asEnabled;
+    log('[Keyboard] Scope Feeder:', asEnabled);
+    try { chrome?.storage?.local?.set({ of_as_enabled: asEnabled }); } catch {}
+  }
+
+  // Embargo All
+  function embargoAll() {
+    log('[Keyboard] Embargo All triggered');
+    if (typeof embargoAllPlayers === 'function') {
+      embargoAllPlayers();
+    }
+  }
+
+  // Unified keyboard handler
+  function handleKeyPress(ev) {
+    // Ignore keypresses in input fields
+    try {
+      const tag = (ev.target && ev.target.tagName || '').toLowerCase();
+      if (tag === 'input' || tag === 'textarea' || (ev.target && ev.target.isContentEditable)) return;
+    } catch {}
+
+    const keyStr = keyEventToString(ev);
+    log('[Keyboard] Key pressed:', keyStr);
+
+    // Check against all keybinds
+    if (matchesKeybind(ev, currentKeybinds.sam)) {
+      ev.preventDefault();
+      ev.stopPropagation();
+      toggleSAMOverlay();
+    } else if (matchesKeybind(ev, currentKeybinds.atom)) {
+      ev.preventDefault();
+      ev.stopPropagation();
+      toggleAtomOverlay();
+    } else if (matchesKeybind(ev, currentKeybinds.hydrogen)) {
+      ev.preventDefault();
+      ev.stopPropagation();
+      toggleHydrogenOverlay();
+    } else if (matchesKeybind(ev, currentKeybinds.alliances)) {
+      ev.preventDefault();
+      ev.stopPropagation();
+      toggleAlliancesOverlay();
+    } else if (matchesKeybind(ev, currentKeybinds.captureTarget)) {
+      ev.preventDefault();
+      ev.stopPropagation();
+      captureMouseTarget(ev);
+    } else if (matchesKeybind(ev, currentKeybinds.scopeFeeder)) {
+      ev.preventDefault();
+      ev.stopPropagation();
+      toggleScopeFeeder();
+    } else if (matchesKeybind(ev, currentKeybinds.embargoAll)) {
+      ev.preventDefault();
+      ev.stopPropagation();
+      embargoAll();
+    }
+  }
+
+  // Initialize keyboard handler
+  try {
+    loadKeybinds();
+    window.addEventListener('keydown', handleKeyPress, true);
+    log('[Keyboard] Custom keyboard handler initialized');
+  } catch (e) {
+    log('[Keyboard] Failed to initialize:', e);
+  }
+  // ========== END KEYBOARD HANDLER SYSTEM ==========
+
   // Listen for extension -> page commands via content bridge
   window.addEventListener("message", (e) => {
     const m = e.data;
@@ -1347,29 +1534,29 @@
     }
   });
 
-  // --- In-page keyboard: Alt+F toggles Scope Feeder ---
-  try {
-    window.addEventListener('keydown', (ev) => {
-      try {
-        // Ignore if user is typing in an input/textarea
-        const tag = (ev.target && ev.target.tagName || '').toLowerCase();
-        if (tag === 'input' || tag === 'textarea' || (ev.target && ev.target.isContentEditable)) return;
-      } catch {}
-      try {
-        const isAltF = ev.altKey && (ev.key?.toLowerCase() === 'f' || ev.code === 'KeyF');
-        if (!isAltF) return;
-        // rely on cooldown below to avoid accidental double toggles; allow repeats otherwise
-        try { console.log('[OF-Ext][AS] Alt+F detected', { asRunning, hasTimer: !!asTimer }); } catch {}
-        ev.preventDefault();
-        ev.stopPropagation();
-        const now = Date.now();
-        if (now - asLastToggleMs < asToggleCooldownMs) { try { console.log('[OF-Ext][AS] toggle ignored due to cooldown'); } catch {} return; }
-        asLastToggleMs = now;
-        // Delegate to content script (has chrome APIs) to perform stop-then-start with saved settings
-        try { window.postMessage({ __ofFromPage: true, kind: "as_altf_toggle", payload: { running: !!asRunning } }, "*"); } catch {}
-      } catch {}
-    }, true);
-  } catch {}
+  // --- DISABLED: Old Alt+F keyboard listener (now handled by unified keyboard handler) ---
+  // try {
+  //   window.addEventListener('keydown', (ev) => {
+  //     try {
+  //       // Ignore if user is typing in an input/textarea
+  //       const tag = (ev.target && ev.target.tagName || '').toLowerCase();
+  //       if (tag === 'input' || tag === 'textarea' || (ev.target && ev.target.isContentEditable)) return;
+  //     } catch {}
+  //     try {
+  //       const isAltF = ev.altKey && (ev.key?.toLowerCase() === 'f' || ev.code === 'KeyF');
+  //       if (!isAltF) return;
+  //       // rely on cooldown below to avoid accidental double toggles; allow repeats otherwise
+  //       try { console.log('[OF-Ext][AS] Alt+F detected', { asRunning, hasTimer: !!asTimer }); } catch {}
+  //       ev.preventDefault();
+  //       ev.stopPropagation();
+  //       const now = Date.now();
+  //       if (now - asLastToggleMs < asToggleCooldownMs) { try { console.log('[OF-Ext][AS] toggle ignored due to cooldown'); } catch {} return; }
+  //       asLastToggleMs = now;
+  //       // Delegate to content script (has chrome APIs) to perform stop-then-start with saved settings
+  //       try { window.postMessage({ __ofFromPage: true, kind: "as_altf_toggle", payload: { running: !!asRunning } }, "*"); } catch {}
+  //     } catch {}
+  //   }, true);
+  // } catch {}
 
   // --- Capture canvas transform and host overlay alongside the main canvas ---
   try {
