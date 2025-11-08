@@ -1348,6 +1348,14 @@
     }
   }
 
+  // Modifier-only keys to ignore
+  const MODIFIER_KEYS = new Set([
+    'AltLeft', 'AltRight',
+    'ControlLeft', 'ControlRight',
+    'ShiftLeft', 'ShiftRight',
+    'MetaLeft', 'MetaRight'
+  ]);
+
   // Unified keyboard handler
   function handleKeyPress(ev) {
     // Ignore keypresses in input fields
@@ -1356,37 +1364,44 @@
       if (tag === 'input' || tag === 'textarea' || (ev.target && ev.target.isContentEditable)) return;
     } catch {}
 
-    const keyStr = keyEventToString(ev);
-    log('[Keyboard] Key pressed:', keyStr);
+    // Ignore modifier-only keys
+    if (MODIFIER_KEYS.has(ev.code)) return;
 
     // Check against all keybinds
     if (matchesKeybind(ev, currentKeybinds.sam)) {
       ev.preventDefault();
       ev.stopPropagation();
+      log('[Keyboard] SAM toggle triggered');
       toggleSAMOverlay();
     } else if (matchesKeybind(ev, currentKeybinds.atom)) {
       ev.preventDefault();
       ev.stopPropagation();
+      log('[Keyboard] Atom toggle triggered');
       toggleAtomOverlay();
     } else if (matchesKeybind(ev, currentKeybinds.hydrogen)) {
       ev.preventDefault();
       ev.stopPropagation();
+      log('[Keyboard] Hydrogen toggle triggered');
       toggleHydrogenOverlay();
     } else if (matchesKeybind(ev, currentKeybinds.alliances)) {
       ev.preventDefault();
       ev.stopPropagation();
+      log('[Keyboard] Alliances toggle triggered');
       toggleAlliancesOverlay();
     } else if (matchesKeybind(ev, currentKeybinds.captureTarget)) {
       ev.preventDefault();
       ev.stopPropagation();
+      log('[Keyboard] Capture target triggered');
       captureMouseTarget(ev);
     } else if (matchesKeybind(ev, currentKeybinds.scopeFeeder)) {
       ev.preventDefault();
       ev.stopPropagation();
+      log('[Keyboard] Scope Feeder toggle triggered');
       toggleScopeFeeder();
     } else if (matchesKeybind(ev, currentKeybinds.embargoAll)) {
       ev.preventDefault();
       ev.stopPropagation();
+      log('[Keyboard] Embargo All triggered');
       embargoAll();
     }
   }

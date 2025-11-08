@@ -447,14 +447,51 @@
     });
   });
 
+  // Modifier-only keys that should be ignored
+  const MODIFIER_KEYS = new Set([
+    'AltLeft', 'AltRight',
+    'ControlLeft', 'ControlRight',
+    'ShiftLeft', 'ShiftRight',
+    'MetaLeft', 'MetaRight'
+  ]);
+
+  // Check if event has at least one modifier
+  function hasModifier(ev) {
+    return ev.ctrlKey || ev.altKey || ev.shiftKey || ev.metaKey;
+  }
+
   // Global keydown listener for capturing keys
   document.addEventListener('keydown', (ev) => {
     if (!capturingKey) return;
+
+    // Allow Escape to cancel capture
+    if (ev.key === 'Escape' || ev.code === 'Escape') {
+      const btn = document.getElementById(`keybind-${capturingKey}`);
+      if (btn) {
+        btn.textContent = formatKeybind(currentKeybinds[capturingKey]);
+        btn.style.background = '';
+      }
+      capturingKey = null;
+      showKeybindStatus('Cancelled', 1000);
+      return;
+    }
+
+    // Ignore modifier-only keys (e.g., pressing just Alt, Ctrl, Shift)
+    if (MODIFIER_KEYS.has(ev.code)) {
+      return; // Keep waiting for a real key
+    }
 
     ev.preventDefault();
     ev.stopPropagation();
 
     const btn = document.getElementById(`keybind-${capturingKey}`);
+
+    // Require at least one modifier for safety (prevents breaking game controls)
+    if (!hasModifier(ev)) {
+      showKeybindStatus('Please use Ctrl/Alt/Shift + key', 2500);
+      return; // Don't cancel capture, let them try again
+    }
+
     const newKeybind = keyEventToString(ev);
 
     // Check if this keybind is already in use
