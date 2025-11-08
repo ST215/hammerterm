@@ -42,7 +42,7 @@
   },
   "web_accessible_resources": [
     {
-      "resources": ["injector.js"],
+      "resources": ["injector.js", "utils/logger.js"],
       "matches": ["<all_urls>"]
     }
   ]

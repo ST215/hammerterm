@@ -531,6 +531,105 @@
   // Load keybinds on popup open
   loadKeybinds();
   // ========== END KEYBOARD SHORTCUTS CUSTOMIZATION ==========
+
+  // ========== DEBUG LOGS EXPORT ==========
+  function showLogStatus(message, duration = 2000) {
+    const statusEl = document.getElementById('log-status');
+    if (statusEl) {
+      statusEl.textContent = message;
+      setTimeout(() => { statusEl.textContent = ''; }, duration);
+    }
+  }
+
+  function updateLogPreview() {
+    withActiveTab(tabId => {
+      chrome.tabs.sendMessage(tabId, { __ofCmd: 'get_recent_logs' }, (response) => {
+        const previewEl = document.getElementById('log-preview');
+        if (!previewEl) return;
+
+        if (chrome.runtime.lastError || !response || !response.logs) {
+          previewEl.textContent = 'No logs available (logger may not be loaded)';
+          return;
+        }
+
+        const logs = response.logs;
+        if (logs.length === 0) {
+          previewEl.textContent = '(empty)';
+          return;
+        }
+
+        // Format recent logs
+        previewEl.textContent = logs.map(log => {
+          const time = new Date(log.timestamp).toLocaleTimeString();
+          const args = Array.isArray(log.args) ?
+            log.args.map(a => typeof a === 'object' ? JSON.stringify(a) : String(a)).join(' ') :
+            String(log.args || '');
+          return `[${time}] ${log.level.toUpperCase()}: ${args.substring(0, 100)}`;
+        }).join('\n');
+      });
+    });
+  }
+
+  // Copy all logs button
+  const copyAllBtn = document.getElementById('copy-all-logs');
+  if (copyAllBtn) {
+    copyAllBtn.addEventListener('click', () => {
+      withActiveTab(tabId => {
+        chrome.tabs.sendMessage(tabId, { __ofCmd: 'export_logs', payload: { limit: 100 } }, (response) => {
+          if (chrome.runtime.lastError || !response || !response.logs) {
+            showLogStatus('Error: Could not retrieve logs', 3000);
+            return;
+          }
+
+          navigator.clipboard.writeText(response.logs).then(() => {
+            showLogStatus('✅ All logs copied to clipboard!', 2500);
+          }).catch(() => {
+            showLogStatus('❌ Copy failed', 2000);
+          });
+        });
+      });
+    });
+  }
+
+  // Copy errors only button
+  const copyErrorsBtn = document.getElementById('copy-errors');
+  if (copyErrorsBtn) {
+    copyErrorsBtn.addEventListener('click', () => {
+      withActiveTab(tabId => {
+        chrome.tabs.sendMessage(tabId, { __ofCmd: 'export_errors' }, (response) => {
+          if (chrome.runtime.lastError || !response || !response.logs) {
+            showLogStatus('Error: Could not retrieve errors', 3000);
+            return;
+          }
+
+          navigator.clipboard.writeText(response.logs).then(() => {
+            showLogStatus('✅ Errors copied to clipboard!', 2500);
+          }).catch(() => {
+            showLogStatus('❌ Copy failed', 2000);
+          });
+        });
+      });
+    });
+  }
+
+  // Clear logs button
+  const clearLogsBtn = document.getElementById('clear-logs');
+  if (clearLogsBtn) {
+    clearLogsBtn.addEventListener('click', () => {
+      withActiveTab(tabId => {
+        chrome.tabs.sendMessage(tabId, { __ofCmd: 'clear_logs' }, () => {
+          showLogStatus('Logs cleared', 1500);
+          updateLogPreview();
+        });
+      });
+    });
+  }
+
+  // Update preview when popup opens
+  updateLogPreview();
+  // Refresh preview every 2 seconds
+  setInterval(updateLogPreview, 2000);
+  // ========== END DEBUG LOGS EXPORT ==========
 })();
 
 

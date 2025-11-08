@@ -12,16 +12,30 @@
   function tryInjectMainWorld() {
     try {
       if (document.documentElement && !document.documentElement.__ofGoldInjectorLoaded) {
-        log("injecting injector.js into MAIN world");
         document.documentElement.__ofGoldInjectorLoaded = true;
-        const s = document.createElement("script");
-        s.src = chrome.runtime.getURL("injector.js");
-        s.type = "text/javascript";
-        s.onload = () => {
-          log("injector.js loaded");
-          try { s.remove(); } catch {}
+
+        // Inject logger first
+        log("injecting logger.js into MAIN world");
+        const logger = document.createElement("script");
+        logger.src = chrome.runtime.getURL("utils/logger.js");
+        logger.type = "text/javascript";
+        logger.onload = () => {
+          log("logger.js loaded");
+
+          // Then inject main script
+          log("injecting injector.js into MAIN world");
+          const s = document.createElement("script");
+          s.src = chrome.runtime.getURL("injector.js");
+          s.type = "text/javascript";
+          s.onload = () => {
+            log("injector.js loaded");
+            try { s.remove(); } catch {}
+          };
+          (document.head || document.documentElement).appendChild(s);
+
+          try { logger.remove(); } catch {}
         };
-        (document.head || document.documentElement).appendChild(s);
+        (document.head || document.documentElement).appendChild(logger);
       }
     } catch {}
   }
@@ -192,6 +206,27 @@
     }
     if (msg && msg.__ofCmd === "capture_mouse_player") {
       window.postMessage({ __ofFromExt: true, kind: "capture_mouse_player" }, "*");
+    }
+    // Logger commands
+    if (msg && msg.__ofCmd === "get_recent_logs") {
+      const result = window.__getRecentLogs ? window.__getRecentLogs(5) : [];
+      sendResponse({ logs: result });
+      return true; // async response
+    }
+    if (msg && msg.__ofCmd === "export_logs") {
+      const logs = window.__exportLogsForLLM ? window.__exportLogsForLLM(msg.payload || {}) : '{}';
+      sendResponse({ logs });
+      return true; // async response
+    }
+    if (msg && msg.__ofCmd === "export_errors") {
+      const logs = window.__exportErrorsForLLM ? window.__exportErrorsForLLM() : '{}';
+      sendResponse({ logs });
+      return true; // async response
+    }
+    if (msg && msg.__ofCmd === "clear_logs") {
+      if (window.__clearLogs) window.__clearLogs();
+      sendResponse({ success: true });
+      return true; // async response
     }
   });
 
