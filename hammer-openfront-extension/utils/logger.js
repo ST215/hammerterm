@@ -13,16 +13,56 @@
 
   // Configuration
   const MAX_LOG_ENTRIES = 1000; // Circular buffer
-  const CONTEXT = typeof window !== 'undefined' && window.location ? 
-    (window.location.href.includes('chrome-extension://') ? 'extension' : 'page') : 
+  const CONTEXT = typeof window !== 'undefined' && window.location ?
+    (window.location.href.includes('chrome-extension://') ? 'extension' : 'page') :
     'unknown';
+
+  // Log levels (numeric for easy comparison)
+  const LOG_LEVELS = {
+    DEBUG: 0,
+    INFO: 1,
+    WARN: 2,
+    ERROR: 3
+  };
+
+  const LEVEL_NAMES = ['debug', 'info', 'warn', 'error'];
+
+  // Map console methods to numeric levels
+  const CONSOLE_LEVEL_MAP = {
+    'debug': LOG_LEVELS.DEBUG,
+    'log': LOG_LEVELS.INFO,
+    'info': LOG_LEVELS.INFO,
+    'warn': LOG_LEVELS.WARN,
+    'error': LOG_LEVELS.ERROR
+  };
+
+  // Minimum log level to capture (can be changed via storage)
+  let minLogLevel = LOG_LEVELS.DEBUG; // Default: capture everything
 
   // Log buffer (circular)
   const logBuffer = [];
   let logIndex = 0;
 
+  // Extract category from log message (e.g., "[SAM]" from "[OF-Ext][SAM] message")
+  function extractCategory(args) {
+    if (args.length > 0 && typeof args[0] === 'string') {
+      const match = args[0].match(/\[([^\]]+)\]$/);
+      return match ? match[1] : null;
+    }
+    return null;
+  }
+
   // Add log entry to buffer
   function addLog(entry) {
+    // Filter by minimum log level
+    const entryLevel = CONSOLE_LEVEL_MAP[entry.level] || LOG_LEVELS.INFO;
+    if (entryLevel < minLogLevel) {
+      return; // Skip this log
+    }
+
+    // Extract category from message
+    entry.category = extractCategory(entry.args);
+
     if (logBuffer.length < MAX_LOG_ENTRIES) {
       logBuffer.push(entry);
     } else {
@@ -107,13 +147,53 @@
     });
   }
 
+  // Load log level preference from storage
+  function loadLogLevel() {
+    if (typeof chrome !== 'undefined' && chrome.storage && chrome.storage.local) {
+      chrome.storage.local.get(['of_log_level'], (result) => {
+        if (result.of_log_level !== undefined) {
+          minLogLevel = result.of_log_level;
+          console.log('[Logger] Loaded log level:', LEVEL_NAMES[minLogLevel]);
+        }
+      });
+    }
+  }
+
+  // Set log level
+  window.__setLogLevel = function(level) {
+    if (typeof level === 'string') {
+      level = LOG_LEVELS[level.toUpperCase()];
+    }
+    if (level >= 0 && level <= 3) {
+      minLogLevel = level;
+      console.log('[Logger] Log level set to:', LEVEL_NAMES[minLogLevel]);
+      // Save to storage
+      if (typeof chrome !== 'undefined' && chrome.storage && chrome.storage.local) {
+        chrome.storage.local.set({ of_log_level: minLogLevel });
+      }
+    }
+  };
+
+  // Get current log level
+  window.__getLogLevel = function() {
+    return {
+      numeric: minLogLevel,
+      name: LEVEL_NAMES[minLogLevel]
+    };
+  };
+
+  // Load log level on init
+  loadLogLevel();
+
   // Export function for LLM debugging
   window.__exportLogsForLLM = function(options = {}) {
     const {
       limit = 100,        // Max logs to return
       level = null,       // Filter by level (e.g., 'error')
+      minLevel = null,    // Minimum level (e.g., 'warn' = warn + error)
       since = null,       // ISO timestamp - only logs after this
-      context = null      // Filter by context
+      context = null,     // Filter by context
+      category = null     // Filter by category (e.g., 'SAM', 'Keyboard')
     } = options;
 
     let logs = logBuffer.slice(); // Copy buffer
@@ -122,11 +202,18 @@
     if (level) {
       logs = logs.filter(log => log.level === level);
     }
+    if (minLevel) {
+      const minLevelNum = LOG_LEVELS[minLevel.toUpperCase()] || 0;
+      logs = logs.filter(log => (CONSOLE_LEVEL_MAP[log.level] || 0) >= minLevelNum);
+    }
     if (since) {
       logs = logs.filter(log => log.timestamp >= since);
     }
     if (context) {
       logs = logs.filter(log => log.context === context);
+    }
+    if (category) {
+      logs = logs.filter(log => log.category === category);
     }
 
     // Take most recent entries

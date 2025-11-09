@@ -856,7 +856,7 @@
       if (!msg || msg.type !== "game_update" || !msg.gameUpdate) return;
       const { updates } = msg.gameUpdate;
       if (typeof msg.gameUpdate.tick === 'number') { lastTick = msg.gameUpdate.tick | 0; lastTickMs = Date.now(); }
-      log("got game_update");
+      console.debug("[OF-Ext][injector]", "got game_update");
       const players = updates && updates[GameUpdateType.Player];
       if (!players || !Array.isArray(players)) return;
 
@@ -1574,6 +1574,11 @@
       // Clear log buffer
       if (window.__clearLogs) window.__clearLogs();
       window.postMessage({ __ofFromPage: true, kind: "clear_logs_response", payload: { success: true } }, "*");
+    } else if (m.kind === "set_log_level") {
+      // Set log level
+      if (window.__setLogLevel && m.payload && m.payload.level !== undefined) {
+        window.__setLogLevel(m.payload.level);
+      }
     }
   });
 
@@ -1686,6 +1691,7 @@
     samOverlayCtx = null;
   }
 
+  let lastSyncBounds = null;
   function syncOverlayBounds() {
     try {
       if (!samOverlayCanvas) return;
@@ -1697,7 +1703,13 @@
       samOverlayCanvas.style.height = `${Math.round(r.height)}px`;
       samOverlayCanvas.style.left = `${Math.round(r.left)}px`;
       samOverlayCanvas.style.top = `${Math.round(r.top)}px`;
-      slog("sync overlay bounds", { cw: samOverlayCanvas.width, ch: samOverlayCanvas.height, rect: { w: Math.round(r.width), h: Math.round(r.height), l: Math.round(r.left), t: Math.round(r.top) } });
+
+      // Only log if bounds actually changed significantly
+      const newBounds = { w: samOverlayCanvas.width, h: samOverlayCanvas.height };
+      if (!lastSyncBounds || lastSyncBounds.w !== newBounds.w || lastSyncBounds.h !== newBounds.h) {
+        console.debug("[OF-Ext][SAM]", "sync overlay bounds", { cw: samOverlayCanvas.width, ch: samOverlayCanvas.height, rect: { w: Math.round(r.width), h: Math.round(r.height), l: Math.round(r.left), t: Math.round(r.top) } });
+        lastSyncBounds = newBounds;
+      }
     } catch {}
   }
 
@@ -1711,6 +1723,7 @@
     });
   }
 
+  let lastSamCount = 0;
   function drawSamOverlay() {
     try {
       if (!samOverlayEnabled) return;
@@ -1728,10 +1741,16 @@
       const halfW = (worldTilesWidth || 0) / 2;
       const halfH = (worldTilesHeight || 0) / 2;
       if (!worldTilesWidth || !worldTilesHeight) {
-        slog("skip draw: unknown worldTiles dims", { worldTilesWidth, worldTilesHeight });
+        console.debug("[OF-Ext][SAM]", "skip draw: unknown worldTiles dims", { worldTilesWidth, worldTilesHeight });
         return;
       }
-      slog("draw overlay", { samCount: samUnits.size, radius, transform: currentTransform });
+
+      // Only log when SAM count changes
+      if (samUnits.size !== lastSamCount) {
+        console.log("[OF-Ext][SAM]", "draw overlay", { samCount: samUnits.size, radius, transform: currentTransform });
+        lastSamCount = samUnits.size;
+      }
+
       for (const { ref, ownerID } of samUnits.values()) {
         const tx = ref % worldTilesWidth;
         const ty = Math.floor(ref / worldTilesWidth);
@@ -1739,7 +1758,7 @@
         // worldX = (tx - game.width()/2), worldY = (ty - game.height()/2)
         const cx = tx - halfW;
         const cy = ty - halfH;
-        slog("sam circle", { ref, tx, ty, cx, cy });
+        // Removed per-SAM logging - too spammy
         // Pick color per relation: self=cyan, ally/team=green, hostile=red
         let stroke = "rgba(0, 200, 255, 0.65)";
         let fill = "rgba(0, 200, 255, 0.10)";

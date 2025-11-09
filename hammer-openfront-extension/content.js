@@ -229,6 +229,11 @@
       sendResponse({ success: true });
       return true;
     }
+    if (msg && msg.__ofCmd === "set_log_level") {
+      window.postMessage({ __ofFromExt: true, kind: "set_log_level", payload: msg.payload || {} }, "*");
+      sendResponse({ success: true });
+      return true;
+    }
   });
 
   // Listen for log responses from page

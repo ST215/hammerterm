@@ -625,6 +625,31 @@
     });
   }
 
+  // Log level dropdown
+  const logLevelSelect = document.getElementById('log-level');
+  if (logLevelSelect) {
+    // Load current log level from storage
+    chrome.storage.local.get(['of_log_level'], (result) => {
+      const level = result.of_log_level !== undefined ? result.of_log_level : 1; // Default: Info
+      logLevelSelect.value = String(level);
+    });
+
+    // Handle log level changes
+    logLevelSelect.addEventListener('change', () => {
+      const newLevel = parseInt(logLevelSelect.value, 10);
+      chrome.storage.local.set({ of_log_level: newLevel }, () => {
+        showLogStatus(`Log level set to ${logLevelSelect.options[logLevelSelect.selectedIndex].text}`, 2000);
+
+        // Notify the page to update its log level
+        withActiveTab(tabId => {
+          chrome.tabs.sendMessage(tabId, { __ofCmd: 'set_log_level', payload: { level: newLevel } }, () => {
+            // Ignore response
+          });
+        });
+      });
+    });
+  }
+
   // Update preview when popup opens
   updateLogPreview();
   // Refresh preview every 2 seconds
