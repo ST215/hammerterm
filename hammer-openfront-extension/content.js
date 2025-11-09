@@ -207,26 +207,44 @@
     if (msg && msg.__ofCmd === "capture_mouse_player") {
       window.postMessage({ __ofFromExt: true, kind: "capture_mouse_player" }, "*");
     }
-    // Logger commands
+    // Logger commands - forward to page via postMessage
     if (msg && msg.__ofCmd === "get_recent_logs") {
-      const result = window.__getRecentLogs ? window.__getRecentLogs(5) : [];
-      sendResponse({ logs: result });
+      // Store sendResponse callback for async response
+      window.__pendingLogResponse = sendResponse;
+      window.postMessage({ __ofFromExt: true, kind: "get_recent_logs" }, "*");
       return true; // async response
     }
     if (msg && msg.__ofCmd === "export_logs") {
-      const logs = window.__exportLogsForLLM ? window.__exportLogsForLLM(msg.payload || {}) : '{}';
-      sendResponse({ logs });
+      window.__pendingLogResponse = sendResponse;
+      window.postMessage({ __ofFromExt: true, kind: "export_logs", payload: msg.payload || {} }, "*");
       return true; // async response
     }
     if (msg && msg.__ofCmd === "export_errors") {
-      const logs = window.__exportErrorsForLLM ? window.__exportErrorsForLLM() : '{}';
-      sendResponse({ logs });
+      window.__pendingLogResponse = sendResponse;
+      window.postMessage({ __ofFromExt: true, kind: "export_errors" }, "*");
       return true; // async response
     }
     if (msg && msg.__ofCmd === "clear_logs") {
-      if (window.__clearLogs) window.__clearLogs();
+      window.postMessage({ __ofFromExt: true, kind: "clear_logs" }, "*");
       sendResponse({ success: true });
-      return true; // async response
+      return true;
+    }
+  });
+
+  // Listen for log responses from page
+  window.addEventListener("message", (e) => {
+    const msg = e.data;
+    if (!msg || msg.__ofFromPage !== true) return;
+
+    if (msg.kind === "recent_logs_response" && window.__pendingLogResponse) {
+      window.__pendingLogResponse({ logs: msg.payload?.logs || [] });
+      delete window.__pendingLogResponse;
+    } else if (msg.kind === "export_logs_response" && window.__pendingLogResponse) {
+      window.__pendingLogResponse({ logs: msg.payload?.logs || '{}' });
+      delete window.__pendingLogResponse;
+    } else if (msg.kind === "export_errors_response" && window.__pendingLogResponse) {
+      window.__pendingLogResponse({ logs: msg.payload?.logs || '{}' });
+      delete window.__pendingLogResponse;
     }
   });
 

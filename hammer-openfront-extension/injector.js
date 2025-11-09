@@ -1414,6 +1414,18 @@
   } catch (e) {
     log('[Keyboard] Failed to initialize:', e);
   }
+
+  // Listen for keybind changes from popup
+  try {
+    chrome?.storage?.onChanged?.addListener((changes, areaName) => {
+      if (areaName === 'local' && changes.of_keybinds) {
+        log('[Keyboard] Keybinds changed, reloading...');
+        loadKeybinds();
+      }
+    });
+  } catch (e) {
+    log('[Keyboard] Failed to add storage listener:', e);
+  }
   // ========== END KEYBOARD HANDLER SYSTEM ==========
 
   // Listen for extension -> page commands via content bridge
@@ -1546,6 +1558,22 @@
         } catch {}
         if (asRunning) { try { updateSfOverlay(); } catch {} }
       } catch {}
+    } else if (m.kind === "get_recent_logs") {
+      // Send recent logs back to content script
+      const logs = window.__getRecentLogs ? window.__getRecentLogs(5) : [];
+      window.postMessage({ __ofFromPage: true, kind: "recent_logs_response", payload: { logs } }, "*");
+    } else if (m.kind === "export_logs") {
+      // Export logs for debugging
+      const logsJSON = window.__exportLogsForLLM ? window.__exportLogsForLLM(m.payload || {}) : '{}';
+      window.postMessage({ __ofFromPage: true, kind: "export_logs_response", payload: { logs: logsJSON } }, "*");
+    } else if (m.kind === "export_errors") {
+      // Export errors only
+      const logsJSON = window.__exportErrorsForLLM ? window.__exportErrorsForLLM() : '{}';
+      window.postMessage({ __ofFromPage: true, kind: "export_errors_response", payload: { logs: logsJSON } }, "*");
+    } else if (m.kind === "clear_logs") {
+      // Clear log buffer
+      if (window.__clearLogs) window.__clearLogs();
+      window.postMessage({ __ofFromPage: true, kind: "clear_logs_response", payload: { success: true } }, "*");
     }
   });
 
