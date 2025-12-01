@@ -9,175 +9,337 @@
       cb(tab.id);
     });
   }
-  // Auto-Send Troops wiring
-  function setStatus(text) {
-    try { const el = document.getElementById("as-status"); if (el) el.textContent = text; } catch {}
+
+  // ========== STATUS HELPERS ==========
+  function setTroopStatus(text) {
+    const el = document.getElementById("troop-status");
+    if (el) el.textContent = text;
   }
 
-  function saveAutoSendState(state) {
-    try { chrome.storage?.local?.set({ of_as_state: state }); } catch {}
+  function setGoldStatus(text) {
+    const el = document.getElementById("gold-status");
+    if (el) el.textContent = text;
   }
 
-  function loadAutoSendState(cb) {
-    try { chrome.storage?.local?.get(["of_as_state"]).then(res => cb(res?.of_as_state)).catch(() => cb(undefined)); } catch { cb(undefined); }
+  // ========== PLAYER LIST STATE ==========
+  let allPlayers = [];
+  let currentPage = 0;
+  const PLAYERS_PER_PAGE = 9; // 3x3 grid
+  let selectedPlayer = null; // { id, name, smallID }
+
+  // ========== FEEDER STATE ==========
+  let feederState = {
+    selectedTarget: null,
+    troopRatio: 20,
+    troopThreshold: 50,
+    goldRatio: 20,
+    goldThreshold: 1000,
+    goldRate: 2000,
+    troopRunning: false,
+    goldRunning: false
+  };
+
+  // Save feeder state
+  function saveFeederState() {
+    chrome.storage.local.set({ of_feeder_state: feederState });
   }
 
-  // Emoji Spam persistence
-  function saveEmojiState(state) {
-    try { chrome.storage?.local?.set({ of_emoji_state: state }); } catch {}
-  }
-  function loadEmojiState(cb) {
-    try { chrome.storage?.local?.get(["of_emoji_state"]).then(res => cb(res?.of_emoji_state)).catch(() => cb(undefined)); } catch { cb(undefined); }
-  }
-
-  function sendAsCommand(tabId, kind, payload) {
-    try { chrome.tabs.sendMessage(tabId, { __ofCmd: kind, payload }); } catch {}
-  }
-
-  // Restore saved inputs and keep a local copy to update on changes
-  let asState = undefined;
-  loadAutoSendState((st) => {
-    try {
-      asState = st || {};
-      if (!st) return;
-      const t = document.getElementById("as-target"); if (t && st.target) t.value = st.target;
-      const r = document.getElementById("as-ratio"); if (r && st.ratio) r.value = String(st.ratio);
-      const th = document.getElementById("as-threshold"); if (th && st.threshold) th.value = String(st.threshold);
-      if (st.running) setStatus("Resumed (waiting…)");
-    } catch {}
-  });
-
-  // Restore emoji spam inputs
-  let emojiState = undefined;
-  loadEmojiState((st) => {
-    try {
-      emojiState = st || {};
-      const t = document.getElementById("emoji-target"); if (t && st?.target) t.value = st.target;
-      const ei = document.getElementById("emoji-index"); if (ei && st?.emojiIndex !== undefined) ei.value = String(st.emojiIndex);
-      const iv = document.getElementById("emoji-interval"); if (iv && st?.intervalMs !== undefined) iv.value = String(st.intervalMs);
-    } catch {}
-  });
-
-  function persistInputs() {
-    try {
-      const target = (document.getElementById("as-target")?.value || "").trim();
-      const ratio = Math.max(1, Math.min(100, Number((document.getElementById("as-ratio")?.value || "20").trim())));
-      const threshold = Math.max(1, Math.min(100, Number((document.getElementById("as-threshold")?.value || "50").trim())));
-      const next = Object.assign({}, asState || {}, { target, ratio, threshold });
-      saveAutoSendState(next);
-      asState = next;
-    } catch {}
-  }
-
-  ["as-target", "as-ratio", "as-threshold"].forEach((id) => {
-    const el = document.getElementById(id);
-    if (!el) return;
-    el.addEventListener("input", persistInputs);
-    el.addEventListener("change", persistInputs);
-    el.addEventListener("blur", persistInputs);
-  });
-
-  function persistEmojiInputs() {
-    try {
-      const target = (document.getElementById("emoji-target")?.value || "").trim() || "AllPlayers";
-      const emojiIndex = Number((document.getElementById("emoji-index")?.value || "0").trim());
-      const intervalMs = Number((document.getElementById("emoji-interval")?.value || "1000").trim());
-      const next = Object.assign({}, emojiState || {}, { target, emojiIndex, intervalMs });
-      saveEmojiState(next);
-      emojiState = next;
-    } catch {}
-  }
-  ["emoji-target", "emoji-index", "emoji-interval"].forEach((id) => {
-    const el = document.getElementById(id);
-    if (!el) return;
-    el.addEventListener("input", persistEmojiInputs);
-    el.addEventListener("change", persistEmojiInputs);
-    el.addEventListener("blur", persistEmojiInputs);
-  });
-
-  // Live-sync Scope Feeder target when other contexts (page/injector) update storage
-  try {
-    chrome.storage.onChanged.addListener((changes, area) => {
-      try {
-        if (area !== "local") return;
-        if (changes.of_as_state) {
-          const next = changes.of_as_state.newValue || {};
-          const t = document.getElementById("as-target");
-          if (t && typeof next.target === "string") {
-            t.value = next.target;
-            try { console.log("[OF-Ext][popup] Scope Feeder target updated from storage:", next.target); } catch {}
-          }
+  // Load feeder state
+  function loadFeederState() {
+    chrome.storage.local.get(['of_feeder_state'], (result) => {
+      if (result.of_feeder_state) {
+        feederState = { ...feederState, ...result.of_feeder_state };
+        updateFeederInputs();
+        if (feederState.selectedTarget) {
+          selectedPlayer = feederState.selectedTarget;
+          updateSelectedPlayerDisplay();
         }
-        if (changes.of_emoji_state) {
-          const e = changes.of_emoji_state.newValue || {};
-          const et = document.getElementById("emoji-target");
-          if (et && typeof e.target === "string") {
-            et.value = e.target;
-            try { console.log("[OF-Ext][popup] Emoji target updated from storage:", e.target); } catch {}
-          }
-        }
-        if (changes.of_as_status_text) {
-          const txt = changes.of_as_status_text.newValue || "";
-          setStatus(txt || "");
-        }
-      } catch {}
+      }
     });
-  } catch {}
+  }
 
-  // On popup open, read last as_status text and display
-  try {
-    chrome.storage?.local?.get(["of_as_status_text"]).then((res) => {
-      if (res && typeof res.of_as_status_text === "string") setStatus(res.of_as_status_text);
-    }).catch(() => {});
-  } catch {}
+  // Update inputs from state
+  function updateFeederInputs() {
+    const troopRatio = document.getElementById('troop-ratio');
+    const troopThreshold = document.getElementById('troop-threshold');
+    const goldRatio = document.getElementById('gold-ratio');
+    const goldThreshold = document.getElementById('gold-threshold');
+    const goldRate = document.getElementById('gold-rate');
 
-  const asStart = document.getElementById("as-start");
-  if (asStart) {
-    asStart.addEventListener("click", () => {
-      const target = (document.getElementById("as-target")?.value || "").trim();
-      const ratio = Math.max(1, Math.min(100, Number((document.getElementById("as-ratio")?.value || "20").trim())));
-      const threshold = Math.max(1, Math.min(100, Number((document.getElementById("as-threshold")?.value || "50").trim())));
-      const payload = { target, ratio, threshold };
-      saveAutoSendState({ target, ratio, threshold, running: true });
-      setStatus("Restarting…");
-      withActiveTab((tabId) => {
-        // Ensure a clean restart: stop first, then start shortly after
-        try { chrome.tabs.sendMessage(tabId, { __ofCmd: "as_stop" }); } catch {}
-        setTimeout(() => sendAsCommand(tabId, "as_start", payload), 150);
+    if (troopRatio) troopRatio.value = feederState.troopRatio;
+    if (troopThreshold) troopThreshold.value = feederState.troopThreshold;
+    if (goldRatio) goldRatio.value = feederState.goldRatio;
+    if (goldThreshold) goldThreshold.value = feederState.goldThreshold;
+    if (goldRate) goldRate.value = feederState.goldRate;
+  }
+
+  // Persist inputs on change
+  function setupInputListeners() {
+    const inputs = ['troop-ratio', 'troop-threshold', 'gold-ratio', 'gold-threshold', 'gold-rate'];
+    inputs.forEach(id => {
+      const el = document.getElementById(id);
+      if (!el) return;
+      el.addEventListener('change', () => {
+        const key = id.replace('-', '').replace('troop', 'troop').replace('gold', 'gold');
+        // Map to state keys
+        if (id === 'troop-ratio') feederState.troopRatio = Math.max(1, Math.min(100, Number(el.value) || 20));
+        if (id === 'troop-threshold') feederState.troopThreshold = Math.max(1, Math.min(100, Number(el.value) || 50));
+        if (id === 'gold-ratio') feederState.goldRatio = Math.max(1, Math.min(100, Number(el.value) || 20));
+        if (id === 'gold-threshold') feederState.goldThreshold = Math.max(100, Number(el.value) || 1000);
+        if (id === 'gold-rate') feederState.goldRate = Math.max(500, Number(el.value) || 2000);
+        saveFeederState();
       });
     });
   }
 
-  const asStop = document.getElementById("as-stop");
-  if (asStop) {
-    asStop.addEventListener("click", () => {
-      // Preserve last-known target/ratio/threshold so Alt+F has data to start with later
-      const target = (document.getElementById("as-target")?.value || asState?.target || "").trim();
-      const ratio = Math.max(1, Math.min(100, Number((document.getElementById("as-ratio")?.value || String(asState?.ratio || 20)).trim())));
-      const threshold = Math.max(1, Math.min(100, Number((document.getElementById("as-threshold")?.value || String(asState?.threshold || 50)).trim())));
-      saveAutoSendState({ target, ratio, threshold, running: false });
-      setStatus("Stopped");
-      withActiveTab((tabId) => sendAsCommand(tabId, "as_stop"));
+  // ========== PLAYER GRID RENDERING ==========
+  function renderPlayerGrid() {
+    const grid = document.getElementById('player-grid');
+    if (!grid) return;
+
+    grid.innerHTML = '';
+
+    if (allPlayers.length === 0) {
+      grid.innerHTML = '<div style="grid-column: span 3; text-align: center; opacity: 0.6; font-size: 11px;">No players available</div>';
+      updatePagination();
+      return;
+    }
+
+    const totalPages = Math.ceil(allPlayers.length / PLAYERS_PER_PAGE);
+    currentPage = Math.min(currentPage, totalPages - 1);
+    const start = currentPage * PLAYERS_PER_PAGE;
+    const end = Math.min(start + PLAYERS_PER_PAGE, allPlayers.length);
+    const pageItems = allPlayers.slice(start, end);
+
+    pageItems.forEach(player => {
+      const btn = document.createElement('button');
+      btn.className = 'player-btn';
+      btn.textContent = player.name || `#${player.smallID}`;
+      btn.title = `${player.name} (ID: ${player.smallID})`;
+
+      if (player.isAlly) {
+        btn.classList.add('ally');
+      }
+
+      if (selectedPlayer && selectedPlayer.id === player.id) {
+        btn.classList.add('selected');
+      }
+
+      btn.addEventListener('click', () => {
+        selectedPlayer = player;
+        feederState.selectedTarget = player;
+        saveFeederState();
+        renderPlayerGrid();
+        updateSelectedPlayerDisplay();
+      });
+
+      grid.appendChild(btn);
+    });
+
+    updatePagination();
+  }
+
+  function updatePagination() {
+    const totalPages = Math.max(1, Math.ceil(allPlayers.length / PLAYERS_PER_PAGE));
+    const pageInfo = document.getElementById('page-info');
+    const prevBtn = document.getElementById('page-prev');
+    const nextBtn = document.getElementById('page-next');
+
+    if (pageInfo) {
+      pageInfo.textContent = `Page ${currentPage + 1} of ${totalPages}`;
+    }
+
+    if (prevBtn) {
+      prevBtn.disabled = currentPage === 0;
+    }
+
+    if (nextBtn) {
+      nextBtn.disabled = currentPage >= totalPages - 1;
+    }
+  }
+
+  function updateSelectedPlayerDisplay() {
+    const el = document.getElementById('selected-player');
+    if (el) {
+      el.textContent = selectedPlayer ? (selectedPlayer.name || `#${selectedPlayer.smallID}`) : 'None';
+    }
+  }
+
+  // Pagination buttons
+  const prevBtn = document.getElementById('page-prev');
+  const nextBtn = document.getElementById('page-next');
+
+  if (prevBtn) {
+    prevBtn.addEventListener('click', () => {
+      if (currentPage > 0) {
+        currentPage--;
+        renderPlayerGrid();
+      }
     });
   }
 
-  function sendToggleMessage(tabId, enabled) {
-    try {
-      chrome.tabs.sendMessage(tabId, { __ofCmd: "overlay_toggle", enabled: !!enabled });
-    } catch {}
+  if (nextBtn) {
+    nextBtn.addEventListener('click', () => {
+      const totalPages = Math.ceil(allPlayers.length / PLAYERS_PER_PAGE);
+      if (currentPage < totalPages - 1) {
+        currentPage++;
+        renderPlayerGrid();
+      }
+    });
   }
-  // Gold display toggle switch
+
+  // ========== PLAYER LIST UPDATES ==========
+  // Listen for player list updates
+  chrome.storage.onChanged.addListener((changes, area) => {
+    if (area !== 'local') return;
+    if (changes.of_players_list) {
+      const players = changes.of_players_list.newValue || [];
+      // Sort: allies first, then by name
+      allPlayers = players.slice().sort((a, b) => {
+        if (!!a.isAlly !== !!b.isAlly) return a.isAlly ? -1 : 1;
+        return String(a.name || '').localeCompare(String(b.name || ''));
+      });
+      renderPlayerGrid();
+    }
+
+    // Update troop status from storage
+    if (changes.of_troop_status) {
+      setTroopStatus(changes.of_troop_status.newValue || 'Waiting...');
+    }
+
+    // Update gold status from storage
+    if (changes.of_gold_status) {
+      setGoldStatus(changes.of_gold_status.newValue || 'Waiting...');
+    }
+  });
+
+  // Load initial player list
+  chrome.storage.local.get(['of_players_list', 'of_troop_status', 'of_gold_status'], (result) => {
+    if (result.of_players_list) {
+      allPlayers = result.of_players_list.slice().sort((a, b) => {
+        if (!!a.isAlly !== !!b.isAlly) return a.isAlly ? -1 : 1;
+        return String(a.name || '').localeCompare(String(b.name || ''));
+      });
+      renderPlayerGrid();
+    }
+    if (result.of_troop_status) {
+      setTroopStatus(result.of_troop_status);
+    }
+    if (result.of_gold_status) {
+      setGoldStatus(result.of_gold_status);
+    }
+  });
+
+  // ========== TROOP FEEDER CONTROLS ==========
+  const troopStartBtn = document.getElementById('troop-start');
+  const troopStopBtn = document.getElementById('troop-stop');
+
+  if (troopStartBtn) {
+    troopStartBtn.addEventListener('click', () => {
+      if (!selectedPlayer) {
+        setTroopStatus('Select a player first!');
+        return;
+      }
+
+      const ratio = Math.max(1, Math.min(100, Number(document.getElementById('troop-ratio')?.value) || 20));
+      const threshold = Math.max(1, Math.min(100, Number(document.getElementById('troop-threshold')?.value) || 50));
+
+      feederState.troopRatio = ratio;
+      feederState.troopThreshold = threshold;
+      feederState.troopRunning = true;
+      saveFeederState();
+
+      const payload = {
+        target: selectedPlayer.name || selectedPlayer.id,
+        targetId: selectedPlayer.id,
+        ratio,
+        threshold
+      };
+
+      withActiveTab(tabId => {
+        chrome.tabs.sendMessage(tabId, { __ofCmd: 'troop_feeder_start', payload });
+      });
+
+      setTroopStatus('Starting...');
+    });
+  }
+
+  if (troopStopBtn) {
+    troopStopBtn.addEventListener('click', () => {
+      feederState.troopRunning = false;
+      saveFeederState();
+
+      withActiveTab(tabId => {
+        chrome.tabs.sendMessage(tabId, { __ofCmd: 'troop_feeder_stop' });
+      });
+
+      setTroopStatus('Stopped');
+    });
+  }
+
+  // ========== GOLD FEEDER CONTROLS ==========
+  const goldStartBtn = document.getElementById('gold-start');
+  const goldStopBtn = document.getElementById('gold-stop');
+
+  if (goldStartBtn) {
+    goldStartBtn.addEventListener('click', () => {
+      if (!selectedPlayer) {
+        setGoldStatus('Select a player first!');
+        return;
+      }
+
+      const ratio = Math.max(1, Math.min(100, Number(document.getElementById('gold-ratio')?.value) || 20));
+      const threshold = Math.max(100, Number(document.getElementById('gold-threshold')?.value) || 1000);
+      const rate = Math.max(500, Number(document.getElementById('gold-rate')?.value) || 2000);
+
+      feederState.goldRatio = ratio;
+      feederState.goldThreshold = threshold;
+      feederState.goldRate = rate;
+      feederState.goldRunning = true;
+      saveFeederState();
+
+      const payload = {
+        target: selectedPlayer.name || selectedPlayer.id,
+        targetId: selectedPlayer.id,
+        ratio,
+        threshold,
+        rate
+      };
+
+      withActiveTab(tabId => {
+        chrome.tabs.sendMessage(tabId, { __ofCmd: 'gold_feeder_start', payload });
+      });
+
+      setGoldStatus('Starting...');
+    });
+  }
+
+  if (goldStopBtn) {
+    goldStopBtn.addEventListener('click', () => {
+      feederState.goldRunning = false;
+      saveFeederState();
+
+      withActiveTab(tabId => {
+        chrome.tabs.sendMessage(tabId, { __ofCmd: 'gold_feeder_stop' });
+      });
+
+      setGoldStatus('Stopped');
+    });
+  }
+
+  // ========== TOGGLE SWITCHES ==========
+  // Gold display toggle
   const displayTgl = document.getElementById("toggle-display");
   if (displayTgl) {
-    try {
-      chrome.storage.local.get("of_overlay_enabled").then((res) => {
-        displayTgl.checked = !!res?.of_overlay_enabled;
-      }).catch(() => {});
-    } catch {}
+    chrome.storage.local.get("of_overlay_enabled", (res) => {
+      displayTgl.checked = !!res?.of_overlay_enabled;
+    });
     displayTgl.addEventListener("change", () => {
       const enabled = !!displayTgl.checked;
-      try { chrome.storage.local.set({ of_overlay_enabled: enabled }); } catch {}
-      withActiveTab((tabId) => sendToggleMessage(tabId, enabled));
+      chrome.storage.local.set({ of_overlay_enabled: enabled });
+      withActiveTab(tabId => {
+        chrome.tabs.sendMessage(tabId, { __ofCmd: "overlay_toggle", enabled });
+      });
     });
   }
 
@@ -186,186 +348,51 @@
   if (advTgl) {
     advTgl.addEventListener("change", () => {
       const enabled = !!advTgl.checked;
-      withActiveTab((tabId) => { try { chrome.tabs.sendMessage(tabId, { __ofCmd: "adv_overlay_toggle", enabled }); } catch {} });
+      withActiveTab(tabId => {
+        chrome.tabs.sendMessage(tabId, { __ofCmd: "adv_overlay_toggle", enabled });
+      });
     });
   }
 
-  // Emoji spam controls
-  function sendEmojiCommand(tabId, cmd, payload) {
-    try { chrome.tabs.sendMessage(tabId, { __ofCmd: cmd, payload }); } catch {}
-  }
-
-  const startEmoji = document.getElementById("start-emoji");
-  if (startEmoji) {
-    startEmoji.addEventListener("click", () => {
-      const target = (document.getElementById("emoji-target")?.value || "").trim() || "AllPlayers";
-      const emojiIndex = Number((document.getElementById("emoji-index")?.value || "0").trim());
-      const intervalMs = Number((document.getElementById("emoji-interval")?.value || "1000").trim());
-      const payload = { target, emojiIndex, intervalMs };
-      saveEmojiState(payload);
-      withActiveTab((tabId) => sendEmojiCommand(tabId, "emoji_spam_start", payload));
-    });
-  }
-
-  const stopEmoji = document.getElementById("stop-emoji");
-  if (stopEmoji) {
-    stopEmoji.addEventListener("click", () => {
-      withActiveTab((tabId) => sendEmojiCommand(tabId, "emoji_spam_stop"));
-    });
-  }
-
-  // SAM overlay toggle
-  const samTgl = document.getElementById("toggle-sam");
-  if (samTgl) {
-    try {
-      chrome.storage.local.get("of_sam_enabled").then((res) => {
-        samTgl.checked = !!res?.of_sam_enabled;
-      }).catch(() => {});
-    } catch {}
-    samTgl.addEventListener("change", () => {
-      const enabled = !!samTgl.checked;
-      try { chrome.storage.local.set({ of_sam_enabled: enabled }); } catch {}
-      withActiveTab((tabId) => { try { chrome.tabs.sendMessage(tabId, { __ofCmd: "sam_overlay_toggle", enabled }); } catch {} });
-    });
-  }
-
-  // SAM log toggle
-  const samLogTgl = document.getElementById("toggle-sam-log");
-  if (samLogTgl) {
-    samLogTgl.addEventListener("change", () => {
-      const enabled = !!samLogTgl.checked;
-      withActiveTab((tabId) => { try { chrome.tabs.sendMessage(tabId, { __ofCmd: "sam_log_toggle", enabled }); } catch {} });
-    });
-  }
-
-  // Auto-Send log toggle
+  // Feeder log toggle
   const asLogTgl = document.getElementById("toggle-as-log");
   if (asLogTgl) {
     asLogTgl.addEventListener("change", () => {
       const enabled = !!asLogTgl.checked;
-      withActiveTab((tabId) => { try { chrome.tabs.sendMessage(tabId, { __ofCmd: "as_log_toggle", enabled }); } catch {} });
-    });
-  }
-
-  // Embargo All button
-  const embargoAllBtn = document.getElementById("embargo-all");
-  if (embargoAllBtn) {
-    embargoAllBtn.addEventListener("click", () => {
-      withActiveTab((tabId) => { try { chrome.tabs.sendMessage(tabId, { __ofCmd: "embargo_all" }); } catch {} });
-      // Uncheck all in UI immediately
-      try {
-        const container = document.getElementById("players-list");
-        if (container) {
-          container.querySelectorAll("input[type=checkbox]").forEach((cb) => { try { cb.checked = false; } catch {} });
-        }
-      } catch {}
-    });
-  }
-
-  // Enable All Trading button
-  const unembargoAllBtn = document.getElementById("unembargo-all");
-  if (unembargoAllBtn) {
-    unembargoAllBtn.addEventListener("click", () => {
-      withActiveTab((tabId) => { try { chrome.tabs.sendMessage(tabId, { __ofCmd: "unembargo_all" }); } catch {} });
-      // Check all in UI immediately
-      try {
-        const container = document.getElementById("players-list");
-        if (container) {
-          container.querySelectorAll("input[type=checkbox]").forEach((cb) => { try { cb.checked = true; } catch {} });
-        }
-      } catch {}
-    });
-  }
-
-  // Render players list with checkboxes
-  function renderPlayersList(players) {
-    try {
-      const container = document.getElementById("players-list");
-      if (!container) return;
-      container.innerHTML = "";
-      if (!Array.isArray(players) || players.length === 0) {
-        const empty = document.createElement("div");
-        empty.textContent = "no players";
-        container.appendChild(empty);
-        return;
-      }
-      // Sort: allies first
-      const sorted = players.slice().sort((a, b) => {
-        if (!!a.isAlly === !!b.isAlly) return String(a.name).localeCompare(String(b.name));
-        return a.isAlly ? -1 : 1;
+      withActiveTab(tabId => {
+        chrome.tabs.sendMessage(tabId, { __ofCmd: "feeder_log_toggle", enabled });
       });
-      for (const p of sorted) {
-        const row = document.createElement("div");
-        row.style.display = "flex";
-        row.style.alignItems = "center";
-        row.style.justifyContent = "space-between";
-        row.style.gap = "8px";
-        const label = document.createElement("label");
-        label.textContent = String(p.name);
-        try {
-          label.style.color = p.isAlly ? "#6EE16E" : "#ffffff";
-          if (p.isAlly) label.style.fontWeight = "700"; else label.style.fontWeight = "600";
-        } catch {}
-        const cb = document.createElement("input");
-        cb.type = "checkbox";
-        cb.checked = !!p.trading;
-        cb.addEventListener("change", () => {
-          withActiveTab((tabId) => {
-            try {
-              const action = cb.checked ? "stop" : "start"; // checked means enable trade => stop embargo
-              chrome.tabs.sendMessage(tabId, { __ofCmd: "embargo_toggle", payload: { id: p.id, action } });
-            } catch {}
-          });
-        });
-        row.appendChild(label);
-        row.appendChild(cb);
-        container.appendChild(row);
-      }
-    } catch {}
+    });
   }
 
-  // Listen to player list updates from storage and render
-  try {
-    chrome.storage.onChanged.addListener((changes, area) => {
-      if (area !== "local") return;
-      if (changes.of_players_list) {
-        renderPlayersList(changes.of_players_list.newValue || []);
-      }
-    });
-    chrome.storage?.local?.get(["of_players_list"]).then((res) => {
-      renderPlayersList(res?.of_players_list || []);
-    }).catch(() => {});
-  } catch {}
-
-  // ========== KEYBOARD SHORTCUTS CUSTOMIZATION ==========
+  // ========== KEYBOARD SHORTCUTS ==========
   const DEFAULT_KEYBINDS = {
-    sam: "Ctrl+Shift+KeyF",
     atom: "Alt+KeyA",
     hydrogen: "Alt+KeyH",
     captureTarget: "Alt+KeyM",
-    scopeFeeder: "Alt+KeyF",
     alliances: "Alt+KeyT",
-    embargoAll: "Alt+KeyE"
+    troopFeeder: "Alt+KeyF",
+    goldFeeder: "Alt+KeyG"
   };
 
   let currentKeybinds = { ...DEFAULT_KEYBINDS };
-  let capturingKey = null; // Which keybind is currently being captured
+  let capturingKey = null;
 
-  // Load saved keybinds and update button labels
   function loadKeybinds() {
-    try {
-      chrome.storage?.local?.get(["of_keybinds"], (result) => {
-        if (result && result.of_keybinds) {
-          currentKeybinds = { ...DEFAULT_KEYBINDS, ...result.of_keybinds };
+    chrome.storage.local.get(['of_keybinds'], (result) => {
+      if (result && result.of_keybinds) {
+        // Filter out old keybinds that no longer exist
+        const validKeys = Object.keys(DEFAULT_KEYBINDS);
+        const filtered = {};
+        for (const key of validKeys) {
+          filtered[key] = result.of_keybinds[key] || DEFAULT_KEYBINDS[key];
         }
-        updateKeybindButtons();
-      });
-    } catch (e) {
-      log('Failed to load keybinds:', e);
-    }
+        currentKeybinds = filtered;
+      }
+      updateKeybindButtons();
+    });
   }
 
-  // Update button labels to show current keybinds
   function updateKeybindButtons() {
     Object.keys(currentKeybinds).forEach(key => {
       const btn = document.getElementById(`keybind-${key}`);
@@ -375,14 +402,12 @@
     });
   }
 
-  // Format keybind string for display (e.g., "Ctrl+Shift+KeyF" -> "Ctrl+Shift+F")
   function formatKeybind(keybindStr) {
     return keybindStr.replace(/Key([A-Z])/g, '$1')
                      .replace(/Digit(\d)/g, '$1')
                      .replace(/Numpad(\w+)/g, 'Num$1');
   }
 
-  // Convert key event to normalized string
   function keyEventToString(ev) {
     const parts = [];
     if (ev.ctrlKey) parts.push('Ctrl');
@@ -393,20 +418,12 @@
     return parts.join('+');
   }
 
-  // Save keybinds to storage
   function saveKeybinds() {
-    try {
-      chrome.storage?.local?.set({ of_keybinds: currentKeybinds }, () => {
-        showKeybindStatus('Saved!', 2000);
-        log('Keybinds saved:', currentKeybinds);
-      });
-    } catch (e) {
-      showKeybindStatus('Error saving', 2000);
-      log('Failed to save keybinds:', e);
-    }
+    chrome.storage.local.set({ of_keybinds: currentKeybinds }, () => {
+      showKeybindStatus('Saved!', 2000);
+    });
   }
 
-  // Show status message
   function showKeybindStatus(message, duration = 2000) {
     const statusEl = document.getElementById('keybind-status');
     if (statusEl) {
@@ -415,7 +432,6 @@
     }
   }
 
-  // Check if keybind is already in use
   function isKeybindInUse(keybindStr, excludeKey) {
     for (const [key, value] of Object.entries(currentKeybinds)) {
       if (key !== excludeKey && value === keybindStr) {
@@ -432,7 +448,6 @@
 
     btn.addEventListener('click', () => {
       if (capturingKey) {
-        // Cancel previous capture
         const prevBtn = document.getElementById(`keybind-${capturingKey}`);
         if (prevBtn) {
           prevBtn.textContent = formatKeybind(currentKeybinds[capturingKey]);
@@ -447,7 +462,6 @@
     });
   });
 
-  // Modifier-only keys that should be ignored
   const MODIFIER_KEYS = new Set([
     'AltLeft', 'AltRight',
     'ControlLeft', 'ControlRight',
@@ -455,16 +469,13 @@
     'MetaLeft', 'MetaRight'
   ]);
 
-  // Check if event has at least one modifier
   function hasModifier(ev) {
     return ev.ctrlKey || ev.altKey || ev.shiftKey || ev.metaKey;
   }
 
-  // Global keydown listener for capturing keys
   document.addEventListener('keydown', (ev) => {
     if (!capturingKey) return;
 
-    // Allow Escape to cancel capture
     if (ev.key === 'Escape' || ev.code === 'Escape') {
       const btn = document.getElementById(`keybind-${capturingKey}`);
       if (btn) {
@@ -476,9 +487,8 @@
       return;
     }
 
-    // Ignore modifier-only keys (e.g., pressing just Alt, Ctrl, Shift)
     if (MODIFIER_KEYS.has(ev.code)) {
-      return; // Keep waiting for a real key
+      return;
     }
 
     ev.preventDefault();
@@ -486,15 +496,13 @@
 
     const btn = document.getElementById(`keybind-${capturingKey}`);
 
-    // Require at least one modifier for safety (prevents breaking game controls)
     if (!hasModifier(ev)) {
       showKeybindStatus('Please use Ctrl/Alt/Shift + key', 2500);
-      return; // Don't cancel capture, let them try again
+      return;
     }
 
     const newKeybind = keyEventToString(ev);
 
-    // Check if this keybind is already in use
     const inUseBy = isKeybindInUse(newKeybind, capturingKey);
     if (inUseBy) {
       showKeybindStatus(`Already used by ${inUseBy}!`, 3000);
@@ -506,7 +514,6 @@
       return;
     }
 
-    // Update keybind
     currentKeybinds[capturingKey] = newKeybind;
     if (btn) {
       btn.textContent = formatKeybind(newKeybind);
@@ -517,7 +524,6 @@
     capturingKey = null;
   });
 
-  // Reset to defaults button
   const resetBtn = document.getElementById('reset-keybinds');
   if (resetBtn) {
     resetBtn.addEventListener('click', () => {
@@ -528,11 +534,9 @@
     });
   }
 
-  // Load keybinds on popup open
   loadKeybinds();
-  // ========== END KEYBOARD SHORTCUTS CUSTOMIZATION ==========
 
-  // ========== DEBUG LOGS EXPORT ==========
+  // ========== DEBUG LOGS ==========
   function showLogStatus(message, duration = 2000) {
     const statusEl = document.getElementById('log-status');
     if (statusEl) {
@@ -548,7 +552,7 @@
         if (!previewEl) return;
 
         if (chrome.runtime.lastError || !response || !response.logs) {
-          previewEl.textContent = 'No logs available (logger may not be loaded)';
+          previewEl.textContent = 'No logs available';
           return;
         }
 
@@ -558,7 +562,6 @@
           return;
         }
 
-        // Format recent logs
         previewEl.textContent = logs.map(log => {
           const time = new Date(log.timestamp).toLocaleTimeString();
           const args = Array.isArray(log.args) ?
@@ -570,7 +573,6 @@
     });
   }
 
-  // Copy all logs button
   const copyAllBtn = document.getElementById('copy-all-logs');
   if (copyAllBtn) {
     copyAllBtn.addEventListener('click', () => {
@@ -582,16 +584,15 @@
           }
 
           navigator.clipboard.writeText(response.logs).then(() => {
-            showLogStatus('✅ All logs copied to clipboard!', 2500);
+            showLogStatus('All logs copied!', 2500);
           }).catch(() => {
-            showLogStatus('❌ Copy failed', 2000);
+            showLogStatus('Copy failed', 2000);
           });
         });
       });
     });
   }
 
-  // Copy errors only button
   const copyErrorsBtn = document.getElementById('copy-errors');
   if (copyErrorsBtn) {
     copyErrorsBtn.addEventListener('click', () => {
@@ -603,16 +604,15 @@
           }
 
           navigator.clipboard.writeText(response.logs).then(() => {
-            showLogStatus('✅ Errors copied to clipboard!', 2500);
+            showLogStatus('Errors copied!', 2500);
           }).catch(() => {
-            showLogStatus('❌ Copy failed', 2000);
+            showLogStatus('Copy failed', 2000);
           });
         });
       });
     });
   }
 
-  // Clear logs button
   const clearLogsBtn = document.getElementById('clear-logs');
   if (clearLogsBtn) {
     clearLogsBtn.addEventListener('click', () => {
@@ -625,36 +625,27 @@
     });
   }
 
-  // Log level dropdown
   const logLevelSelect = document.getElementById('log-level');
   if (logLevelSelect) {
-    // Load current log level from storage
     chrome.storage.local.get(['of_log_level'], (result) => {
-      const level = result.of_log_level !== undefined ? result.of_log_level : 1; // Default: Info
+      const level = result.of_log_level !== undefined ? result.of_log_level : 1;
       logLevelSelect.value = String(level);
     });
 
-    // Handle log level changes
     logLevelSelect.addEventListener('change', () => {
       const newLevel = parseInt(logLevelSelect.value, 10);
       chrome.storage.local.set({ of_log_level: newLevel }, () => {
-        showLogStatus(`Log level set to ${logLevelSelect.options[logLevelSelect.selectedIndex].text}`, 2000);
-
-        // Notify the page to update its log level
+        showLogStatus(`Log level: ${logLevelSelect.options[logLevelSelect.selectedIndex].text}`, 2000);
         withActiveTab(tabId => {
-          chrome.tabs.sendMessage(tabId, { __ofCmd: 'set_log_level', payload: { level: newLevel } }, () => {
-            // Ignore response
-          });
+          chrome.tabs.sendMessage(tabId, { __ofCmd: 'set_log_level', payload: { level: newLevel } });
         });
       });
     });
   }
 
-  // Update preview when popup opens
+  // ========== INITIALIZATION ==========
+  setupInputListeners();
+  loadFeederState();
   updateLogPreview();
-  // Refresh preview every 2 seconds
   setInterval(updateLogPreview, 2000);
-  // ========== END DEBUG LOGS EXPORT ==========
 })();
-
-

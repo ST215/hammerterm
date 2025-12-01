@@ -87,38 +87,64 @@
   // Emoji spam state
   let gameSocket = null;
   let spamTimer = null;
-  // Auto-Send Troops state
-  let asTimer = null;
-  let asRunning = false;
-  let asTarget = null; // string id or name; resolved each loop
-  let asAttackRatioPct = 20;
-  let asThresholdPct = 50; // percent of max troops
-  let asLastSend = {}; // key: resolved target id (smallID or PlayerID), value: ms
-  let asCooldownMs = 10000; // match game donateCooldown: 10s (100 ticks * 100ms)
-  // Auto-Send Log UI
-  let asLogEnabled = false;
-  let asLogEl = null;
-  let asLogBody = null;
-  const AS_MAX_LOG = 300;
-  let asLastUiLogMs = 0;
-  // Small overlay to indicate Scope Feeder status
+
+  // Troop Feeder state (renamed from auto-send)
+  let troopTimer = null;
+  let troopFeederRunning = false;
+  let troopTarget = null;
+  let troopTargetId = null;
+  let troopRatioPct = 20;
+  let troopThresholdPct = 50;
+  let troopLastSend = {};
+  let troopCooldownMs = 10000;
+  let troopLastChosenId = null;
+  let troopLastChosenName = "";
+
+  // Gold Feeder state
+  let goldTimer = null;
+  let goldFeederRunning = false;
+  let goldTarget = null;
+  let goldTargetId = null;
+  let goldRatioPct = 20;
+  let goldThreshold = 1000; // minimum gold to start sending
+  let goldRateMs = 2000; // send rate
+  let goldLastSend = 0;
+
+  // Feeder Log UI
+  let feederLogEnabled = false;
+  let feederLogEl = null;
+  let feederLogBody = null;
+  const FEEDER_MAX_LOG = 300;
+  let feederLastUiLogMs = 0;
+
+  // Small overlay to indicate Feeder status
   let sfOverlayEl = null;
-  let asLastChosenId = null;
-  let asLastChosenName = "";
-  const asToggleCooldownMs = 350;
-  let asLastToggleMs = 0;
   let lastMouseClient = { x: 0, y: 0 };
 
-  function asSetStatus(text) {
-    try { window.postMessage({ __ofTap: true, kind: "as_status", text }, "*"); } catch {}
+  function setTroopStatus(text) {
+    try { window.postMessage({ __ofTap: true, kind: "troop_status", text }, "*"); } catch {}
   }
 
-  function ensureAsLog() {
-    if (!asLogEnabled) return;
+  function setGoldStatus(text) {
+    try { window.postMessage({ __ofTap: true, kind: "gold_status", text }, "*"); } catch {}
+  }
+
+  // Troop feeder aliases (previously "as" for auto-scope)
+  let asTimer = null; // alias for troopTimer
+  let asRunning = false; // alias for troopFeederRunning
+  let asTarget = null; // alias for troopTarget
+  let asAttackRatioPct = 20; // alias for troopRatioPct
+  let asThresholdPct = 50; // alias for troopThresholdPct
+  let asLastSend = {}; // alias for troopLastSend
+  let asCooldownMs = 10000; // alias for troopCooldownMs
+
+  // Unified feeder log functions
+  function ensureFeederLog() {
+    if (!feederLogEnabled) return;
     try {
-      if (asLogEl) return;
+      if (feederLogEl) return;
       const el = document.createElement("div");
-      el.id = "of-as-log";
+      el.id = "of-feeder-log";
       Object.assign(el.style, {
         position: "fixed",
         zIndex: 2147483647,
@@ -136,7 +162,7 @@
         overflow: "hidden",
       });
       const header = document.createElement("div");
-      header.textContent = "Auto-Send Log";
+      header.textContent = "Feeder Log";
       Object.assign(header.style, {
         padding: "6px 8px",
         background: "rgba(0,200,255,0.12)",
@@ -148,11 +174,11 @@
       const btns = document.createElement("div");
       const clearBtn = document.createElement("button");
       clearBtn.textContent = "Clear";
-      clearBtn.onclick = () => { if (asLogBody) asLogBody.textContent = ""; };
+      clearBtn.onclick = () => { if (feederLogBody) feederLogBody.textContent = ""; };
       const closeBtn = document.createElement("button");
       closeBtn.textContent = "✕";
       closeBtn.style.marginLeft = "6px";
-      closeBtn.onclick = () => { try { el.remove(); } catch {} asLogEl = null; asLogBody = null; asLogEnabled = false; };
+      closeBtn.onclick = () => { try { el.remove(); } catch {} feederLogEl = null; feederLogBody = null; feederLogEnabled = false; };
       for (const b of [clearBtn, closeBtn]) {
         Object.assign(b.style, {
           background: "rgba(0,200,255,0.12)",
@@ -168,7 +194,7 @@
       btns.appendChild(closeBtn);
       header.appendChild(btns);
       const body = document.createElement("div");
-      asLogBody = body;
+      feederLogBody = body;
       Object.assign(body.style, {
         padding: "8px",
         overflowY: "auto",
@@ -179,25 +205,30 @@
       el.appendChild(header);
       el.appendChild(body);
       document.documentElement.appendChild(el);
-      asLogEl = el;
+      feederLogEl = el;
     } catch {}
   }
 
-  function asLog(line) {
-    if (!asLogEnabled) return;
-    ensureAsLog();
+  function feederLog(line) {
+    if (!feederLogEnabled) return;
+    ensureFeederLog();
     try {
       const div = document.createElement("div");
       const ts = new Date().toLocaleTimeString();
       div.textContent = `[${ts}] ${line}`;
-      asLogBody?.appendChild(div);
-      if (asLogBody) asLogBody.scrollTop = asLogBody.scrollHeight;
+      feederLogBody?.appendChild(div);
+      if (feederLogBody) feederLogBody.scrollTop = feederLogBody.scrollHeight;
       // Trim
-      if (asLogBody && asLogBody.childNodes.length > AS_MAX_LOG) {
-        asLogBody.removeChild(asLogBody.firstChild);
+      if (feederLogBody && feederLogBody.childNodes.length > FEEDER_MAX_LOG) {
+        feederLogBody.removeChild(feederLogBody.firstChild);
       }
     } catch {}
   }
+
+  // Aliases for backward compatibility
+  function asSetStatus(text) { setTroopStatus(text); }
+  function asLog(line) { feederLog(`[Troop] ${line}`); }
+  function ensureAsLog() { ensureFeederLog(); }
 
   function readCurrentTroops() {
     try {
@@ -427,6 +458,124 @@
     asLog("Stopped Auto-Donate");
     try { hideSfOverlay(); } catch {}
   }
+
+  // ============== Gold Feeder Functions ==============
+  function readCurrentGold() {
+    try {
+      const me = lastPlayers?.find((p) => p.clientID === currentClientID) || null;
+      return me?.gold ?? 0;
+    } catch { return 0; }
+  }
+
+  function sendDonateGold(targetId, goldAmount) {
+    try {
+      if (!gameSocket) { try { console.log('[OF-Ext][Gold] send: no gameSocket'); } catch {} return false; }
+      if (gameSocket.readyState !== 1) { try { console.log('[OF-Ext][Gold] send: socket not OPEN', { readyState: gameSocket.readyState }); } catch {} return false; }
+      if (!currentClientID) { try { console.log('[OF-Ext][Gold] send: missing currentClientID'); } catch {} return false; }
+    } catch {}
+    const intent = {
+      type: "donate",
+      clientID: currentClientID,
+      recipient: targetId,
+      gold: goldAmount == null ? null : Number(goldAmount),
+    };
+    try {
+      const payload = { type: "intent", intent };
+      try { console.log('[OF-Ext][Gold] sending donate', payload); } catch {}
+      gameSocket.send(JSON.stringify(payload));
+      return true;
+    } catch { return false; }
+  }
+
+  function goldResolveTargetId(targetStr) {
+    // Similar to asResolveTargetIds but returns first match
+    try {
+      if (!targetStr) return null;
+      if (playersById.has(targetStr)) return targetStr;
+      const p = playersByName.get(String(targetStr).toLowerCase());
+      return p && p.id ? p.id : null;
+    } catch { return null; }
+  }
+
+  function goldTick() {
+    if (!goldFeederRunning) return;
+    try {
+      const now = Date.now();
+
+      // Check rate limit
+      if (now - goldLastSend < goldRateMs) {
+        const remaining = goldRateMs - (now - goldLastSend);
+        setGoldStatus(`Waiting ${Math.ceil(remaining/1000)}s...`);
+        return;
+      }
+
+      // Resolve target
+      const targetId = goldResolveTargetId(goldTarget);
+      if (!targetId) {
+        setGoldStatus("Invalid target");
+        return;
+      }
+
+      // Check if target is ally/teammate
+      if (!asIsAllyOrTeammate(targetId)) {
+        setGoldStatus("Target not ally");
+        return;
+      }
+
+      // Check current gold
+      const currentGold = readCurrentGold();
+      if (currentGold < goldThreshold) {
+        setGoldStatus(`Gold ${currentGold} < ${goldThreshold}`);
+        if (now - feederLastUiLogMs > 1500) {
+          feederLog(`[Gold] Gold ${currentGold} below threshold ${goldThreshold}`);
+          feederLastUiLogMs = now;
+        }
+        return;
+      }
+
+      // Calculate amount to send
+      const ratio = Math.max(0.01, Math.min(1, goldRatioPct / 100));
+      const toSend = Math.max(1, Math.floor(currentGold * ratio));
+
+      try { console.log('[OF-Ext][Gold] attempt donate', { targetId, toSend, currentGold, ratio }); } catch {}
+
+      const ok = sendDonateGold(targetId, toSend);
+      if (ok) {
+        goldLastSend = now;
+        setGoldStatus(`Sent ${toSend} gold`);
+        feederLog(`[Gold] Sent ${toSend} gold to ${targetId}`);
+      } else {
+        setGoldStatus("Send failed");
+        feederLog(`[Gold] Send failed to ${targetId}`);
+      }
+    } catch {}
+  }
+
+  function goldStart(payload) {
+    try {
+      console.log('[OF-Ext][Gold] goldStart called', payload);
+      goldTarget = payload?.target || "";
+      goldTargetId = payload?.targetId || null;
+      goldRatioPct = Math.max(1, Math.min(100, Number(payload?.ratio || 20)));
+      goldThreshold = Math.max(100, Number(payload?.threshold || 1000));
+      goldRateMs = Math.max(500, Number(payload?.rate || 2000));
+      goldFeederRunning = true;
+      goldLastSend = 0;
+      if (goldTimer) clearInterval(goldTimer);
+      goldTimer = setInterval(goldTick, 500);
+      setGoldStatus("Running...");
+      feederLog(`[Gold] Started target='${goldTarget}' ratio=${goldRatioPct}% threshold=${goldThreshold}`);
+    } catch { setGoldStatus("Start failed"); }
+  }
+
+  function goldStop() {
+    try { console.log('[OF-Ext][Gold] goldStop called'); } catch {}
+    goldFeederRunning = false;
+    if (goldTimer) { clearInterval(goldTimer); goldTimer = null; }
+    setGoldStatus("Stopped");
+    feederLog("[Gold] Stopped");
+  }
+
   let lastPlayers = [];
   const playersById = new Map();
   const playersBySmallId = new Map();
@@ -1217,13 +1366,12 @@
   // ========== CUSTOM KEYBOARD HANDLER SYSTEM ==========
   // Default keybinds - user can customize these
   const DEFAULT_KEYBINDS = {
-    sam: "Ctrl+Shift+KeyF",
     atom: "Alt+KeyA",
     hydrogen: "Alt+KeyH",
     captureTarget: "Alt+KeyM",
-    scopeFeeder: "Alt+KeyF",
     alliances: "Alt+KeyT",
-    embargoAll: "Alt+KeyE"
+    troopFeeder: "Alt+KeyF",
+    goldFeeder: "Alt+KeyG"
   };
 
   // Current keybinds (loaded from storage or defaults)
@@ -1259,19 +1407,6 @@
   // Check if key event matches a keybind string
   function matchesKeybind(ev, keybindStr) {
     return keyEventToString(ev) === keybindStr;
-  }
-
-  // Toggle SAM overlay
-  function toggleSAMOverlay() {
-    samOverlayEnabled = !samOverlayEnabled;
-    log('[Keyboard] SAM overlay:', samOverlayEnabled);
-    if (samOverlayEnabled) {
-      ensureSamOverlay();
-      scheduleSamDraw();
-    } else {
-      hideSamOverlay();
-    }
-    try { chrome?.storage?.local?.set({ of_sam_enabled: samOverlayEnabled }); } catch {}
   }
 
   // Toggle Atom overlay
@@ -1333,19 +1468,18 @@
     }
   }
 
-  // Toggle Scope Feeder (auto-send)
-  function toggleScopeFeeder() {
-    asEnabled = !asEnabled;
-    log('[Keyboard] Scope Feeder:', asEnabled);
-    try { chrome?.storage?.local?.set({ of_as_enabled: asEnabled }); } catch {}
+  // Toggle Troop Feeder
+  function toggleTroopFeeder() {
+    log('[Keyboard] Troop Feeder toggle triggered');
+    // Send toggle message to content script which will handle start/stop logic
+    window.postMessage({ __ofFromPage: true, kind: "troop_feeder_toggle", payload: { running: troopFeederRunning } }, "*");
   }
 
-  // Embargo All
-  function embargoAll() {
-    log('[Keyboard] Embargo All triggered');
-    if (typeof embargoAllPlayers === 'function') {
-      embargoAllPlayers();
-    }
+  // Toggle Gold Feeder
+  function toggleGoldFeeder() {
+    log('[Keyboard] Gold Feeder toggle triggered');
+    // Send toggle message to content script which will handle start/stop logic
+    window.postMessage({ __ofFromPage: true, kind: "gold_feeder_toggle", payload: { running: goldFeederRunning } }, "*");
   }
 
   // Modifier-only keys to ignore
@@ -1368,12 +1502,7 @@
     if (MODIFIER_KEYS.has(ev.code)) return;
 
     // Check against all keybinds
-    if (matchesKeybind(ev, currentKeybinds.sam)) {
-      ev.preventDefault();
-      ev.stopPropagation();
-      log('[Keyboard] SAM toggle triggered');
-      toggleSAMOverlay();
-    } else if (matchesKeybind(ev, currentKeybinds.atom)) {
+    if (matchesKeybind(ev, currentKeybinds.atom)) {
       ev.preventDefault();
       ev.stopPropagation();
       log('[Keyboard] Atom toggle triggered');
@@ -1393,16 +1522,16 @@
       ev.stopPropagation();
       log('[Keyboard] Capture target triggered');
       captureMouseTarget(ev);
-    } else if (matchesKeybind(ev, currentKeybinds.scopeFeeder)) {
+    } else if (matchesKeybind(ev, currentKeybinds.troopFeeder)) {
       ev.preventDefault();
       ev.stopPropagation();
-      log('[Keyboard] Scope Feeder toggle triggered');
-      toggleScopeFeeder();
-    } else if (matchesKeybind(ev, currentKeybinds.embargoAll)) {
+      log('[Keyboard] Troop Feeder toggle triggered');
+      toggleTroopFeeder();
+    } else if (matchesKeybind(ev, currentKeybinds.goldFeeder)) {
       ev.preventDefault();
       ev.stopPropagation();
-      log('[Keyboard] Embargo All triggered');
-      embargoAll();
+      log('[Keyboard] Gold Feeder toggle triggered');
+      toggleGoldFeeder();
     }
   }
 
@@ -1432,64 +1561,28 @@
   window.addEventListener("message", (e) => {
     const m = e.data;
     if (!m || m.__ofFromExt !== true) return;
-    if (m.kind === "emoji_spam_start") {
-      startEmojiSpam(m.payload || {});
-    } else if (m.kind === "emoji_spam_stop") {
-      stopEmojiSpam();
-    } else if (m.kind === "sam_overlay_toggle") {
-      samOverlayEnabled = !!(m.payload && m.payload.enabled);
-      if (samOverlayEnabled) {
-        ensureSamOverlay();
-        scheduleSamDraw();
-      } else {
-        hideSamOverlay();
-      }
-    } else if (m.kind === "sam_log_toggle") {
-      const enabled = !!(m.payload && m.payload.enabled);
-      samLogEnabled = enabled;
-      if (enabled) {
-        ensureSamLog();
-      } else {
-        if (samLogEl) { try { samLogEl.remove(); } catch {} }
-        samLogEl = null; samLogBody = null;
-      }
-    } else if (m.kind === "as_start") {
+
+    // Troop Feeder commands
+    if (m.kind === "troop_feeder_start") {
       asStart(m.payload || {});
-    } else if (m.kind === "as_stop") {
+    } else if (m.kind === "troop_feeder_stop") {
       asStop();
-    } else if (m.kind === "as_log_toggle") {
+    // Gold Feeder commands
+    } else if (m.kind === "gold_feeder_start") {
+      goldStart(m.payload || {});
+    } else if (m.kind === "gold_feeder_stop") {
+      goldStop();
+    // Feeder log toggle (shared for both feeders)
+    } else if (m.kind === "feeder_log_toggle") {
       const en = !!(m.payload && m.payload.enabled);
-      asLogEnabled = en;
+      feederLogEnabled = en;
       if (en) {
-        ensureAsLog();
+        ensureFeederLog();
       } else {
-        try { if (asLogEl) asLogEl.remove(); } catch {}
-        asLogEl = null; asLogBody = null;
+        try { if (feederLogEl) feederLogEl.remove(); } catch {}
+        feederLogEl = null; feederLogBody = null;
       }
-    } else if (m.kind === "embargo_all") {
-      embargoAllPlayers();
-    } else if (m.kind === "unembargo_all") {
-      try {
-        const me = readMyPlayer();
-        const myId = me?.id;
-        let count = 0;
-        for (const [, p] of playersById.entries()) {
-          try {
-            if (!p) continue;
-            const targetId = p.id;
-            if (!targetId) continue;
-            if (myId && targetId === myId) continue; // skip self
-            if (sendEmbargoIntent(targetId, 'stop')) count++;
-          } catch {}
-        }
-        try { window.postMessage({ __ofTap: true, kind: "as_status", text: `Trading enabled with ${count} players` }, "*"); } catch {}
-      } catch {}
-    } else if (m.kind === "embargo_toggle") {
-      try {
-        const id = m?.payload?.id;
-        const action = m?.payload?.action;
-        if (id) sendEmbargoIntent(id, action === 'stop' ? 'stop' : 'start');
-      } catch {}
+    // Overlay commands
     } else if (m.kind === "atom_overlay_toggle") {
       const en = !!(m.payload && m.payload.enabled);
       atomOverlayEnabled = en;
@@ -1530,32 +1623,37 @@
       try {
         const ref = getTileRefFromClient(lastMouseClient.x, lastMouseClient.y);
         if (ref == null) {
-          try { console.log('[OF-Ext][ScopeFeeder] ALT+M: no tile under cursor'); } catch {}
-          window.postMessage({ __ofTap: true, kind: "as_status", text: "No tile under cursor" }, "*");
+          try { console.log('[OF-Ext][Feeder] capture: no tile under cursor'); } catch {}
+          setTroopStatus("No tile under cursor");
+          setGoldStatus("No tile under cursor");
           return;
         }
         const ownerSmall = tileOwnerByRef.get(ref) || 0;
         if (!ownerSmall) {
-          try { console.log('[OF-Ext][ScopeFeeder] ALT+M: tile has no owner', { ref }); } catch {}
-          window.postMessage({ __ofTap: true, kind: "as_status", text: "Tile unowned" }, "*");
+          try { console.log('[OF-Ext][Feeder] capture: tile has no owner', { ref }); } catch {}
+          setTroopStatus("Tile unowned");
+          setGoldStatus("Tile unowned");
           return;
         }
         const p = playersBySmallId.get(ownerSmall);
         const name = p ? (p.displayName || p.name || String(ownerSmall)) : String(ownerSmall);
+        const playerId = p?.id || null;
+
+        // Set targets for both feeders
         asTarget = name;
-        try { asLog(`Target set via Alt+M: ${name}`); } catch {}
-        try { console.log('[OF-Ext][ScopeFeeder] ALT+M: resolved owner', { ref, ownerSmall, playerId: p?.id, name }); } catch {}
-        try { chrome?.storage?.local?.get(["of_as_state"]).then((res)=>{
-          const st = res?.of_as_state || {};
-          const next = Object.assign({}, st, { target: name });
-          chrome?.storage?.local?.set({ of_as_state: next });
-        }).catch(()=>{}); } catch {}
-        window.postMessage({ __ofTap: true, kind: "as_status", text: `Target set: ${name}` }, "*");
-        // Notify extension (via content bridge) so popup can live-update when open
+        goldTarget = name;
+        goldTargetId = playerId;
+
+        try { feederLog(`Target set via Alt+M: ${name}`); } catch {}
+        try { console.log('[OF-Ext][Feeder] capture: resolved owner', { ref, ownerSmall, playerId, name }); } catch {}
+
+        // Notify extension (via content bridge) so popup can update
         try {
-          window.postMessage({ __ofFromPage: true, kind: "as_set_target", payload: { target: name } }, "*");
-          window.postMessage({ __ofFromPage: true, kind: "emoji_set_target", payload: { target: name } }, "*");
+          window.postMessage({ __ofFromPage: true, kind: "feeder_set_target", payload: { target: { name, id: playerId } } }, "*");
         } catch {}
+
+        setTroopStatus(`Target: ${name}`);
+        setGoldStatus(`Target: ${name}`);
         if (asRunning) { try { updateSfOverlay(); } catch {} }
       } catch {}
     } else if (m.kind === "get_recent_logs") {

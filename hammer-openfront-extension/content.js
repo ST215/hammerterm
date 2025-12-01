@@ -2,7 +2,6 @@
   const DEBUG = true;
   const log = (...args) => { if (DEBUG) console.log("[OF-Ext][content]", ...args); };
   const OVERLAY_ID = "of-gold-overlay";
-  const EVENT_NAME = "__of_gold_update";
 
   // Auto-inject the main-world script at page load
   log("boot: scheduling main-world injector");
@@ -45,6 +44,7 @@
     const msg = e.data;
     if (!msg || msg.__ofTap !== true) return;
     log("message from page:", msg.kind);
+
     if (msg.kind === "gold_rate") {
       if (!isOverlayEnabledCache) return;
       ensureOverlay();
@@ -53,77 +53,89 @@
       if (!isAdvOverlayEnabledCache) return;
       ensureAdvOverlay();
       updateAdvOverlay(msg);
-    } else if (msg.kind === "as_status") {
-      try {
-        const text = String(msg.text || "");
-        // Persist last Scope Feeder status text for popup to read
-        chrome.storage?.local?.set({ of_as_status_text: text });
-      } catch {}
+    } else if (msg.kind === "troop_status") {
+      // Persist troop feeder status for popup
+      try { chrome.storage?.local?.set({ of_troop_status: String(msg.text || "") }); } catch {}
+    } else if (msg.kind === "gold_status") {
+      // Persist gold feeder status for popup
+      try { chrome.storage?.local?.set({ of_gold_status: String(msg.text || "") }); } catch {}
     } else if (msg.kind === "players_list") {
       try { chrome.storage?.local?.set({ of_players_list: msg.players || [] }); } catch {}
     }
   });
 
-  // Listen for page -> content messages (for ALT+M target capture)
+  // Listen for page -> content messages (for target capture via ALT+M)
   window.addEventListener("message", (e) => {
     const msg = e.data;
     if (!msg || msg.__ofFromPage !== true) return;
-    if (msg.kind === "as_altf_toggle") {
+
+    if (msg.kind === "feeder_set_target") {
+      // Update selected target in feeder state
       try {
-        const wasRunning = !!(msg && msg.payload && msg.payload.running);
-        if (wasRunning) {
-          // If it was running, just stop
-          window.postMessage({ __ofFromExt: true, kind: "as_stop" }, "*");
-        } else {
-          // If it was not running, load saved settings then stop-then-start
-          chrome.storage?.local?.get(["of_as_state"]).then((res) => {
-            const st = res?.of_as_state || {};
-            const target = (st.target || "");
-            const ratio = Math.max(1, Math.min(100, Number(st.ratio || 20)));
-            const threshold = Math.max(1, Math.min(100, Number(st.threshold || 50)));
-            if (!target) {
-              try { window.postMessage({ __ofTap: true, kind: "as_status", text: "No target set" }, "*"); } catch {}
-              return;
-            }
-            window.postMessage({ __ofFromExt: true, kind: "as_stop" }, "*");
-            setTimeout(() => {
-              window.postMessage({ __ofFromExt: true, kind: "as_start", payload: { target, ratio, threshold } }, "*");
-            }, 150);
-          }).catch(() => {
-            try { window.postMessage({ __ofTap: true, kind: "as_status", text: "No target set" }, "*"); } catch {}
-          });
+        const target = msg?.payload?.target;
+        if (target) {
+          log("received feeder_set_target from page", target);
+          chrome.storage?.local?.get(["of_feeder_state"]).then((res) => {
+            const st = res?.of_feeder_state || {};
+            st.selectedTarget = target;
+            chrome.storage?.local?.set({ of_feeder_state: st });
+          }).catch(() => {});
         }
       } catch {}
-      return;
-    }
-    if (msg.kind === "as_set_target") {
+    } else if (msg.kind === "troop_feeder_toggle") {
+      // Handle keyboard toggle for troop feeder
       try {
-        const target = msg?.payload?.target || "";
-        log("received as_set_target from page", target);
-        // Persist to storage so the popup (if open) live-updates via storage.onChanged
-        chrome.storage?.local?.get(["of_as_state"]).then((res) => {
-          const st = res?.of_as_state || {};
-          const next = Object.assign({}, st, { target });
-          chrome.storage?.local?.set({ of_as_state: next });
-        }).catch(() => {});
+        const wasRunning = !!(msg?.payload?.running);
+        if (wasRunning) {
+          window.postMessage({ __ofFromExt: true, kind: "troop_feeder_stop" }, "*");
+        } else {
+          chrome.storage?.local?.get(["of_feeder_state"]).then((res) => {
+            const st = res?.of_feeder_state || {};
+            if (!st.selectedTarget) {
+              try { chrome.storage?.local?.set({ of_troop_status: "No target selected" }); } catch {}
+              return;
+            }
+            const payload = {
+              target: st.selectedTarget.name || st.selectedTarget.id,
+              targetId: st.selectedTarget.id,
+              ratio: st.troopRatio || 20,
+              threshold: st.troopThreshold || 50
+            };
+            window.postMessage({ __ofFromExt: true, kind: "troop_feeder_start", payload }, "*");
+          }).catch(() => {});
+        }
       } catch {}
-    } else if (msg.kind === "emoji_set_target") {
+    } else if (msg.kind === "gold_feeder_toggle") {
+      // Handle keyboard toggle for gold feeder
       try {
-        const target = msg?.payload?.target || "";
-        log("received emoji_set_target from page", target);
-        chrome.storage?.local?.get(["of_emoji_state"]).then((res) => {
-          const st = res?.of_emoji_state || {};
-          const next = Object.assign({}, st, { target });
-          chrome.storage?.local?.set({ of_emoji_state: next });
-        }).catch(() => {});
+        const wasRunning = !!(msg?.payload?.running);
+        if (wasRunning) {
+          window.postMessage({ __ofFromExt: true, kind: "gold_feeder_stop" }, "*");
+        } else {
+          chrome.storage?.local?.get(["of_feeder_state"]).then((res) => {
+            const st = res?.of_feeder_state || {};
+            if (!st.selectedTarget) {
+              try { chrome.storage?.local?.set({ of_gold_status: "No target selected" }); } catch {}
+              return;
+            }
+            const payload = {
+              target: st.selectedTarget.name || st.selectedTarget.id,
+              targetId: st.selectedTarget.id,
+              ratio: st.goldRatio || 20,
+              threshold: st.goldThreshold || 1000,
+              rate: st.goldRate || 2000
+            };
+            window.postMessage({ __ofFromExt: true, kind: "gold_feeder_start", payload }, "*");
+          }).catch(() => {});
+        }
       } catch {}
     }
   });
 
   // Toggle overlay via popup -> content messaging and storage
-  // Default to disabled so injecting content.js for other features never shows the gold overlay
   let isOverlayEnabledCache = false;
   let isAdvOverlayEnabledCache = false;
+
   try {
     chrome.storage?.local?.get("of_overlay_enabled").then((res) => {
       if (res && res.of_overlay_enabled === true) {
@@ -145,6 +157,7 @@
         hideOverlay();
       }
     }
+
     if (msg && msg.__ofCmd === "adv_overlay_toggle") {
       isAdvOverlayEnabledCache = !!msg.enabled;
       if (isAdvOverlayEnabledCache) {
@@ -153,63 +166,36 @@
         hideAdvOverlay();
       }
     }
-    if (msg && msg.__ofCmd === "emoji_spam_start") {
-      window.postMessage({ __ofFromExt: true, kind: "emoji_spam_start", payload: msg.payload || {} }, "*");
+
+    // Troop Feeder commands
+    if (msg && msg.__ofCmd === "troop_feeder_start") {
+      window.postMessage({ __ofFromExt: true, kind: "troop_feeder_start", payload: msg.payload || {} }, "*");
     }
-    if (msg && msg.__ofCmd === "emoji_spam_stop") {
-      window.postMessage({ __ofFromExt: true, kind: "emoji_spam_stop" }, "*");
+    if (msg && msg.__ofCmd === "troop_feeder_stop") {
+      window.postMessage({ __ofFromExt: true, kind: "troop_feeder_stop" }, "*");
     }
-    if (msg && msg.__ofCmd === "sam_overlay_toggle") {
+
+    // Gold Feeder commands
+    if (msg && msg.__ofCmd === "gold_feeder_start") {
+      window.postMessage({ __ofFromExt: true, kind: "gold_feeder_start", payload: msg.payload || {} }, "*");
+    }
+    if (msg && msg.__ofCmd === "gold_feeder_stop") {
+      window.postMessage({ __ofFromExt: true, kind: "gold_feeder_stop" }, "*");
+    }
+
+    // Feeder log toggle
+    if (msg && msg.__ofCmd === "feeder_log_toggle") {
       const enabled = !!msg.enabled;
-      window.postMessage({ __ofFromExt: true, kind: "sam_overlay_toggle", payload: { enabled } }, "*");
-      try { chrome.storage?.local?.set({ of_sam_enabled: enabled }); } catch {}
+      window.postMessage({ __ofFromExt: true, kind: "feeder_log_toggle", payload: { enabled } }, "*");
     }
-    if (msg && msg.__ofCmd === "atom_overlay_toggle") {
-      const enabled = !!msg.enabled;
-      window.postMessage({ __ofFromExt: true, kind: "atom_overlay_toggle", payload: { enabled } }, "*");
-      try { chrome.storage?.local?.set({ of_atom_enabled: enabled }); } catch {}
-    }
-    if (msg && msg.__ofCmd === "hydrogen_overlay_toggle") {
-      const enabled = !!msg.enabled;
-      window.postMessage({ __ofFromExt: true, kind: "hydrogen_overlay_toggle", payload: { enabled } }, "*");
-      try { chrome.storage?.local?.set({ of_hydrogen_enabled: enabled }); } catch {}
-    }
-    if (msg && msg.__ofCmd === "alliances_overlay_toggle") {
-      const enabled = !!msg.enabled;
-      window.postMessage({ __ofFromExt: true, kind: "alliances_overlay_toggle", payload: { enabled } }, "*");
-      try { chrome.storage?.local?.set({ of_alliances_enabled: enabled }); } catch {}
-    }
-    if (msg && msg.__ofCmd === "sam_log_toggle") {
-      const enabled = !!msg.enabled;
-      window.postMessage({ __ofFromExt: true, kind: "sam_log_toggle", payload: { enabled } }, "*");
-    }
-    if (msg && msg.__ofCmd === "as_start") {
-      window.postMessage({ __ofFromExt: true, kind: "as_start", payload: msg.payload || {} }, "*");
-    }
-    if (msg && msg.__ofCmd === "as_stop") {
-      window.postMessage({ __ofFromExt: true, kind: "as_stop" }, "*");
-    }
-    if (msg && msg.__ofCmd === "as_log_toggle") {
-      const enabled = !!msg.enabled;
-      window.postMessage({ __ofFromExt: true, kind: "as_log_toggle", payload: { enabled } }, "*");
-    }
-    if (msg && msg.__ofCmd === "embargo_toggle") {
-      const id = msg?.payload?.id;
-      const action = msg?.payload?.action;
-      if (id) window.postMessage({ __ofFromExt: true, kind: "embargo_toggle", payload: { id, action } }, "*");
-    }
-    if (msg && msg.__ofCmd === "embargo_all") {
-      window.postMessage({ __ofFromExt: true, kind: "embargo_all" }, "*");
-    }
-    if (msg && msg.__ofCmd === "unembargo_all") {
-      window.postMessage({ __ofFromExt: true, kind: "unembargo_all" }, "*");
-    }
+
+    // Capture target (Alt+M) - still useful
     if (msg && msg.__ofCmd === "capture_mouse_player") {
       window.postMessage({ __ofFromExt: true, kind: "capture_mouse_player" }, "*");
     }
+
     // Logger commands - forward to page via postMessage
     if (msg && msg.__ofCmd === "get_recent_logs") {
-      // Store sendResponse callback for async response
       window.__pendingLogResponse = sendResponse;
       window.postMessage({ __ofFromExt: true, kind: "get_recent_logs" }, "*");
       return true; // async response
@@ -273,7 +259,7 @@
       boxShadow: "0 4px 18px rgba(0,0,0,.4)",
       pointerEvents: "none",
     });
-    el.innerHTML = "<div style=\"font-weight:600;margin-bottom:6px\">Gold Rate</div><div id=\"of-gold-body\">waiting for data…</div>";
+    el.innerHTML = "<div style=\"font-weight:600;margin-bottom:6px\">Gold Rate</div><div id=\"of-gold-body\">waiting for data...</div>";
     document.documentElement.appendChild(el);
     positionOverlays();
   }
@@ -304,14 +290,16 @@
       boxShadow: "0 4px 18px rgba(0,0,0,.4)",
       pointerEvents: "none",
     });
-    el.innerHTML = "<div style=\"font-weight:600;margin-bottom:6px\">Advanced Stats</div><div id=\"of-adv-body\">waiting…</div>";
+    el.innerHTML = "<div style=\"font-weight:600;margin-bottom:6px\">Advanced Stats</div><div id=\"of-adv-body\">waiting...</div>";
     document.documentElement.appendChild(el);
     positionOverlays();
   }
+
   function hideAdvOverlay() {
     const el = document.getElementById(ADV_OVERLAY_ID);
     if (el) el.remove();
   }
+
   function updateAdvOverlay({ playerName, team, smallID, tilesOwned, troops, maxTroops, outgoing, incoming, allies, embargoes }) {
     const body = document.getElementById("of-adv-body");
     if (!body) return;
@@ -322,7 +310,7 @@
       <div><b>Tiles</b>: ${tilesOwned}</div>
       <div><b>Troops</b>: ${formatTroopsK(troops)}${Number.isFinite(Number(maxTroops)) && maxTroops > 0 ? ` / ${formatTroopsK(maxTroops)}` : ""}</div>
       <div><b>Attacks</b>: out ${outgoing}, in ${incoming}</div>
-      <div><b>Allies</b>: ${allies}, <b>Embargoes</b>: ${embargoes}</div>
+      <div><b>Allies</b>: ${allies}</div>
     `;
     positionOverlays();
   }
@@ -334,7 +322,6 @@
       if (!gold || !adv) return;
       const ar = adv.getBoundingClientRect();
       const margin = 12;
-      // Place Gold directly to the right of Advanced
       gold.style.left = `${Math.round(ar.right + margin)}px`;
       gold.style.top = `${Math.round(ar.top)}px`;
       gold.style.transform = "none";
@@ -344,7 +331,6 @@
   function updateOverlay({ gpm60, gpm120, gps30, gps60, lastGold, lastAt, playerName }) {
     const body = document.getElementById("of-gold-body");
     if (!body) return;
-    const fmt = (v) => (typeof v === "bigint" ? v.toString() : String(v));
     log("render overlay", { gps30, gps60, gpm60, gpm120, lastGold });
     body.innerHTML = `
       <div><b>Player</b>: ${escapeHtml(playerName || "me")}</div>
@@ -369,12 +355,12 @@
   function formatGoldK(v) {
     try {
       if (typeof v === "bigint") {
-        const rounded = (v + 500n) / 1000n; // nearest 1k
+        const rounded = (v + 500n) / 1000n;
         return `${rounded.toString()}k`;
       }
       if (typeof v === "string" && /^\d+$/.test(v)) {
         const bi = BigInt(v);
-        const rounded = (bi + 500n) / 1000n; // nearest 1k
+        const rounded = (bi + 500n) / 1000n;
         return `${rounded.toString()}k`;
       }
       const n = Number(v);
@@ -403,7 +389,6 @@
     try {
       const n = Number(v);
       if (!Number.isFinite(n)) return String(v);
-      // Game renders troops as troops/10
       const display = n / 10;
       return formatNumberK(display);
     } catch {
@@ -411,5 +396,3 @@
     }
   }
 })();
-
-
