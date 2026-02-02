@@ -27,7 +27,6 @@
   const eventCleanup = []
   let origSetTransform = null
   let origDrawImage = null
-  let origRAF = null
 
   // ===== CONSTANTS =====
   const GameUpdateType = {
@@ -46,9 +45,6 @@
 
   const TICK_MS = 100
   const MAX_AGE_MS = 2 * 60 * 1000
-  const SAM_RANGE_TILES = 70
-  const ATOM_INNER = 12, ATOM_OUTER = 30
-  const HYDROGEN_INNER = 80, HYDROGEN_OUTER = 100
 
   // ===== GLOBAL STATE =====
   let currentClientID = null
@@ -70,8 +66,7 @@
   const goldHistory = []
   let lastGoldDispatch = 0
 
-  // SAM tracking
-  const samUnits = new Map()
+  // Canvas tracking (for target selection)
   let worldTilesWidth = 0, worldTilesHeight = 0
   let screenCanvasWidth = 0, screenCanvasHeight = 0
   let targetCanvas = null
@@ -166,8 +161,7 @@
     feedIn: [], feedOut: [], rawMessages: [],
 
     // Feature toggles
-    goldRateEnabled: true, samOverlayEnabled: false,
-    atomOverlayEnabled: false, hydrogenOverlayEnabled: false,
+    goldRateEnabled: true,
 
     // Auto-donate troops state
     asTroopsRunning: false,
@@ -346,24 +340,13 @@
 
       }
 
-      // Unit updates
+      // Unit updates (city tracking)
       const units = updates?.[GameUpdateType.Unit]
       if (units?.length) {
         for (const u of units) {
           if (!u || u.id === undefined) continue
-          const idKey = String(u.id)
-          const isSam = u.unitType === 'SAM Launcher' || u.unitType === 'SAMLauncher'
           const isCity = u.unitType === 'City'
-
           if (isCity) upsertCity(u)
-
-          if (isSam) {
-            if (u.isActive === false) {
-              samUnits.delete(idKey)
-            } else {
-              samUnits.set(idKey, { ref: u.pos, ownerID: u.ownerID })
-            }
-          }
         }
       }
 
@@ -808,36 +791,6 @@
       handled = true
     }
 
-    if (e.altKey && e.code === 'KeyE') {
-      e.preventDefault()
-      e.stopImmediatePropagation()
-      embargoAll()
-      handled = true
-    }
-
-    if (e.altKey && e.code === 'KeyA') {
-      e.preventDefault()
-      e.stopImmediatePropagation()
-      S.atomOverlayEnabled = !S.atomOverlayEnabled
-      showStatus(S.atomOverlayEnabled ? '💣 Atom Bomb Overlay ON' : '⏹️ Atom Bomb Overlay OFF')
-      handled = true
-    }
-
-    if (e.altKey && e.code === 'KeyH') {
-      e.preventDefault()
-      e.stopImmediatePropagation()
-      S.hydrogenOverlayEnabled = !S.hydrogenOverlayEnabled
-      showStatus(S.hydrogenOverlayEnabled ? '☢️ Hydrogen Bomb Overlay ON' : '⏹️ Hydrogen Bomb Overlay OFF')
-      handled = true
-    }
-
-    if (e.ctrlKey && e.shiftKey && e.code === 'KeyF') {
-      e.preventDefault()
-      e.stopImmediatePropagation()
-      S.samOverlayEnabled = !S.samOverlayEnabled
-      showStatus(S.samOverlayEnabled ? '🎯 SAM Overlay ON' : '⏹️ SAM Overlay OFF')
-      handled = true
-    }
 
     if (handled) return false
   }
@@ -984,157 +937,7 @@
     if (asGoldTimer) { clearInterval(asGoldTimer); asGoldTimer = null }
   }
 
-  // ===== EMBARGO FUNCTIONS =====
-  function sendEmbargo(tid, action = 'start') {
-    if (!gameSocket || gameSocket.readyState !== 1 || !currentClientID) return false
-    const intent = { type: 'embargo', clientID: currentClientID, targetID: tid, action }
-    try {
-      gameSocket.send(JSON.stringify({ type: 'intent', intent }))
-      return true
-    } catch { return false }
-  }
 
-  async function embargoAll() {
-    const me = readMyPlayer()
-    if (!me) {
-      showStatus('❌ Player not found')
-      return
-    }
-
-    const players = [...playersById.values()].filter(p => p.id && p.id !== me.id)
-    showStatus(`🚫 Embargoing ${players.length} players...`, 3000)
-
-    let ct = 0
-    for (const p of players) {
-      if (sendEmbargo(p.id, 'start')) ct++
-      await new Promise(r => setTimeout(r, 50))
-    }
-
-    showStatus(`🚫 Embargoed ${ct} players`)
-  }
-
-  async function unembargoAll() {
-    const me = readMyPlayer()
-    if (!me) {
-      showStatus('❌ Player not found')
-      return
-    }
-
-    const players = [...playersById.values()].filter(p => p.id && p.id !== me.id)
-    showStatus(`✅ Un-embargoing ${players.length} players...`, 3000)
-
-    let ct = 0
-    for (const p of players) {
-      if (sendEmbargo(p.id, 'stop')) ct++
-      await new Promise(r => setTimeout(r, 50))
-    }
-
-    showStatus(`✅ Trading enabled with ${ct} players`)
-  }
-
-  // ===== OVERLAY DRAWING =====
-  function worldToScreen(worldX, worldY) {
-    const scaleX = screenCanvasWidth / worldTilesWidth
-    const scaleY = screenCanvasHeight / worldTilesHeight
-    const screenX = worldX * scaleX * currentTransform.a + currentTransform.e
-    const screenY = worldY * scaleY * currentTransform.d + currentTransform.f
-    return { x: screenX, y: screenY }
-  }
-
-  function tileCoordsToWorld(tileRef) {
-    if (!worldTilesWidth) return null
-    const x = tileRef % worldTilesWidth
-    const y = Math.floor(tileRef / worldTilesWidth)
-    return { x, y }
-  }
-
-  function drawOverlays() {
-    if (!targetCanvas) return
-    const ctx = targetCanvas.getContext('2d')
-    if (!ctx) return
-
-    if (S.samOverlayEnabled) {
-      ctx.save()
-      const me = readMyPlayer()
-      for (const sam of samUnits.values()) {
-        const coords = tileCoordsToWorld(sam.ref)
-        if (!coords) continue
-
-        const pos = worldToScreen(coords.x + 0.5, coords.y + 0.5)
-        const radiusPixels = SAM_RANGE_TILES * (screenCanvasWidth / worldTilesWidth) * currentTransform.a
-
-        if (me && sam.ownerID === me.smallID) {
-          ctx.strokeStyle = 'rgba(100, 150, 255, 0.7)'
-        } else if (me && asIsAlly(sam.ownerID)) {
-          ctx.strokeStyle = 'rgba(100, 255, 100, 0.7)'
-        } else {
-          ctx.strokeStyle = 'rgba(255, 100, 100, 0.7)'
-        }
-
-        ctx.lineWidth = 2
-        ctx.beginPath()
-        ctx.arc(pos.x, pos.y, radiusPixels, 0, Math.PI * 2)
-        ctx.stroke()
-      }
-      ctx.restore()
-    }
-
-    if (S.atomOverlayEnabled) {
-      const mouseWorldX = (lastMouseClient.x - currentTransform.e) / ((screenCanvasWidth / worldTilesWidth) * currentTransform.a)
-      const mouseWorldY = (lastMouseClient.y - currentTransform.f) / ((screenCanvasHeight / worldTilesHeight) * currentTransform.d)
-      const pos = worldToScreen(mouseWorldX, mouseWorldY)
-
-      ctx.save()
-      const innerRadius = ATOM_INNER * (screenCanvasWidth / worldTilesWidth) * currentTransform.a
-      const outerRadius = ATOM_OUTER * (screenCanvasWidth / worldTilesWidth) * currentTransform.a
-
-      ctx.strokeStyle = 'rgba(255, 200, 0, 0.8)'
-      ctx.lineWidth = 3
-      ctx.beginPath()
-      ctx.arc(pos.x, pos.y, innerRadius, 0, Math.PI * 2)
-      ctx.stroke()
-
-      ctx.strokeStyle = 'rgba(255, 100, 0, 0.5)'
-      ctx.lineWidth = 2
-      ctx.beginPath()
-      ctx.arc(pos.x, pos.y, outerRadius, 0, Math.PI * 2)
-      ctx.stroke()
-      ctx.restore()
-    }
-
-    if (S.hydrogenOverlayEnabled) {
-      const mouseWorldX = (lastMouseClient.x - currentTransform.e) / ((screenCanvasWidth / worldTilesWidth) * currentTransform.a)
-      const mouseWorldY = (lastMouseClient.y - currentTransform.f) / ((screenCanvasHeight / worldTilesHeight) * currentTransform.d)
-      const pos = worldToScreen(mouseWorldX, mouseWorldY)
-
-      ctx.save()
-      const innerRadius = HYDROGEN_INNER * (screenCanvasWidth / worldTilesWidth) * currentTransform.a
-      const outerRadius = HYDROGEN_OUTER * (screenCanvasWidth / worldTilesWidth) * currentTransform.a
-
-      ctx.strokeStyle = 'rgba(0, 255, 255, 0.8)'
-      ctx.lineWidth = 3
-      ctx.beginPath()
-      ctx.arc(pos.x, pos.y, innerRadius, 0, Math.PI * 2)
-      ctx.stroke()
-
-      ctx.strokeStyle = 'rgba(0, 150, 255, 0.5)'
-      ctx.lineWidth = 2
-      ctx.beginPath()
-      ctx.arc(pos.x, pos.y, outerRadius, 0, Math.PI * 2)
-      ctx.stroke()
-      ctx.restore()
-    }
-  }
-
-  if (window.requestAnimationFrame) {
-    origRAF = window.requestAnimationFrame
-    window.requestAnimationFrame = function(callback) {
-      return origRAF.call(this, function(time) {
-        callback(time)
-        try { drawOverlays() } catch {}
-      })
-    }
-  }
 
   // ===== UI =====
   const ui = document.createElement('div')
@@ -1149,7 +952,7 @@
     overflow: 'hidden', userSelect: 'none', resize: 'both'
   })
 
-  const tabs = ['summary', 'stats', 'aiinsights', 'ports', 'feed', 'goldrate', 'alliances', 'autotroops', 'autogold', 'overlays', 'embargo', 'hotkeys']
+  const tabs = ['summary', 'stats', 'aiinsights', 'ports', 'feed', 'goldrate', 'alliances', 'autotroops', 'autogold', 'hotkeys']
   ui.innerHTML = `
     <div id="hm-head" style="display:flex;align-items:center;justify-content:space-between;padding:8px 10px;background:#151f33;border-bottom:1px solid #86531f;cursor:move;flex-shrink:0">
       <div><b>HAMMER v8.10</b> <span style="opacity:.85">SMOOTH</span></div>
@@ -2014,66 +1817,14 @@
     return html
   }
 
-  function overlaysView() {
-    let html = '<div class="title">🎨 Map Overlays</div>'
-    html += '<div class="help">Visual overlays on game map</div>'
-
-    html += '<div class="box">'
-    html += `<div class="row"><div>SAM Overlay</div><button id="ov-sam">${S.samOverlayEnabled ? 'ON' : 'OFF'}</button><span class="hotkey">CTRL+SHIFT+F</span></div>`
-    html += '<div class="help">Shows SAM launcher ranges (70 tiles) - FIXED positioning</div>'
-    html += '</div>'
-
-    html += '<div class="box">'
-    html += `<div class="row"><div>Atom Bomb Overlay</div><button id="ov-atom">${S.atomOverlayEnabled ? 'ON' : 'OFF'}</button><span class="hotkey">ALT+A</span></div>`
-    html += '<div class="help">Shows atom bomb radius (12/30 tiles)</div>'
-    html += '</div>'
-
-    html += '<div class="box">'
-    html += `<div class="row"><div>Hydrogen Bomb Overlay</div><button id="ov-hydrogen">${S.hydrogenOverlayEnabled ? 'ON' : 'OFF'}</button><span class="hotkey">ALT+H</span></div>`
-    html += '<div class="help">Shows hydrogen bomb radius (80/100 tiles)</div>'
-    html += '</div>'
-
-    return html
-  }
-
-  function embargoView() {
-    let html = '<div class="title">🚫 Embargo Manager</div>'
-    html += '<div class="help">Bulk embargo controls</div>'
-
-    html += '<div class="box">'
-    html += '<div class="warning">⚠️ WARNING: Affects ALL players!</div>'
-    html += '<div class="row" style="margin-top:12px">'
-    html += '<button id="emb-all">Embargo All</button>'
-    html += '<button id="unemb-all">Un-embargo All</button>'
-    html += '<span class="hotkey">ALT+E</span>'
-    html += '</div>'
-    html += '</div>'
-
-    html += '<div class="help" style="margin-top:12px">'
-    html += '<b>What is an embargo?</b><br>'
-    html += 'Prevents players from trading with ports on your territory.'
-    html += '</div>'
-
-    return html
-  }
 
   function hotkeysView() {
     let html = '<div class="title">⌨️ Keyboard Shortcuts</div>'
-    html += '<div class="help">All hotkeys - NOW WORKING!</div>'
+    html += '<div class="help">Available keyboard shortcuts</div>'
 
-    html += '<div class="box"><div class="title" style="margin-top:0">Auto-Feeder</div>'
+    html += '<div class="box"><div class="title" style="margin-top:0">Auto-Troops</div>'
     html += '<div class="row"><div>Add Target</div><span class="hotkey">ALT+M</span></div>'
     html += '<div class="row"><div>Toggle Auto-Feed</div><span class="hotkey">ALT+F</span></div>'
-    html += '</div>'
-
-    html += '<div class="box"><div class="title" style="margin-top:0">Overlays</div>'
-    html += '<div class="row"><div>SAM Overlay</div><span class="hotkey">CTRL+SHIFT+F</span></div>'
-    html += '<div class="row"><div>Atom Bomb</div><span class="hotkey">ALT+A</span></div>'
-    html += '<div class="row"><div>Hydrogen Bomb</div><span class="hotkey">ALT+H</span></div>'
-    html += '</div>'
-
-    html += '<div class="box"><div class="title" style="margin-top:0">Quick Actions</div>'
-    html += '<div class="row"><div>Embargo All</div><span class="hotkey">ALT+E</span></div>'
     html += '</div>'
 
     return html
@@ -2093,8 +1844,6 @@
       alliances: alliancesView,
       autotroops: autoDonateTroopsView,
       autogold: autoDonateGoldView,
-      overlays: overlaysView,
-      embargo: embargoView,
       hotkeys: hotkeysView
     }
 
@@ -2262,21 +2011,6 @@
       }
     })
 
-    // Overlay toggles
-    const ovSam = ui.querySelector('#ov-sam')
-    const ovAtom = ui.querySelector('#ov-atom')
-    const ovHydrogen = ui.querySelector('#ov-hydrogen')
-
-    if (ovSam) ovSam.onclick = () => { S.samOverlayEnabled = !S.samOverlayEnabled }
-    if (ovAtom) ovAtom.onclick = () => { S.atomOverlayEnabled = !S.atomOverlayEnabled }
-    if (ovHydrogen) ovHydrogen.onclick = () => { S.hydrogenOverlayEnabled = !S.hydrogenOverlayEnabled }
-
-    // Embargo buttons
-    const embAll = ui.querySelector('#emb-all')
-    const unembAll = ui.querySelector('#unemb-all')
-
-    if (embAll) embAll.onclick = () => embargoAll()
-    if (unembAll) unembAll.onclick = () => unembargoAll()
   }
 
   const tickId = setInterval(() => {
@@ -2310,11 +2044,6 @@
     if (origDrawImage) {
       try {
         CanvasRenderingContext2D.prototype.drawImage = origDrawImage
-      } catch {}
-    }
-    if (origRAF) {
-      try {
-        window.requestAnimationFrame = origRAF
       } catch {}
     }
 
