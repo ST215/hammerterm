@@ -1,9 +1,15 @@
 // =====================================================================
-// HAMMER v8.10 "SMOOTH EDITION"
-// NEW: Fixed scrolling in target selection lists (troops/gold)
-// NEW: Optimized refresh - only updates numbers, not entire DOM
-// NEW: Clean layout matching port details and alliances views
-// INCLUDES: All v8.9 features (intelligent calculator, countdown timers, etc.)
+// HAMMER v9.0 "MINIMAL EDITION" (Refactor)
+//
+// Core features only: Stats tracking + Automation
+//
+// NEW in v9.0:
+// - Enhanced logging system with export for debugging
+// - Removed: SAM/Atom/Hydrogen overlays, embargo controls
+// - Slimmed down from 2360 to 2089+ lines
+// - Modular structure within single file
+//
+// Based on v8.10 SMOOTH EDITION
 // =====================================================================
 (() => {
   // Hard reset with PROPER cleanup
@@ -20,8 +26,92 @@
   }
   delete window.__HAMMER__
 
-  const DEBUG = false
-  const log = (...a) => { if (DEBUG) console.log('[HAMMER]', ...a) }
+  // ========== MODULE: Logger ==========
+  const Logger = (() => {
+    const MAX_LOG_ENTRIES = 1000
+    const LOG_LEVELS = { DEBUG: 0, INFO: 1, WARN: 2, ERROR: 3 }
+    const LEVEL_NAMES = ['debug', 'info', 'warn', 'error']
+    const CONSOLE_LEVEL_MAP = { 'debug': 0, 'log': 1, 'info': 1, 'warn': 2, 'error': 3 }
+
+    let minLogLevel = LOG_LEVELS.DEBUG
+    const logBuffer = []
+    let logIndex = 0
+
+    function extractCategory(args) {
+      if (args.length > 0 && typeof args[0] === 'string') {
+        const match = args[0].match(/\[([^\]]+)\]/)
+        return match ? match[1] : null
+      }
+      return null
+    }
+
+    function serializeValue(value) {
+      try {
+        if (value instanceof Error) {
+          return { type: 'Error', message: value.message, stack: value.stack, name: value.name }
+        } else if (typeof value === 'object' && value !== null) {
+          try {
+            JSON.stringify(value)
+            return value
+          } catch { return '[Circular]' }
+        }
+        return value
+      } catch { return '[SerializationError]' }
+    }
+
+    function addLog(entry) {
+      const entryLevel = CONSOLE_LEVEL_MAP[entry.level] || LOG_LEVELS.INFO
+      if (entryLevel < minLogLevel) return
+
+      entry.category = extractCategory(entry.args)
+      if (logBuffer.length < MAX_LOG_ENTRIES) {
+        logBuffer.push(entry)
+      } else {
+        logBuffer[logIndex % MAX_LOG_ENTRIES] = entry
+        logIndex++
+      }
+    }
+
+    // Export logs for debugging
+    function exportLogs(options = {}) {
+      const { limit = 100, level = null, minLevel = null } = options
+      let logs = logBuffer.slice()
+
+      if (level) logs = logs.filter(log => log.level === level)
+      if (minLevel) {
+        const minLevelNum = LOG_LEVELS[minLevel.toUpperCase()] || 0
+        logs = logs.filter(log => (CONSOLE_LEVEL_MAP[log.level] || 0) >= minLevelNum)
+      }
+
+      logs = logs.slice(-limit)
+      return JSON.stringify({
+        version: '9.0',
+        timestamp: new Date().toISOString(),
+        totalLogs: logBuffer.length,
+        exportedLogs: logs.length,
+        logs: logs
+      }, null, 2)
+    }
+
+    // Simple logging functions
+    const log = (...args) => {
+      addLog({ level: 'log', args: args.map(serializeValue), timestamp: new Date().toISOString() })
+      console.log('[HAMMER]', ...args)
+    }
+    const warn = (...args) => {
+      addLog({ level: 'warn', args: args.map(serializeValue), timestamp: new Date().toISOString() })
+      console.warn('[HAMMER]', ...args)
+    }
+    const error = (...args) => {
+      addLog({ level: 'error', args: args.map(serializeValue), timestamp: new Date().toISOString() })
+      console.error('[HAMMER]', ...args)
+    }
+
+    return { log, warn, error, exportLogs }
+  })()
+
+  // Convenient alias for internal logging
+  const log = Logger.log
 
   // ===== CLEANUP TRACKING =====
   const eventCleanup = []
@@ -2068,7 +2158,12 @@
     console.log('[HAMMER] Cleanup complete')
   }
 
-  window.__HAMMER__ = { cleanup, ui: { root: ui }, version: '8.8' }
+  window.__HAMMER__ = {
+    cleanup,
+    ui: { root: ui },
+    version: '9.0-refactor',
+    exportLogs: Logger.exportLogs
+  }
 
   render()
 
