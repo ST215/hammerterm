@@ -197,6 +197,11 @@
   const pendingMessages = []
   let playerDataReady = false
 
+  // Resource tracking for alternative donation detection
+  let lastMyGold = 0
+  let lastMyTroops = 0
+  const recentIntents = [] // Track our own intents
+
   // Session tracking
   const sessionStartTime = Date.now()
 
@@ -446,6 +451,15 @@
     try {
       if (!msg || msg.type !== 'game_update' || !msg.gameUpdate) return
       const { updates } = msg.gameUpdate
+
+      // Debug: log all update types present
+      if (updates) {
+        const presentTypes = Object.keys(updates).filter(k => updates[k]?.length > 0)
+        if (presentTypes.length > 0) {
+          log('[DEBUG] Update types present:', presentTypes.join(', '))
+        }
+      }
+
       if (msg.gameUpdate.tick) {
         lastTick = msg.gameUpdate.tick
         lastTickMs = Date.now()
@@ -474,6 +488,24 @@
           myTeam = my.team ?? null
           myAllies = new Set(Array.isArray(my.allies) ? my.allies : [])
           if (S.goldRateEnabled) updateGoldRate(my)
+
+          // Track resource changes for alternative donation detection
+          const currentGold = my.gold || 0
+          const currentTroops = my.troops || 0
+          if (lastMyGold > 0 || lastMyTroops > 0) {
+            const goldChange = currentGold - lastMyGold
+            const troopChange = currentTroops - lastMyTroops
+            if (goldChange !== 0 || troopChange !== 0) {
+              log('[DEBUG] Resource change:', {
+                goldChange,
+                troopChange,
+                newGold: currentGold,
+                newTroops: currentTroops
+              })
+            }
+          }
+          lastMyGold = currentGold
+          lastMyTroops = currentTroops
         }
 
         log('[DEBUG] Player update:', {
