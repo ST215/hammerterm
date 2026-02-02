@@ -472,6 +472,12 @@
           if (S.goldRateEnabled) updateGoldRate(my)
         }
 
+        log('[DEBUG] Player update:', {
+          count: players.length,
+          mySmallID: mySmallID,
+          playerMapSize: playersById.size,
+          currentClientID: currentClientID
+        })
       }
 
       // Unit updates (city tracking)
@@ -501,8 +507,15 @@
 
       // DisplayEvent messages
       const displayEvents = updates?.[GameUpdateType.DisplayEvent]
+      log('[DEBUG] DisplayEvents received:', displayEvents?.length || 0)
       if (displayEvents?.length) {
         for (const evt of displayEvents) {
+          log('[DEBUG] DisplayEvent:', {
+            type: evt.messageType,
+            text: evt.message,
+            playerID: evt.playerID,
+            mySmallID: mySmallID
+          })
           try { processDisplayMessage(evt) }
           catch (err) { log('Display event error:', err) }
         }
@@ -525,7 +538,11 @@
     const text = msg.message || ''
 
     if (pid !== mySmallID) {
-      log(`Message for player ${pid}, I am ${mySmallID}, skipping`)
+      log('[DEBUG] Message filtered - wrong player:', {
+        messagePID: pid,
+        mySmallID: mySmallID,
+        text: text
+      })
       return
     }
 
@@ -540,6 +557,7 @@
       const m = text.match(/Received\s+([\d,\.]+[KkMm]?)\s+troops from\s+(.+)$/i)
       if (m) {
         const amt = parseAmt(m[1]), name = m[2].trim()
+        log('[DEBUG] Matched RECEIVED_TROOPS:', { name, amt, text })
         const from = findPlayer(name)
         if (from && amt > 0) {
           const r = bump(S.inbound, from.id)
@@ -547,11 +565,14 @@
           S.feedIn.push({ ts: nowDate(), type: 'troops', name, amount: amt, isPort: false })
           if (S.feedIn.length > 500) S.feedIn.shift()
           }
+      } else {
+        log('[DEBUG] No match for RECEIVED_TROOPS:', text)
       }
     } else if (mt === MessageType.SENT_TROOPS_TO_PLAYER) {
       const m = text.match(/Sent\s+([\d,\.]+[KkMm]?)\s+troops to\s+(.+)$/i)
       if (m) {
         const amt = parseAmt(m[1]), name = m[2].trim()
+        log('[DEBUG] Matched SENT_TROOPS:', { name, amt, text })
         const to = findPlayer(name)
         if (to && amt > 0) {
           const r = bump(S.outbound, to.id)
@@ -559,6 +580,8 @@
           S.feedOut.push({ ts: nowDate(), type: 'troops', name, amount: amt, isPort: false })
           if (S.feedOut.length > 500) S.feedOut.shift()
           }
+      } else {
+        log('[DEBUG] No match for SENT_TROOPS:', text)
       }
     } else if (mt === MessageType.RECEIVED_GOLD_FROM_TRADE) {
       const m = text.match(/Received\s+([\d,\.]+[KkMm]?)\s+gold from trade with\s+(.+)$/i)
@@ -579,6 +602,7 @@
       if (m) {
         const amt = msg.goldAmount ? num(msg.goldAmount) : parseAmt(m[1])
         const name = m[2].trim()
+        log('[DEBUG] Matched RECEIVED_GOLD:', { name, amt, text })
         const from = findPlayer(name)
         if (from && amt > 0) {
           const r = bump(S.inbound, from.id)
@@ -586,12 +610,15 @@
           S.feedIn.push({ ts: nowDate(), type: 'gold', name, amount: amt, isPort: false })
           if (S.feedIn.length > 500) S.feedIn.shift()
           }
+      } else {
+        log('[DEBUG] No match for RECEIVED_GOLD:', text)
       }
     } else if (mt === MessageType.SENT_GOLD_TO_PLAYER) {
       const m = text.match(/Sent\s+([\d,\.]+[KkMm]?)\s+gold to\s+(.+)$/i)
       if (m) {
         const amt = msg.goldAmount ? num(msg.goldAmount) : parseAmt(m[1])
         const name = m[2].trim()
+        log('[DEBUG] Matched SENT_GOLD:', { name, amt, text })
         const to = findPlayer(name)
         if (to && amt > 0) {
           const r = bump(S.outbound, to.id)
@@ -599,6 +626,8 @@
           S.feedOut.push({ ts: nowDate(), type: 'gold', name, amount: amt, isPort: false })
           if (S.feedOut.length > 500) S.feedOut.shift()
           }
+      } else {
+        log('[DEBUG] No match for SENT_GOLD:', text)
       }
     }
   }
@@ -617,11 +646,30 @@
     if (!name) return null
     const lower = String(name).toLowerCase()
     let found = playersByName.get(lower)
-    if (found) return { id: found.id, name: found.displayName || found.name || name }
+    if (found) {
+      log('[DEBUG] findPlayer SUCCESS (map):', {
+        input: name,
+        found: found.displayName || found.name,
+        mapSize: playersByName.size
+      })
+      return { id: found.id, name: found.displayName || found.name || name }
+    }
     for (const p of playersById.values()) {
       const pn = p.displayName || p.name || ''
-      if (pn.toLowerCase() === lower) return { id: p.id, name: pn }
+      if (pn.toLowerCase() === lower) {
+        log('[DEBUG] findPlayer SUCCESS (iteration):', {
+          input: name,
+          found: pn,
+          mapSize: playersByName.size
+        })
+        return { id: p.id, name: pn }
+      }
     }
+    log('[DEBUG] findPlayer FAILED:', {
+      input: name,
+      mapSize: playersByName.size,
+      playersCount: playersById.size
+    })
     return null
   }
 
