@@ -1,15 +1,59 @@
 // =====================================================================
-// HAMMER v9.0 "MINIMAL EDITION" (Refactor)
+// HAMMER v9.0 "MINIMAL EDITION"
 //
-// Core features only: Stats tracking + Automation
+// Core automation tool for OpenFront.io focused on essential features:
+// - Stats tracking (gold/troops sent/received with logs)
+// - Automation (auto-send gold/troops to targets)
+// - Enhanced logging with export for debugging
+// - Configuration UI with persistence
 //
-// NEW in v9.0:
-// - Enhanced logging system with export for debugging
-// - Removed: SAM/Atom/Hydrogen overlays, embargo controls
-// - Slimmed down from 2360 to 2089+ lines
-// - Modular structure within single file
+// =====================================================================
+// USAGE
+// =====================================================================
+// 1. Open OpenFront.io in your browser
+// 2. Open DevTools (F12)
+// 3. Copy this entire script
+// 4. Paste into console and press Enter
+// 5. Script UI appears in bottom-right corner
 //
-// Based on v8.10 SMOOTH EDITION
+// =====================================================================
+// API
+// =====================================================================
+// window.__HAMMER__.exportLogs()          - Export logs for debugging
+// window.__HAMMER__.exportLogs({          - Export with filters
+//   minLevel: 'warn',                     - Only warnings and errors
+//   limit: 50                             - Last 50 entries
+// })
+// window.__HAMMER__.cleanup()             - Clean up and remove script
+// window.__HAMMER__.version               - Current version
+//
+// =====================================================================
+// FEATURES
+// =====================================================================
+// ✓ Gold rate tracking (30s/60s/120s windows)
+// ✓ Transaction logs (inbound/outbound gold and troops)
+// ✓ Auto-send troops (configurable ratio, threshold, cooldown)
+// ✓ Auto-send gold (configurable amount, threshold, cooldown)
+// ✓ Target selection by name or mouse-over capture (Alt+M)
+// ✓ Configuration persistence across reloads
+// ✓ Keyboard shortcuts (Alt+M, Alt+F)
+// ✓ Enhanced logging system
+//
+// =====================================================================
+// KEYBOARD SHORTCUTS
+// =====================================================================
+// Alt+M  - Capture target player under mouse
+// Alt+F  - Toggle auto-troops on/off
+//
+// =====================================================================
+// CHANGELOG
+// =====================================================================
+// v9.0 - Minimal refactor (Feb 2026)
+//   - Enhanced logging system with export
+//   - Removed: SAM/Atom/Hydrogen overlays, embargo controls
+//   - Slimmed down from 2360 to 2184 lines (84KB)
+//   - Based on v8.10 SMOOTH EDITION
+//
 // =====================================================================
 (() => {
   // Hard reset with PROPER cleanup
@@ -26,7 +70,7 @@
   }
   delete window.__HAMMER__
 
-  // ========== MODULE: Logger ==========
+  // ===== LOGGER MODULE =====
   const Logger = (() => {
     const MAX_LOG_ENTRIES = 1000
     const LOG_LEVELS = { DEBUG: 0, INFO: 1, WARN: 2, ERROR: 3 }
