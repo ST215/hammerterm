@@ -193,6 +193,10 @@
   const playersByName = new Map()
   let lastPlayers = []
 
+  // Message buffering for timing fix
+  const pendingMessages = []
+  let playerDataReady = false
+
   // Session tracking
   const sessionStartTime = Date.now()
 
@@ -478,6 +482,17 @@
           playerMapSize: playersById.size,
           currentClientID: currentClientID
         })
+
+        // Process buffered messages now that player data is ready
+        if (!playerDataReady && mySmallID !== null) {
+          playerDataReady = true
+          log('[DEBUG] Player data ready, processing buffered messages:', pendingMessages.length)
+          for (const bufferedMsg of pendingMessages) {
+            try { processDisplayMessage(bufferedMsg) }
+            catch (err) { log('Buffered message error:', err) }
+          }
+          pendingMessages.length = 0
+        }
       }
 
       // Unit updates (city tracking)
@@ -532,6 +547,13 @@
     if (S.rawMessages.length > 100) S.rawMessages.shift()
 
     if (S.paused) return
+
+    // Buffer messages until player data is ready (timing fix)
+    if (!playerDataReady) {
+      log('[DEBUG] Buffering message until players ready:', msg.message)
+      pendingMessages.push(msg)
+      return
+    }
 
     const mt = msg.messageType
     const pid = msg.playerID
