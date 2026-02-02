@@ -2275,8 +2275,26 @@
   window.__HAMMER__ = {
     cleanup,
     ui: { root: ui },
-    version: '9.0-refactor',
-    exportLogs: Logger.exportLogs
+    version: '9.0.1-debug',
+    exportLogs: Logger.exportLogs,
+    // Exposed for testing
+    asSendGold,
+    asSendTroops,
+    findPlayer,
+    // Debug helpers
+    getState: () => ({
+      mySmallID,
+      currentClientID,
+      playerDataReady,
+      pendingMessagesCount: pendingMessages.length,
+      playersCount: playersById.size,
+      playerNamesCount: playersByName.size,
+      gameSocket: !!gameSocket,
+      inboundCount: S.inbound.size,
+      outboundCount: S.outbound.size,
+      feedInCount: S.feedIn.length,
+      feedOutCount: S.feedOut.length
+    })
   }
 
   render()
