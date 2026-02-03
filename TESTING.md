@@ -1,21 +1,23 @@
-# Testing Guide - Hammer v9.0.1 (Debug Build)
+# Testing Guide - Hammer v9.0.2
 
 ## What Was Fixed
 
-Three commits implemented fixes for broken donation tracking:
+**ROOT CAUSE IDENTIFIED**: OpenFront changed the DisplayEvent data structure in commit 8235da93 (Jan 11, 2026). The message format changed from English text to translation keys, and actual values moved to a new `params` object.
 
-1. **Diagnostic Logging** (commit 8f88146)
-   - Added comprehensive debug logging at all critical points
-   - Will help identify which part of the chain is failing
+Fixes implemented:
 
-2. **Timing Fix** (commit a92300b)
-   - Implemented message buffering to fix timing issues
+1. **DisplayEvent Structure Update** (current commit)
+   - Updated field access: `msgType` → `messageType`, `msg.text` → `message`, `msg.playerID` → `playerID`
+   - Replaced regex parsing with direct extraction from `params` object
+   - Now extracts donation data from `params.troops`, `params.gold`, `params.name`
+   - Uses `msg.goldAmount` (bigint) for precise gold values
+
+2. **Timing Fix** (previous commit a92300b)
+   - Implemented message buffering to prevent race conditions
    - Messages now buffer until player data is ready
-   - Prevents messages from being filtered due to `mySmallID` not being set
 
-3. **Testing Helpers** (commit 3862827)
-   - Exposed auto-send functions for manual testing
-   - Added debug state inspector
+3. **Diagnostic Logging** (previous commit 8f88146)
+   - Added comprehensive debug logging for troubleshooting
 
 ## How to Test
 
@@ -67,8 +69,18 @@ Watch the console for [DEBUG] messages:
 **When DisplayEvents arrive**:
 ```
 [HAMMER] [DEBUG] DisplayEvents received: <count>
-[HAMMER] [DEBUG] DisplayEvent: { type: 21, text: "...", playerID: <id>, mySmallID: <id> }
+[HAMMER] [DEBUG] DisplayEvent: {
+  type: 21,
+  text: "events_display.sent_troops_to_player",
+  playerID: <id>,
+  mySmallID: <id>
+}
 ```
+
+**New format** (OpenFront v29+):
+- `message` field contains translation key (e.g., "events_display.received_troops_from_player")
+- Actual values in `params` object: `{ troops: "500", name: "Alice" }`
+- Gold donations also have `goldAmount` field with bigint value
 
 **When player updates arrive**:
 ```
@@ -81,15 +93,15 @@ Watch the console for [DEBUG] messages:
 [HAMMER] [DEBUG] Buffering message until players ready: "Received 500 troops from Alice"
 ```
 
-**If messages match**:
+**If messages match** (NEW FORMAT):
 ```
-[HAMMER] [DEBUG] Matched RECEIVED_TROOPS: { name: "Alice", amt: 500, text: "..." }
+[HAMMER] [DEBUG] Matched RECEIVED_TROOPS: { name: "Alice", amt: 500, params: { troops: "500", name: "Alice" } }
 [HAMMER] [DEBUG] findPlayer SUCCESS (map): { input: "Alice", found: "Alice", mapSize: <n> }
 ```
 
-**If messages DON'T match**:
+**If params missing**:
 ```
-[HAMMER] [DEBUG] No match for RECEIVED_TROOPS: "Alice sent you 500 troops"
+[HAMMER] [DEBUG] No params for RECEIVED_TROOPS: { params: {}, text: "events_display.received_troops_from_player" }
 ```
 
 ### Step 4: Test Donation Tracking
@@ -147,12 +159,12 @@ Repeat for AutoTroops tab with ratio/threshold settings.
 
 ### ✅ Success Indicators
 
-1. **No buffering messages** after initial load
-   - Means player data loads before DisplayEvents (good timing)
+1. **DisplayEvents arrive** with count > 0
+   - `[DEBUG] DisplayEvents received: 1` (or more)
 
-2. **Regex patterns match** donation messages
-   - `[DEBUG] Matched RECEIVED_TROOPS` (or GOLD, etc.)
-   - Means message format hasn't changed
+2. **Params object populated** with donation data
+   - `[DEBUG] Matched RECEIVED_TROOPS: { name: "Alice", amt: 500, params: {...} }`
+   - Shows `params.troops` or `params.gold` and `params.name` are present
 
 3. **findPlayer succeeds** for all players
    - `[DEBUG] findPlayer SUCCESS`
@@ -167,14 +179,13 @@ Repeat for AutoTroops tab with ratio/threshold settings.
 
 ### ❌ Failure Indicators
 
-1. **Many buffered messages** that never process
-   - `[DEBUG] Buffering message until players ready: ...`
-   - `playerDataReady` stays `false`
-   - **Issue**: Player data not loading properly
+1. **DisplayEvents not arriving**
+   - `[DEBUG] DisplayEvents received: 0` consistently
+   - **Issue**: Either OpenFront changed event delivery or Worker interception broken
 
-2. **No match for donation messages**
-   - `[DEBUG] No match for RECEIVED_TROOPS: ...`
-   - **Issue**: Message format changed - need to update regex
+2. **Params object empty or missing**
+   - `[DEBUG] No params for RECEIVED_TROOPS: { params: {}, ... }`
+   - **Issue**: OpenFront changed params structure again
 
 3. **findPlayer fails**
    - `[DEBUG] findPlayer FAILED`
@@ -211,25 +222,27 @@ If donation tracking still doesn't work after these tests, please share:
 
 1. **Output of `getState()`**
 2. **Console logs** showing [DEBUG] messages
-3. **Example message text** that isn't matching (if regex issue)
+3. **DisplayEvent structure** from debug logs (especially `params` object)
 4. **Exported logs** (JSON from exportLogs())
+
+See [ANALYSIS.md](ANALYSIS.md) for full technical details on the DisplayEvent structure changes.
 
 ## Next Steps After Testing
 
 ### If Everything Works ✅
-- Disable debug logging (set line ~114 to `const DEBUG = false`)
+- Disable debug logging (optional - set DEBUG flag to false)
 - Commit final working version
-- Update version to `9.0.1` (remove `-debug`)
+- Update version to `9.0.2`
 
-### If Timing Issue Persists ❌
-- Check if `playerDataReady` ever becomes true
-- Check if buffered messages are processed
-- May need to adjust timing logic
+### If DisplayEvents Still Not Arriving ❌
+- Check console for Worker message interception logs
+- Verify GameUpdateType.DisplayEvent enum value is still 3
+- Check if OpenFront changed Worker message structure again
 
-### If Message Format Changed ❌
-- Note the actual message text from logs
-- Update regex patterns to match new format
-- Example: If "Alice sent you 500 troops" instead of "Received 500 troops from Alice"
+### If Params Structure Changed ❌
+- Check actual params object structure from debug logs
+- Update extraction code to match new params format
+- See ANALYSIS.md for current expected structure
 
 ### If Auto-Send Broken ❌
 - Check `gameSocket` status in getState()
