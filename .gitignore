@@ -25,3 +25,11 @@ build/
 *.tmp
 *.log
 OpenFrontIO/
+
+# Debug/diagnostic files
+data/
+ANALYSIS.md
+DIAGNOSTIC-UI-IMPLEMENTATION.md
+FIX-SUMMARY.md
+AUTO-SEND-DEBUG-GUIDE.md
+nul

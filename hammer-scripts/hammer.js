@@ -202,6 +202,12 @@
   let lastMyTroops = 0
   const recentIntents = [] // Track our own intents
 
+  // Diagnostic system state
+  const diagnosticEvents = []
+  let gameViewHooked = false
+  let displayEventsReceived = 0
+  let donationsTracked = 0
+
   // Session tracking
   const sessionStartTime = Date.now()
 
@@ -317,11 +323,11 @@
     asTroopsLog: [],
     asTroopsAllTeamMode: false,
 
-    // Auto-donate gold state
+    // Auto-donate gold state (percentage-based like troops)
     asGoldRunning: false,
     asGoldTargets: [],
-    asGoldAmount: 10000,
-    asGoldThreshold: 100000,
+    asGoldRatio: 20,        // Send 20% of current gold
+    asGoldThreshold: 0,      // No minimum threshold (send any amount)
     asGoldLastSend: {},
     asGoldNextSend: {},
     asGoldCooldownSec: 10,
@@ -437,6 +443,18 @@
 
   function asIsAlly(tid) {
     const p = playersById.get(tid)
+
+    log('[ALLIANCE CHECK] asIsAlly(', tid, '):', {
+      playerFound: !!p,
+      playerName: p ? (p.displayName || p.name) : null,
+      myTeam,
+      theirTeam: p?.team,
+      teamsMatch: p?.team != null && myTeam != null && p.team === myTeam,
+      myAlliesSize: myAllies.size,
+      myAlliesHas: p ? myAllies.has(p.smallID) : false,
+      theirSmallID: p?.smallID
+    })
+
     if (!p) return false
     if (p.team != null && myTeam != null && p.team === myTeam) return true
     if (myAllies.has(p.smallID)) return true
@@ -552,21 +570,9 @@
         }
       }
 
-      // DisplayEvent messages
-      const displayEvents = updates?.[GameUpdateType.DisplayEvent]
-      log('[DEBUG] DisplayEvents received:', displayEvents?.length || 0)
-      if (displayEvents?.length) {
-        for (const evt of displayEvents) {
-          log('[DEBUG] DisplayEvent:', {
-            type: evt.messageType,
-            text: evt.message,
-            playerID: evt.playerID,
-            mySmallID: mySmallID
-          })
-          try { processDisplayMessage(evt) }
-          catch (err) { log('Display event error:', err) }
-        }
-      }
+      // NOTE: DisplayEvent processing moved to GameView hook
+      // DisplayEvents are not available in Worker messages - they're UI-layer only
+      // See hookGameView() function for DisplayEvent interception
     } catch (err) {
       log('Worker message error:', err)
     }
@@ -589,6 +595,7 @@
 
     const mt = msg.messageType
     const pid = msg.playerID
+    const params = msg.params || {}
     const text = msg.message || ''
 
     if (pid !== mySmallID) {
@@ -600,88 +607,124 @@
       return
     }
 
-    const key = `${mt}:${text}`
+    const key = `${mt}:${text}:${params.name || ''}`
     if (S.seen.has(key)) return
     S.seen.add(key)
     if (S.seen.size > 5000) S.seen.clear()
 
     const now = Date.now()
 
+    // Extract values from params object (new structure)
     if (mt === MessageType.RECEIVED_TROOPS_FROM_PLAYER) {
-      const m = text.match(/Received\s+([\d,\.]+[KkMm]?)\s+troops from\s+(.+)$/i)
-      if (m) {
-        const amt = parseAmt(m[1]), name = m[2].trim()
-        log('[DEBUG] Matched RECEIVED_TROOPS:', { name, amt, text })
+      const name = params.name
+      const amt = parseAmt(params.troops)
+      if (name && amt > 0) {
+        log('[DEBUG] Matched RECEIVED_TROOPS:', { name, amt, params })
         const from = findPlayer(name)
-        if (from && amt > 0) {
+        if (from) {
           const r = bump(S.inbound, from.id)
           r.troops += amt; r.count++; r.last = nowDate()
           S.feedIn.push({ ts: nowDate(), type: 'troops', name, amount: amt, isPort: false })
           if (S.feedIn.length > 500) S.feedIn.shift()
-          }
+          donationsTracked++
+          addDiagnosticEvent('DONATION_TRACKED', {
+            messageType: mt,
+            typeName: 'RECEIVED_TROOPS',
+            name: name,
+            amount: amt
+          })
+        }
       } else {
-        log('[DEBUG] No match for RECEIVED_TROOPS:', text)
+        log('[DEBUG] No params for RECEIVED_TROOPS:', { params, text })
       }
     } else if (mt === MessageType.SENT_TROOPS_TO_PLAYER) {
-      const m = text.match(/Sent\s+([\d,\.]+[KkMm]?)\s+troops to\s+(.+)$/i)
-      if (m) {
-        const amt = parseAmt(m[1]), name = m[2].trim()
-        log('[DEBUG] Matched SENT_TROOPS:', { name, amt, text })
+      const name = params.name
+      const amt = parseAmt(params.troops)
+      if (name && amt > 0) {
+        log('[DEBUG] Matched SENT_TROOPS:', { name, amt, params })
         const to = findPlayer(name)
-        if (to && amt > 0) {
+        if (to) {
           const r = bump(S.outbound, to.id)
           r.troops += amt; r.count++; r.last = nowDate()
           S.feedOut.push({ ts: nowDate(), type: 'troops', name, amount: amt, isPort: false })
           if (S.feedOut.length > 500) S.feedOut.shift()
-          }
+          donationsTracked++
+          addDiagnosticEvent('DONATION_TRACKED', {
+            messageType: mt,
+            typeName: 'SENT_TROOPS',
+            name: name,
+            amount: amt
+          })
+        }
       } else {
-        log('[DEBUG] No match for SENT_TROOPS:', text)
+        log('[DEBUG] No params for SENT_TROOPS:', { params, text })
       }
     } else if (mt === MessageType.RECEIVED_GOLD_FROM_TRADE) {
-      const m = text.match(/Received\s+([\d,\.]+[KkMm]?)\s+gold from trade with\s+(.+)$/i)
-      if (m) {
-        const amt = msg.goldAmount ? num(msg.goldAmount) : parseAmt(m[1])
-        const name = m[2].trim()
+      const name = params.name
+      const amt = msg.goldAmount ? num(msg.goldAmount) : parseAmt(params.gold)
+      if (name && amt > 0) {
+        log('[DEBUG] Matched RECEIVED_GOLD_TRADE:', { name, amt, params })
         const from = findPlayer(name)
-        if (from && amt > 0) {
+        if (from) {
           const r = bump(S.inbound, from.id)
           r.gold += amt; r.count++; r.last = nowDate()
           S.feedIn.push({ ts: nowDate(), type: 'gold', name, amount: amt, isPort: true })
           if (S.feedIn.length > 500) S.feedIn.shift()
           bumpPorts(from.id, amt, now)
-          }
+          donationsTracked++
+          addDiagnosticEvent('DONATION_TRACKED', {
+            messageType: mt,
+            typeName: 'TRADE_GOLD',
+            name: name,
+            amount: amt
+          })
+        }
+      } else {
+        log('[DEBUG] No params for RECEIVED_GOLD_TRADE:', { params, text })
       }
     } else if (mt === MessageType.RECEIVED_GOLD_FROM_PLAYER) {
-      const m = text.match(/Received\s+([\d,\.]+[KkMm]?)\s+gold from\s+(.+)$/i)
-      if (m) {
-        const amt = msg.goldAmount ? num(msg.goldAmount) : parseAmt(m[1])
-        const name = m[2].trim()
-        log('[DEBUG] Matched RECEIVED_GOLD:', { name, amt, text })
+      const name = params.name
+      const amt = msg.goldAmount ? num(msg.goldAmount) : parseAmt(params.gold)
+      if (name && amt > 0) {
+        log('[DEBUG] Matched RECEIVED_GOLD:', { name, amt, params })
         const from = findPlayer(name)
-        if (from && amt > 0) {
+        if (from) {
           const r = bump(S.inbound, from.id)
           r.gold += amt; r.count++; r.last = nowDate()
           S.feedIn.push({ ts: nowDate(), type: 'gold', name, amount: amt, isPort: false })
           if (S.feedIn.length > 500) S.feedIn.shift()
-          }
+          donationsTracked++
+          addDiagnosticEvent('DONATION_TRACKED', {
+            messageType: mt,
+            typeName: 'RECEIVED_GOLD',
+            name: name,
+            amount: amt
+          })
+        }
       } else {
-        log('[DEBUG] No match for RECEIVED_GOLD:', text)
+        log('[DEBUG] No params for RECEIVED_GOLD:', { params, text })
       }
     } else if (mt === MessageType.SENT_GOLD_TO_PLAYER) {
-      const m = text.match(/Sent\s+([\d,\.]+[KkMm]?)\s+gold to\s+(.+)$/i)
-      if (m) {
-        const amt = msg.goldAmount ? num(msg.goldAmount) : parseAmt(m[1])
-        const name = m[2].trim()
-        log('[DEBUG] Matched SENT_GOLD:', { name, amt, text })
+      const name = params.name
+      const amt = msg.goldAmount ? num(msg.goldAmount) : parseAmt(params.gold)
+      if (name && amt > 0) {
+        log('[DEBUG] Matched SENT_GOLD:', { name, amt, params })
         const to = findPlayer(name)
-        if (to && amt > 0) {
+        if (to) {
           const r = bump(S.outbound, to.id)
           r.gold += amt; r.count++; r.last = nowDate()
           S.feedOut.push({ ts: nowDate(), type: 'gold', name, amount: amt, isPort: false })
           if (S.feedOut.length > 500) S.feedOut.shift()
-          }
+          donationsTracked++
+          addDiagnosticEvent('DONATION_TRACKED', {
+            messageType: mt,
+            typeName: 'SENT_GOLD',
+            name: name,
+            amount: amt
+          })
+        }
       } else {
-        log('[DEBUG] No match for SENT_GOLD:', text)
+        log('[DEBUG] No params for SENT_GOLD:', { params, text })
       }
     }
   }
@@ -727,6 +770,118 @@
     return null
   }
 
+  // ===== DIAGNOSTIC HELPER FUNCTIONS =====
+  function addDiagnosticEvent(type, data) {
+    const event = {
+      timestamp: new Date().toISOString(),
+      type,
+      data
+    }
+    diagnosticEvents.push(event)
+    if (diagnosticEvents.length > 100) diagnosticEvents.shift()
+    // Note: UI updates handled by render() function every 500ms to prevent flickering
+  }
+
+  function updateDiagnosticUI() {
+    const gameviewSpan = document.getElementById('diag-gameview')
+    const displayeventsSpan = document.getElementById('diag-displayevents')
+    const playerdataSpan = document.getElementById('diag-playerdata')
+    const donationsSpan = document.getElementById('diag-donations')
+    const eventsDiv = document.getElementById('diag-events')
+
+    if (gameviewSpan) {
+      gameviewSpan.textContent = gameViewHooked ? '✅ Hooked' : '❌ Not Hooked'
+      gameviewSpan.style.color = gameViewHooked ? '#0f0' : '#f00'
+    }
+
+    if (displayeventsSpan) {
+      displayeventsSpan.textContent = displayEventsReceived.toString()
+      displayeventsSpan.style.color = displayEventsReceived > 0 ? '#0f0' : '#f90'
+    }
+
+    if (playerdataSpan) {
+      playerdataSpan.textContent = playerDataReady ? '✅ Ready' : '⏳ Loading'
+      playerdataSpan.style.color = playerDataReady ? '#0f0' : '#f90'
+    }
+
+    if (donationsSpan) {
+      donationsSpan.textContent = donationsTracked.toString()
+      donationsSpan.style.color = donationsTracked > 0 ? '#0f0' : '#6cf'
+    }
+
+    if (eventsDiv && diagnosticEvents.length > 0) {
+      eventsDiv.innerHTML = diagnosticEvents.slice(-10).reverse().map(e => {
+        const time = e.timestamp.substring(11, 19)
+        const dataStr = JSON.stringify(e.data).substring(0, 100)
+        return `<div style="border-bottom: 1px solid #333; padding: 3px 0;">
+          <span style="color: #888;">${time}</span>
+          <span style="color: #6cf; font-weight: bold;"> ${e.type}</span>:
+          <span style="color: #fc6;">${dataStr}</span>
+        </div>`
+      }).join('')
+    }
+  }
+
+  function exportDiagnostics() {
+    try {
+      const report = {
+        timestamp: new Date().toISOString(),
+        version: '9.0.2-diagnostic',
+        status: {
+          gameViewHooked,
+          displayEventsReceived,
+          playerDataReady,
+          donationsTracked,
+          mySmallID,
+          currentClientID,
+          playersCount: playersById.size,
+          playerNamesCount: playersByName.size,
+          gameSocket: !!gameSocket,
+          gameSocketReady: gameSocket?.readyState
+        },
+        events: diagnosticEvents,
+        state: {
+          inboundCount: S.inbound.size,
+          outboundCount: S.outbound.size,
+          feedInCount: S.feedIn.length,
+          feedOutCount: S.feedOut.length,
+          rawMessagesCount: S.rawMessages.length
+        },
+        recentLogs: Logger?.getRecentLogs ? Logger.getRecentLogs(50) : []
+      }
+
+      const json = JSON.stringify(report, null, 2)
+      const blob = new Blob([json], { type: 'application/json' })
+      const url = URL.createObjectURL(blob)
+      const a = document.createElement('a')
+      a.href = url
+      a.download = `hammer-diagnostics-${Date.now()}.json`
+      a.style.display = 'none'
+      document.body.appendChild(a)
+      a.click()
+      setTimeout(() => {
+        document.body.removeChild(a)
+        URL.revokeObjectURL(url)
+      }, 100)
+
+      log('[HAMMER] Diagnostic report downloaded')
+      console.log('[HAMMER] ✅ Diagnostic report downloaded!')
+      return true
+    } catch (err) {
+      log('[ERROR] Failed to export diagnostics:', err)
+      console.error('[HAMMER] Failed to export diagnostics:', err)
+      return false
+    }
+  }
+
+  function clearDiagnostics() {
+    diagnosticEvents.length = 0
+    displayEventsReceived = 0
+    donationsTracked = 0
+    updateDiagnosticUI()
+    log('[HAMMER] Diagnostics cleared')
+  }
+
   function updateGoldRate(my) {
     const now = Date.now()
     goldHistory.push({ t: now, g: my.gold, name: my.displayName || my.name })
@@ -762,6 +917,10 @@
     w.postMessage = function(data, ...rest) {
       try {
         if (data?.type === 'init' && data.clientID) {
+          console.log('[CLIENTID] Worker init message, clientID:', data.clientID)
+          if (currentClientID && currentClientID !== data.clientID) {
+            console.warn('[CLIENTID] ⚠️ MISMATCH! Previous:', currentClientID, 'New:', data.clientID)
+          }
           currentClientID = data.clientID
         }
       } catch {}
@@ -830,22 +989,54 @@
       try {
         if (typeof data === 'string') {
           const obj = JSON.parse(data)
-          if (obj?.type === 'join' && obj.clientID) {
-            currentClientID = obj.clientID
+
+          // Log ALL intent messages for debugging
+          if (obj?.type === 'intent') {
+            console.log('[WEBSOCKET] 📤 OUTGOING INTENT:', JSON.stringify(obj, null, 2))
+
+            // Highlight donation intents specifically
+            if (obj.intent?.type === 'donate_gold' || obj.intent?.type === 'donate_troops') {
+              console.log('[WEBSOCKET] 💰 DONATION INTENT DETECTED:', obj.intent)
+              console.log('[CLIENTID] 💰 DONATION USES clientID:', obj.intent.clientID)
+              if (obj.intent.clientID !== currentClientID) {
+                console.error('[CLIENTID] ❌ CRITICAL: Donation clientID differs from hammer clientID!')
+                console.error('[CLIENTID]    Donation uses:', obj.intent.clientID)
+                console.error('[CLIENTID]    Hammer uses:', currentClientID)
+              } else {
+                console.log('[CLIENTID] ✅ Donation clientID matches hammer clientID')
+              }
+            }
+
             gameSocket = this
           }
-          if (obj?.type === 'intent') gameSocket = this
+
+          if (obj?.type === 'join' && obj.clientID) {
+            console.log('[CLIENTID] WebSocket join message, clientID:', obj.clientID)
+            if (currentClientID && currentClientID !== obj.clientID) {
+              console.warn('[CLIENTID] ⚠️ MISMATCH! Previous:', currentClientID, 'New:', obj.clientID)
+            }
+            currentClientID = obj.clientID
+            gameSocket = this
+            console.log('[WEBSOCKET] 🎮 Client joined, ID:', obj.clientID)
+          }
         }
       } catch {}
       return origSend.call(this, data)
     }
 
+    // Log incoming messages related to donations
     ws.addEventListener('message', ev => {
       try {
         if (!ev?.data) return
         const obj = typeof ev.data === 'string' ? JSON.parse(ev.data) : null
+
         if (obj && (obj.type === 'turn' || obj.type === 'start' || obj.type === 'ping')) {
           gameSocket = ws
+        }
+
+        // Log any donation-related server responses
+        if (obj?.type === 'error' || obj?.error) {
+          console.log('[WEBSOCKET] ❌ SERVER ERROR:', obj)
         }
       } catch {}
     })
@@ -899,6 +1090,463 @@
   if (!foundWebSocket) {
     console.log('[HAMMER] ⚠️ No existing WebSocket found - will intercept when created')
   }
+
+  // ===== EVENTBUS DISCOVERY =====
+  let eventBus = null
+  let eventBusAttempts = 0
+  const maxEventBusAttempts = 50
+
+  function findEventBus() {
+    if (eventBus) return true
+
+    eventBusAttempts++
+    console.log(`[HAMMER] 🔍 EventBus search attempt ${eventBusAttempts}/${maxEventBusAttempts}`)
+
+    // Try to find EventBus via events-display element
+    try {
+      const eventsDisplay = document.querySelector('events-display')
+      console.log('[HAMMER] events-display element:', eventsDisplay ? 'found' : 'not found')
+      if (eventsDisplay) {
+        console.log('[HAMMER] events-display.eventBus:', eventsDisplay.eventBus ? 'found' : 'not found')
+      }
+      if (eventsDisplay && eventsDisplay.eventBus) {
+        eventBus = eventsDisplay.eventBus
+        console.log('[HAMMER] ✅ Found EventBus via events-display')
+        return true
+      }
+    } catch (e) {
+      log('[DEBUG] EventBus search via events-display failed:', e)
+    }
+
+    // Try to find EventBus via game-view element
+    try {
+      const gameView = document.querySelector('game-view')
+      if (gameView && gameView.eventBus) {
+        eventBus = gameView.eventBus
+        console.log('[HAMMER] ✅ Found EventBus via game-view')
+        return true
+      }
+    } catch (e) {
+      log('[DEBUG] EventBus search via game-view failed:', e)
+    }
+
+    // Try common property names
+    const commonProps = ['eventBus', '_eventBus', 'bus', 'events']
+    for (const prop of commonProps) {
+      try {
+        if (window[prop] && typeof window[prop].emit === 'function') {
+          eventBus = window[prop]
+          console.log(`[HAMMER] ✅ Found EventBus at window.${prop}`)
+          return true
+        }
+      } catch {}
+    }
+
+    eventBusAttempts++
+    if (eventBusAttempts < maxEventBusAttempts) {
+      setTimeout(findEventBus, 200)
+    } else {
+      log('[ERROR] Failed to find EventBus after', maxEventBusAttempts, 'attempts')
+      log('[ERROR] Will fall back to direct WebSocket intents')
+    }
+
+    return false
+  }
+
+  // Start searching for EventBus immediately and aggressively
+  setTimeout(findEventBus, 100)
+  setTimeout(findEventBus, 500)
+  setTimeout(findEventBus, 1000)
+  setTimeout(findEventBus, 2000)
+  setTimeout(findEventBus, 3000)
+
+  // Also search whenever DOM changes
+  const eventBusObserver = new MutationObserver(() => {
+    if (!eventBus) findEventBus()
+  })
+  eventBusObserver.observe(document.body, { childList: true, subtree: true })
+
+  // ===== EVENTBUS DONATION EVENTS =====
+  // These mirror the game's own event classes from SendResourceModal.ts
+
+  class SendDonateGoldIntentEvent {
+    constructor(recipient, gold) {
+      this.recipient = recipient  // Must be player object with .id property
+      this.gold = gold              // BigInt or number
+    }
+  }
+
+  class SendDonateTroopsIntentEvent {
+    constructor(recipient, troops) {
+      this.recipient = recipient    // Must be player object with .id property
+      this.troops = troops          // number
+    }
+  }
+
+  // ===== GAMEVIEW HOOK FOR DISPLAYEVENTS =====
+  function hookGameView() {
+    // Try to find GameView instance via EventsDisplay element
+    const eventsDisplay = document.querySelector('events-display')
+
+    // Diagnostic logging
+    if (!eventsDisplay) {
+      log('[DEBUG] GameView hook attempt: events-display element not found')
+      addDiagnosticEvent('HOOK_ATTEMPT', { reason: 'events-display not found', attempt: gameViewHookAttempts })
+      return false
+    }
+
+    if (!eventsDisplay.game) {
+      log('[DEBUG] GameView hook attempt: events-display found but .game property not set')
+      addDiagnosticEvent('HOOK_ATTEMPT', { reason: 'eventsDisplay.game not set', attempt: gameViewHookAttempts })
+      return false
+    }
+
+    const gameView = eventsDisplay.game
+
+    if (!gameView.updatesSinceLastTick) {
+      log('[ERROR] GameView found but no updatesSinceLastTick method')
+      addDiagnosticEvent('HOOK_FAILED', { reason: 'updatesSinceLastTick method missing' })
+      return false
+    }
+
+    if (gameView.__hammerHooked) {
+      log('[DEBUG] GameView already hooked')
+      return true
+    }
+
+    const originalUpdatesSinceLastTick = gameView.updatesSinceLastTick.bind(gameView)
+
+    gameView.updatesSinceLastTick = function() {
+      const updates = originalUpdatesSinceLastTick()
+
+      if (updates) {
+        // Process DisplayEvents (type 3)
+        const displayEvents = updates[GameUpdateType.DisplayEvent]
+        if (displayEvents?.length) {
+          displayEventsReceived += displayEvents.length
+          addDiagnosticEvent('DISPLAY_EVENTS', {
+            count: displayEvents.length,
+            events: displayEvents.map(e => ({
+              type: e.messageType,
+              message: e.message,
+              playerID: e.playerID,
+              hasParams: !!e.params
+            }))
+          })
+          log('[DEBUG] DisplayEvents from GameView:', displayEvents.length)
+          for (const evt of displayEvents) {
+            try {
+              processDisplayMessage(evt)
+            } catch (err) {
+              log('[ERROR] DisplayEvent processing error:', err)
+            }
+          }
+        }
+      }
+
+      return updates
+    }
+
+    gameView.__hammerHooked = true
+    gameViewHooked = true
+    addDiagnosticEvent('GAMEVIEW_HOOKED', { success: true, attempts: gameViewHookAttempts })
+    console.log('[HAMMER] ✅ Successfully hooked GameView.updatesSinceLastTick() after', gameViewHookAttempts, 'attempts')
+    return true
+  }
+
+  // Try to hook GameView with multiple strategies
+  let gameViewHookAttempts = 0
+  const maxGameViewAttempts = 200 // 20 seconds max (increased from 5)
+  let hookCheckInterval = null
+
+  function tryHookGameView() {
+    if (hookGameView()) {
+      log('[HAMMER] GameView hook successful')
+      if (hookCheckInterval) {
+        clearInterval(hookCheckInterval)
+        hookCheckInterval = null
+      }
+      return true
+    }
+
+    gameViewHookAttempts++
+    if (gameViewHookAttempts >= maxGameViewAttempts) {
+      log('[ERROR] Failed to hook GameView after', maxGameViewAttempts, 'attempts')
+      log('[ERROR] Donation tracking will NOT work - DisplayEvents cannot be captured')
+      addDiagnosticEvent('HOOK_FAILED', { reason: 'max attempts reached', attempts: maxGameViewAttempts })
+      if (hookCheckInterval) {
+        clearInterval(hookCheckInterval)
+        hookCheckInterval = null
+      }
+      return false
+    }
+
+    return false
+  }
+
+  // Strategy 1: Use MutationObserver to watch for events-display element
+  const hookObserver = new MutationObserver((mutations) => {
+    if (gameViewHooked) {
+      hookObserver.disconnect()
+      return
+    }
+
+    const eventsDisplay = document.querySelector('events-display')
+    if (eventsDisplay) {
+      log('[DEBUG] events-display element detected via MutationObserver')
+      addDiagnosticEvent('ELEMENT_DETECTED', { method: 'MutationObserver' })
+      // Give it a moment for the game property to be set
+      setTimeout(() => {
+        if (!gameViewHooked) {
+          tryHookGameView()
+        }
+      }, 100)
+    }
+  })
+
+  hookObserver.observe(document.body, { childList: true, subtree: true })
+  eventCleanup.push(() => hookObserver.disconnect())
+
+  // Strategy 2: Periodic checks (fallback)
+  hookCheckInterval = setInterval(() => {
+    if (!gameViewHooked) {
+      tryHookGameView()
+    } else {
+      clearInterval(hookCheckInterval)
+      hookCheckInterval = null
+    }
+  }, 100)
+  eventCleanup.push(() => {
+    if (hookCheckInterval) clearInterval(hookCheckInterval)
+  })
+
+  // Strategy 3: Immediate attempt
+  setTimeout(tryHookGameView, 500)
+
+  // ===== DIRECT COMPONENT HOOK =====
+  // Hook directly into EventsDisplay.onDisplayMessageEvent
+  let componentHooked = false
+
+  function hookEventsDisplayComponent() {
+    const eventsDisplay = document.querySelector('events-display')
+
+    if (!eventsDisplay) {
+      setTimeout(hookEventsDisplayComponent, 200)
+      return
+    }
+
+    if (componentHooked) return
+
+    // Hook the onDisplayMessageEvent method directly
+    if (eventsDisplay.onDisplayMessageEvent) {
+      const originalMethod = eventsDisplay.onDisplayMessageEvent.bind(eventsDisplay)
+
+      eventsDisplay.onDisplayMessageEvent = function(event) {
+        // Log the raw event
+        log('[COMPONENT] DisplayEvent received:', {
+          message: event.message,
+          messageType: event.messageType,
+          playerID: event.playerID,
+          goldAmount: event.goldAmount,
+          params: event.params
+        })
+
+        addDiagnosticEvent('COMPONENT_EVENT', {
+          message: event.message,
+          messageType: event.messageType,
+          hasParams: !!event.params,
+          hasGoldAmount: event.goldAmount !== undefined
+        })
+
+        // Process the event
+        try {
+          processDisplayMessage(event)
+        } catch (err) {
+          log('[COMPONENT] Error processing:', err)
+        }
+
+        // Call original method
+        return originalMethod(event)
+      }
+
+      componentHooked = true
+      log('[HAMMER] ✅ Hooked EventsDisplay.onDisplayMessageEvent()')
+      addDiagnosticEvent('COMPONENT_HOOKED', { success: true })
+    } else {
+      log('[COMPONENT] onDisplayMessageEvent not found, retrying...')
+      setTimeout(hookEventsDisplayComponent, 200)
+    }
+  }
+
+  setTimeout(hookEventsDisplayComponent, 1000)
+
+  // ===== NOVEL APPROACH: DOM OBSERVATION =====
+  // Watch the EventsDisplay element for new messages appearing in the UI
+  // This works regardless of code-level interception success
+  let domObserverActive = false
+  let donationsFromDOM = 0
+
+  function setupDOMObserver() {
+    const eventsDisplay = document.querySelector('events-display')
+
+    if (!eventsDisplay) {
+      // Retry until element exists
+      setTimeout(setupDOMObserver, 200)
+      return
+    }
+
+    if (domObserverActive) return // Already set up
+
+    log('[HAMMER] 🎯 Setting up DOM observer for EventsDisplay')
+    addDiagnosticEvent('DOM_OBSERVER', { status: 'starting' })
+
+    const domObserver = new MutationObserver((mutations) => {
+      for (const mutation of mutations) {
+        for (const node of mutation.addedNodes) {
+          if (!node.textContent) continue
+
+          const text = node.textContent.trim()
+
+          // Look for donation-related messages
+          if (text.includes('gold') || text.includes('troops') || text.includes('Gold') || text.includes('Troops')) {
+            log('[DOM] New message detected:', text)
+            addDiagnosticEvent('DOM_MESSAGE', { text })
+            donationsFromDOM++
+
+            try {
+              parseDonationFromDOM(text)
+            } catch (err) {
+              log('[DOM] Error parsing:', err)
+            }
+          }
+        }
+      }
+    })
+
+    // Observe the EventsDisplay element for any child changes
+    domObserver.observe(eventsDisplay, {
+      childList: true,
+      subtree: true,
+      characterData: true
+    })
+
+    eventCleanup.push(() => domObserver.disconnect())
+    domObserverActive = true
+    log('[HAMMER] ✅ DOM observer active - watching for donation messages')
+    addDiagnosticEvent('DOM_OBSERVER', { status: 'active' })
+  }
+
+  function parseDonationFromDOM(text) {
+    // Try to extract donation info from the visible text
+    // Common patterns:
+    // "Received 1000 gold from PlayerName"
+    // "Sent 500 troops to PlayerName"
+    // "Received 1.5K gold from trade with PlayerName"
+
+    let match
+
+    // Received gold
+    match = text.match(/Received\s+([\d,\.]+[KkMm]?)\s+gold\s+from\s+(?:trade\s+with\s+)?(.+?)(?:\.|$)/i)
+    if (match) {
+      const [_, amtStr, name] = match
+      const amt = parseAbbreviatedNumber(amtStr)
+      log('[DOM] ✅ Parsed RECEIVED GOLD:', { name, amt })
+      recordInboundGold(name, amt)
+      addDiagnosticEvent('DONATION_PARSED', { type: 'received_gold', name, amt, source: 'DOM' })
+      return
+    }
+
+    // Sent gold
+    match = text.match(/Sent\s+([\d,\.]+[KkMm]?)\s+gold\s+to\s+(.+?)(?:\.|$)/i)
+    if (match) {
+      const [_, amtStr, name] = match
+      const amt = parseAbbreviatedNumber(amtStr)
+      log('[DOM] ✅ Parsed SENT GOLD:', { name, amt })
+      recordOutboundGold(name, amt)
+      addDiagnosticEvent('DONATION_PARSED', { type: 'sent_gold', name, amt, source: 'DOM' })
+      return
+    }
+
+    // Received troops
+    match = text.match(/Received\s+([\d,\.]+[KkMm]?)\s+troops\s+from\s+(.+?)(?:\.|$)/i)
+    if (match) {
+      const [_, amtStr, name] = match
+      const amt = parseAbbreviatedNumber(amtStr)
+      log('[DOM] ✅ Parsed RECEIVED TROOPS:', { name, amt })
+      recordInboundTroops(name, amt)
+      addDiagnosticEvent('DONATION_PARSED', { type: 'received_troops', name, amt, source: 'DOM' })
+      return
+    }
+
+    // Sent troops
+    match = text.match(/Sent\s+([\d,\.]+[KkMm]?)\s+troops\s+to\s+(.+?)(?:\.|$)/i)
+    if (match) {
+      const [_, amtStr, name] = match
+      const amt = parseAbbreviatedNumber(amtStr)
+      log('[DOM] ✅ Parsed SENT TROOPS:', { name, amt })
+      recordOutboundTroops(name, amt)
+      addDiagnosticEvent('DONATION_PARSED', { type: 'sent_troops', name, amt, source: 'DOM' })
+      return
+    }
+
+    log('[DOM] No match for:', text)
+  }
+
+  // Helper functions to record donations
+  function recordInboundGold(playerName, amount) {
+    const key = `gold-${playerName}`
+    S.inbound.set(key, (S.inbound.get(key) || 0) + amount)
+    S.feedIn.push({
+      type: 'gold',
+      from: playerName,
+      amt: amount,
+      ts: Date.now()
+    })
+    if (S.feedIn.length > 100) S.feedIn.shift()
+    donationsTracked++
+  }
+
+  function recordOutboundGold(playerName, amount) {
+    const key = `gold-${playerName}`
+    S.outbound.set(key, (S.outbound.get(key) || 0) + amount)
+    S.feedOut.push({
+      type: 'gold',
+      to: playerName,
+      amt: amount,
+      ts: Date.now()
+    })
+    if (S.feedOut.length > 100) S.feedOut.shift()
+    donationsTracked++
+  }
+
+  function recordInboundTroops(playerName, amount) {
+    const key = `troops-${playerName}`
+    S.inbound.set(key, (S.inbound.get(key) || 0) + amount)
+    S.feedIn.push({
+      type: 'troops',
+      from: playerName,
+      amt: amount,
+      ts: Date.now()
+    })
+    if (S.feedIn.length > 100) S.feedIn.shift()
+    donationsTracked++
+  }
+
+  function recordOutboundTroops(playerName, amount) {
+    const key = `troops-${playerName}`
+    S.outbound.set(key, (S.outbound.get(key) || 0) + amount)
+    S.feedOut.push({
+      type: 'troops',
+      to: playerName,
+      amt: amount,
+      ts: Date.now()
+    })
+    if (S.feedOut.length > 100) S.feedOut.shift()
+    donationsTracked++
+  }
+
+  // Start the DOM observer
+  setTimeout(setupDOMObserver, 1000)
 
   // ===== CANVAS INTERCEPTION =====
   try {
@@ -1035,14 +1683,211 @@
   window.addEventListener('keydown', keydownHandler, true)
   eventCleanup.push(() => window.removeEventListener('keydown', keydownHandler, true))
 
+  // Helper to get actual PlayerView instance from GameView (multiplayer) or events-display (singleplayer)
+  function getPlayerView(playerId) {
+    try {
+      // Try multiplayer mode first (game-view element)
+      const gameView = document.querySelector('game-view')
+      if (gameView?.clientGameRunner?.gameView?.players) {
+        const players = gameView.clientGameRunner.gameView.players
+
+        // Try as Map first
+        if (players.get) {
+          const playerView = players.get(playerId)
+          if (playerView) return playerView
+        }
+
+        // Try as array
+        if (Array.isArray(players)) {
+          return players.find(p => p && p.id && p.id() === playerId)
+        }
+
+        // Try iterating
+        for (const p of players) {
+          if (p && p.id && p.id() === playerId) return p
+        }
+      }
+
+      // Try singleplayer mode (events-display element)
+      const eventsDisplay = document.querySelector('events-display')
+      if (eventsDisplay?.game?.players) {
+        const players = eventsDisplay.game.players()  // It's a function in singleplayer!
+
+        if (Array.isArray(players)) {
+          const found = players.find(p => p && p.id && p.id() === playerId)
+          if (found) {
+            log('[AUTO-SEND] ✅ Found PlayerView via events-display (singleplayer mode)')
+            return found
+          }
+        }
+      }
+
+      log('[AUTO-SEND] ❌ PlayerView not found for ID:', playerId)
+      return null
+    } catch (err) {
+      log('[AUTO-SEND] Error getting PlayerView:', err)
+      return null
+    }
+  }
+
+  // Cache for discovered event classes
+  let donateGoldEventClass = null
+  let donateTroopsEventClass = null
+
+  // Discover the actual minified event classes used by the game
+  function discoverDonationEventClasses() {
+    if (!eventBus || !eventBus.listeners) {
+      log('[EVENT-DISCOVERY] ❌ EventBus or listeners not available')
+      return false
+    }
+
+    log('[EVENT-DISCOVERY] 🔍 Examining EventBus listeners...')
+
+    // Hard-code known working classes (discovered through testing)
+    for (const [eventClass, handlers] of eventBus.listeners.entries()) {
+      if (eventClass.name === 'Rp') {
+        donateGoldEventClass = eventClass
+        log('[EVENT-DISCOVERY] ✅ Using known gold donation class: Rp')
+      }
+      if (eventClass.name === 'Op') {
+        donateTroopsEventClass = eventClass
+        log('[EVENT-DISCOVERY] ✅ Using known troops donation class: Op')
+      }
+      if (donateGoldEventClass && donateTroopsEventClass) break
+    }
+
+    const eventClasses = []
+    for (const [eventClass, handlers] of eventBus.listeners.entries()) {
+      eventClasses.push({
+        name: eventClass.name,
+        class: eventClass,
+        handlerCount: handlers.length
+      })
+    }
+
+    log('[EVENT-DISCOVERY] Found', eventClasses.length, 'event classes:',
+      eventClasses.map(e => `${e.name}(${e.handlerCount})`).join(', '))
+
+    // Try to identify troops donation event by creating test instances
+    // and checking if they have recipient/troops properties
+    for (const {name, class: EventClass} of eventClasses) {
+      try {
+        // Try to create an instance with typical donation parameters
+        const testEvent = new EventClass()
+
+        // Check if this event has properties that look like donations
+        const hasRecipient = 'recipient' in testEvent
+        const hasTroops = 'troops' in testEvent
+
+        if (hasRecipient && hasTroops && !donateTroopsEventClass) {
+          log('[EVENT-DISCOVERY] 🎯 Found troops donation event class:', name)
+          donateTroopsEventClass = EventClass
+        }
+
+        if (donateGoldEventClass && donateTroopsEventClass) {
+          log('[EVENT-DISCOVERY] ✅ Both donation event classes discovered!')
+          return true
+        }
+      } catch (err) {
+        // Some classes might not have default constructors, that's OK
+      }
+    }
+
+    if (donateGoldEventClass && !donateTroopsEventClass) {
+      log('[EVENT-DISCOVERY] ⚠️ Gold class found (Rp), but troops class not auto-discovered')
+      log('[EVENT-DISCOVERY] Try testing similar classes: Op, Bp, Dp, Ep, Lp, Mp, Pp, etc.')
+      return false
+    }
+
+    log('[EVENT-DISCOVERY] ⚠️ Could not auto-discover event classes')
+    return false
+  }
+
   // ===== AUTO-DONATE TROOPS FUNCTIONS =====
   function asSendTroops(targetId, amount) {
-    if (!gameSocket || gameSocket.readyState !== 1 || !currentClientID) return false
+    log('[AUTO-SEND] asSendTroops called:', { targetId, amount })
+
+    // Try EventBus approach first (preferred - doesn't need clientID)
+    if (eventBus) {
+      log('[AUTO-SEND] Using EventBus approach')
+
+      // Discover event classes if not already done
+      if (!donateTroopsEventClass && !donateGoldEventClass) {
+        discoverDonationEventClasses()
+      }
+
+      // Get actual PlayerView instance (not plain object)
+      const playerView = getPlayerView(targetId)
+      if (!playerView) {
+        log('[AUTO-SEND] ❌ PlayerView not found for ID:', targetId)
+        return false
+      }
+
+      try {
+        let event
+        if (donateTroopsEventClass) {
+          // Use the actual minified event class from the game
+          log('[AUTO-SEND] Using discovered event class:', donateTroopsEventClass.name)
+          event = new donateTroopsEventClass(playerView, amount == null ? null : num(amount))
+        } else {
+          // Fallback to custom class (probably won't work but try anyway)
+          log('[AUTO-SEND] ⚠️ Using fallback custom event class')
+          event = new SendDonateTroopsIntentEvent(playerView, amount == null ? null : num(amount))
+        }
+
+        log('[AUTO-SEND] Emitting troops donation event:', {
+          eventClass: event.constructor.name,
+          recipientName: playerView.name ? playerView.name() : 'unknown',
+          recipientId: targetId,
+          troops: amount
+        })
+        eventBus.emit(event)
+        log('[AUTO-SEND] ✅ EventBus emit successful')
+        return true
+      } catch (err) {
+        log('[AUTO-SEND] ❌ EventBus emit failed:', err)
+        log('[AUTO-SEND] Falling back to WebSocket approach')
+      }
+    }
+
+    // Fallback: Direct WebSocket approach (only if EventBus failed)
+    log('[AUTO-SEND] ⚠️ EventBus not available, using WebSocket fallback')
+
+    // Verify clientID for WebSocket approach
+    const cidCheck = verifyClientID()
+    if (!cidCheck.match && cidCheck.hammerClientID) {
+      log('[AUTO-SEND] ⚠️ Warning: clientID mismatch detected')
+      log('[AUTO-SEND] Hammer clientID:', cidCheck.hammerClientID)
+      log('[AUTO-SEND] Game clientID:', cidCheck.gameViewClientID || cidCheck.transportClientID)
+    }
+
+    if (!gameSocket) {
+      log('[AUTO-SEND] ❌ gameSocket is null')
+      return false
+    }
+    if (gameSocket.readyState !== 1) {
+      log('[AUTO-SEND] ❌ gameSocket not OPEN, state:', gameSocket.readyState)
+      return false
+    }
+    if (!currentClientID) {
+      log('[AUTO-SEND] ❌ currentClientID not set')
+      return false
+    }
+
     const intent = { type: 'donate_troops', clientID: currentClientID, recipient: targetId, troops: amount == null ? null : num(amount) }
+
+    log('[AUTO-SEND] Sending troops intent:', intent)
+
     try {
-      gameSocket.send(JSON.stringify({ type: 'intent', intent }))
+      const message = JSON.stringify({ type: 'intent', intent })
+      log('[AUTO-SEND] WebSocket.send():', message)
+      gameSocket.send(message)
+      log('[AUTO-SEND] ✅ Troops send successful')
       return true
-    } catch { return false }
+    } catch (err) {
+      log('[AUTO-SEND] ❌ Exception:', err)
+      return false
+    }
   }
 
   function asResolveTargets() {
@@ -1060,58 +1905,227 @@
   }
 
   function asTroopsTick() {
-    if (!S.asTroopsRunning) return
+    log('[AUTO-SEND] asTroopsTick started, running:', S.asTroopsRunning)
+
+    if (!S.asTroopsRunning) {
+      log('[AUTO-SEND] Not running, exiting')
+      return
+    }
+
     const now = Date.now()
     const targets = asResolveTargets()
-    if (!targets.length) return
+
+    log('[AUTO-SEND] Resolved troop targets:', targets.length, targets.map(t => t.name))
+
+    if (!targets.length) {
+      log('[AUTO-SEND] No targets, exiting')
+      return
+    }
 
     const me = readMyPlayer()
-    if (!me) return
+    if (!me) {
+      log('[AUTO-SEND] Player data not available')
+      return
+    }
+
     const troops = me.troops || 0
     const maxT = estimateMaxTroops(me.tilesOwned, me.smallID)
-    if (!maxT || (troops / maxT) * 100 < S.asTroopsThreshold) return
+    const troopPct = maxT > 0 ? (troops / maxT) * 100 : 0
+
+    log('[AUTO-SEND] My troops:', troops, 'Max:', maxT, 'Percent:', troopPct.toFixed(1) + '%')
+
+    if (!maxT || troopPct < S.asTroopsThreshold) {
+      log(`[AUTO-SEND] Below threshold (${troopPct.toFixed(1)}% < ${S.asTroopsThreshold}%)`)
+      return
+    }
 
     const toSend = Math.max(1, Math.floor(troops * (S.asTroopsRatio / 100)))
+    log('[AUTO-SEND] Amount to send:', toSend, `(${S.asTroopsRatio}% of ${troops})`)
 
     for (const target of targets) {
-      if (!asIsAlly(target.id)) continue
+      log('[AUTO-SEND] Checking target:', target.name, target.id)
+
+      const isAlly = asIsAlly(target.id)
+      log('[AUTO-SEND] asIsAlly(', target.id, '):', isAlly)
+
+      if (!isAlly) {
+        log('[AUTO-SEND] Not an ally, skipping')
+        continue
+      }
+
       const last = S.asTroopsLastSend[target.id] || 0
       const cooldownMs = S.asTroopsCooldownSec * 1000
       const nextSend = last + cooldownMs
+      const remaining = Math.max(0, nextSend - now)
+
+      log('[AUTO-SEND] Cooldown check:', {
+        last,
+        cooldownMs,
+        nextSend,
+        remaining,
+        ready: now >= nextSend
+      })
 
       // Track next send time for countdown display
       S.asTroopsNextSend[target.id] = nextSend
 
       if (now >= nextSend) {
+        log('[AUTO-SEND] ✅ Ready to send! Calling asSendTroops...')
         if (asSendTroops(target.id, toSend)) {
           S.asTroopsLastSend[target.id] = now
           S.asTroopsNextSend[target.id] = now + cooldownMs
           S.asTroopsLog.push(`[${fmtTime(nowDate())}] Sent ${short(toSend)} troops to ${target.name}`)
           if (S.asTroopsLog.length > 100) S.asTroopsLog.shift()
-          }
+          log(`[SUCCESS] Auto-troops: Sent ${toSend} troops to ${target.name}`)
+        } else {
+          log(`[ERROR] Auto-troops: Send failed to ${target.name}`)
+        }
+      } else {
+        log('[AUTO-SEND] On cooldown, waiting', Math.ceil(remaining / 1000), 'seconds')
       }
     }
+
+    log('[AUTO-SEND] asTroopsTick finished')
   }
 
   let asTroopsTimer = null
   function asTroopsStart() {
     S.asTroopsRunning = true
+    log('[AUTO-SEND] asTroopsStart called, setting up interval')
     if (asTroopsTimer) clearInterval(asTroopsTimer)
-    asTroopsTimer = setInterval(asTroopsTick, 800)
+    asTroopsTimer = setInterval(() => {
+      log('[AUTO-SEND] ⏱️ Troops tick heartbeat - asTroopsTick about to run')
+      asTroopsTick()
+    }, 800)
+    log('[AUTO-SEND] ✅ Troops interval set, ID:', asTroopsTimer)
   }
   function asTroopsStop() {
     S.asTroopsRunning = false
+    log('[AUTO-SEND] asTroopsStop called')
     if (asTroopsTimer) { clearInterval(asTroopsTimer); asTroopsTimer = null }
   }
 
   // ===== AUTO-DONATE GOLD FUNCTIONS =====
-  function asSendGold(targetId, amount) {
-    if (!gameSocket || gameSocket.readyState !== 1 || !currentClientID) return false
-    const intent = { type: 'donate_gold', clientID: currentClientID, recipient: targetId, gold: num(amount) }
+  // Helper to verify clientID matches game's clientID
+  function verifyClientID() {
+    const results = {
+      hammerClientID: currentClientID,
+      gameViewClientID: null,
+      transportClientID: null,
+      match: false
+    }
+
     try {
-      gameSocket.send(JSON.stringify({ type: 'intent', intent }))
+      // Try to get clientID from game-view element
+      const gameView = document.querySelector('game-view')
+      if (gameView?.clientGameRunner?.lobbyConfig?.clientID) {
+        results.gameViewClientID = gameView.clientGameRunner.lobbyConfig.clientID
+      }
+
+      // Try to get clientID from Transport
+      if (gameView?.clientGameRunner?.transport?.lobbyConfig?.clientID) {
+        results.transportClientID = gameView.clientGameRunner.transport.lobbyConfig.clientID
+      }
+
+      // Check if they match
+      results.match = results.hammerClientID === results.gameViewClientID ||
+                     results.hammerClientID === results.transportClientID
+
+      console.log('[CLIENTID-CHECK]', results)
+      return results
+    } catch (err) {
+      console.error('[CLIENTID-CHECK] Error:', err)
+      return results
+    }
+  }
+
+  function asSendGold(targetId, amount) {
+    log('[AUTO-SEND] asSendGold called:', { targetId, amount })
+
+    // Try EventBus approach first (preferred - doesn't need clientID)
+    if (eventBus) {
+      log('[AUTO-SEND] Using EventBus approach')
+
+      // Discover event classes if not already done
+      if (!donateTroopsEventClass && !donateGoldEventClass) {
+        discoverDonationEventClasses()
+      }
+
+      // Get actual PlayerView instance (not plain object)
+      const playerView = getPlayerView(targetId)
+      if (!playerView) {
+        log('[AUTO-SEND] ❌ PlayerView not found for ID:', targetId)
+        return false
+      }
+
+      try {
+        // Game expects BigInt for gold amounts
+        const goldAmount = BigInt(num(amount))
+
+        let event
+        if (donateGoldEventClass) {
+          // Use the actual minified event class from the game
+          log('[AUTO-SEND] Using discovered event class:', donateGoldEventClass.name)
+          event = new donateGoldEventClass(playerView, goldAmount)
+        } else {
+          // Fallback to custom class (probably won't work but try anyway)
+          log('[AUTO-SEND] ⚠️ Using fallback custom event class')
+          event = new SendDonateGoldIntentEvent(playerView, goldAmount)
+        }
+
+        log('[AUTO-SEND] Emitting gold donation event:', {
+          eventClass: event.constructor.name,
+          recipientName: playerView.name ? playerView.name() : 'unknown',
+          recipientId: targetId,
+          gold: amount
+        })
+        eventBus.emit(event)
+        log('[AUTO-SEND] ✅ EventBus emit successful')
+        return true
+      } catch (err) {
+        log('[AUTO-SEND] ❌ EventBus emit failed:', err)
+        log('[AUTO-SEND] Falling back to WebSocket approach')
+      }
+    }
+
+    // Fallback: Direct WebSocket approach (only if EventBus failed)
+    log('[AUTO-SEND] ⚠️ EventBus not available, using WebSocket fallback')
+
+    // Verify clientID for WebSocket approach
+    const cidCheck = verifyClientID()
+    if (!cidCheck.match && cidCheck.hammerClientID) {
+      log('[AUTO-SEND] ⚠️ Warning: clientID mismatch detected')
+      log('[AUTO-SEND] Hammer clientID:', cidCheck.hammerClientID)
+      log('[AUTO-SEND] Game clientID:', cidCheck.gameViewClientID || cidCheck.transportClientID)
+    }
+
+    if (!gameSocket) {
+      log('[AUTO-SEND] ❌ gameSocket is null')
+      return false
+    }
+    if (gameSocket.readyState !== 1) {
+      log('[AUTO-SEND] ❌ gameSocket not OPEN, state:', gameSocket.readyState)
+      return false
+    }
+    if (!currentClientID) {
+      log('[AUTO-SEND] ❌ currentClientID not set')
+      return false
+    }
+
+    const intent = { type: 'donate_gold', clientID: currentClientID, recipient: targetId, gold: num(amount) }
+
+    log('[AUTO-SEND] Sending gold intent:', intent)
+
+    try {
+      const message = JSON.stringify({ type: 'intent', intent })
+      log('[AUTO-SEND] WebSocket.send():', message)
+      gameSocket.send(message)
+      log('[AUTO-SEND] ✅ Gold send successful')
       return true
-    } catch { return false }
+    } catch (err) {
+      log('[AUTO-SEND] ❌ Exception:', err)
+      return false
+    }
   }
 
   function asResolveGoldTargets() {
@@ -1129,47 +2143,99 @@
   }
 
   function asGoldTick() {
-    if (!S.asGoldRunning) return
+    log('[AUTO-SEND] asGoldTick started, running:', S.asGoldRunning)
+
+    if (!S.asGoldRunning) {
+      log('[AUTO-SEND] Not running, exiting')
+      return
+    }
+
     const now = Date.now()
     const targets = asResolveGoldTargets()
-    if (!targets.length) return
+
+    log('[AUTO-SEND] Resolved gold targets:', targets.length, targets.map(t => t.name))
+
+    if (!targets.length) {
+      log('[AUTO-SEND] No targets, exiting')
+      return
+    }
 
     const me = readMyPlayer()
-    if (!me) return
-    const gold = me.gold || 0
-    if (gold < S.asGoldThreshold) return
+    if (!me) {
+      log('[AUTO-SEND] Player data not available')
+      return
+    }
 
-    const toSend = num(S.asGoldAmount)
+    // Convert BigInt gold to number for calculations
+    const gold = Number(me.gold || 0n)
+
+    log('[AUTO-SEND] My gold:', gold)
+
+    // Calculate percentage-based send amount (like troops)
+    const toSend = Math.max(1, Math.floor(gold * (S.asGoldRatio / 100)))
     if (toSend <= 0) return
+    log('[AUTO-SEND] Amount to send:', toSend, `(${S.asGoldRatio}% of ${gold})`)
 
     for (const target of targets) {
-      if (!asIsAlly(target.id)) continue
+      log('[AUTO-SEND] Checking target:', target.name, target.id)
+
+      const isAlly = asIsAlly(target.id)
+      log('[AUTO-SEND] asIsAlly(', target.id, '):', isAlly)
+
+      if (!isAlly) {
+        log('[AUTO-SEND] Not an ally, skipping')
+        continue
+      }
+
       const last = S.asGoldLastSend[target.id] || 0
       const cooldownMs = S.asGoldCooldownSec * 1000
       const nextSend = last + cooldownMs
+      const remaining = Math.max(0, nextSend - now)
+
+      log('[AUTO-SEND] Cooldown check:', {
+        last,
+        cooldownMs,
+        nextSend,
+        remaining,
+        ready: now >= nextSend
+      })
 
       // Track next send time for countdown display
       S.asGoldNextSend[target.id] = nextSend
 
       if (now >= nextSend) {
+        log('[AUTO-SEND] ✅ Ready to send! Calling asSendGold...')
         if (asSendGold(target.id, toSend)) {
           S.asGoldLastSend[target.id] = now
           S.asGoldNextSend[target.id] = now + cooldownMs
           S.asGoldLog.push(`[${fmtTime(nowDate())}] Sent ${short(toSend)} gold to ${target.name}`)
           if (S.asGoldLog.length > 100) S.asGoldLog.shift()
-          }
+          log(`[SUCCESS] Auto-gold: Sent ${short(toSend)} gold to ${target.name}`)
+        } else {
+          log(`[ERROR] Auto-gold: Send failed to ${target.name}`)
+        }
+      } else {
+        log('[AUTO-SEND] On cooldown, waiting', Math.ceil(remaining / 1000), 'seconds')
       }
     }
+
+    log('[AUTO-SEND] asGoldTick finished')
   }
 
   let asGoldTimer = null
   function asGoldStart() {
     S.asGoldRunning = true
+    log('[AUTO-SEND] asGoldStart called, setting up interval')
     if (asGoldTimer) clearInterval(asGoldTimer)
-    asGoldTimer = setInterval(asGoldTick, 800)
+    asGoldTimer = setInterval(() => {
+      log('[AUTO-SEND] ⏱️ Gold tick heartbeat - asGoldTick about to run')
+      asGoldTick()
+    }, 800)
+    log('[AUTO-SEND] ✅ Gold interval set, ID:', asGoldTimer)
   }
   function asGoldStop() {
     S.asGoldRunning = false
+    log('[AUTO-SEND] asGoldStop called')
     if (asGoldTimer) { clearInterval(asGoldTimer); asGoldTimer = null }
   }
 
@@ -1188,7 +2254,7 @@
     overflow: 'hidden', userSelect: 'none', resize: 'both'
   })
 
-  const tabs = ['summary', 'stats', 'aiinsights', 'ports', 'feed', 'goldrate', 'alliances', 'autotroops', 'autogold', 'hotkeys']
+  const tabs = ['summary', 'stats', 'aiinsights', 'ports', 'feed', 'goldrate', 'alliances', 'autotroops', 'autogold', 'diag', 'hotkeys']
   ui.innerHTML = `
     <div id="hm-head" style="display:flex;align-items:center;justify-content:space-between;padding:8px 10px;background:#151f33;border-bottom:1px solid #86531f;cursor:move;flex-shrink:0">
       <div><b>HAMMER v8.10</b> <span style="opacity:.85">SMOOTH</span></div>
@@ -1863,7 +2929,7 @@
 
       if (allTargets.length > 0) {
         html += '<div class="help" style="margin-top:8px">Available Targets (click to toggle):</div>'
-        html += '<div style="max-height:300px;overflow-y:auto">'
+        html += `<div style="border:1px solid #2a4a6a;border-radius:4px;padding:4px;background:#0a1a2a">`
         for (const p of allTargets) {
           const name = p.displayName || p.name || 'Unknown'
           const isSelected = S.asTroopsTargets.includes(name)
@@ -1887,6 +2953,10 @@
     html += '<div class="row">'
     html += `<button id="at-start" class="${S.asTroopsRunning ? 'danger' : 'active'}" style="flex:1">${S.asTroopsRunning ? 'STOP' : 'START'}</button>`
     html += '<button id="at-clear" style="margin-left:8px">Clear Log</button>'
+    html += '</div>'
+    html += '<div class="help" style="margin-top:8px">Manual Test (sends to first target immediately):</div>'
+    html += '<div class="row" style="margin-top:4px">'
+    html += '<button id="at-test-send" style="flex:1;background:#4a90e2">🧪 Test Send Troops Now</button>'
     html += '</div>'
     html += '</div>'
 
@@ -1938,25 +3008,33 @@
     html += `<div class="help">${statusDot}Status: <b>${S.asGoldRunning ? 'RUNNING' : 'STOPPED'}</b></div>`
 
     if (me) {
-      const willSend = me.gold >= S.asGoldThreshold
+      // Convert BigInt gold to number for calculations and display
+      const myGold = Number(me.gold || 0n)
+      const willSend = myGold >= S.asGoldThreshold
+      const sendAmount = willSend ? Math.floor(myGold * (S.asGoldRatio / 100)) : 0
 
       html += '<div class="preview-calc">'
       html += `<div style="font-size:16px;margin-bottom:8px"><b>LIVE PREVIEW</b></div>`
-      html += `<div>You have: <b>${short(me.gold)}</b> gold</div>`
+      html += `<div>You have: <b>${short(myGold)}</b> gold</div>`
       if (willSend) {
-        html += `<div style="color:#7ff2a3;font-size:15px;margin-top:8px">✅ Will send: <b>${short(S.asGoldAmount)}</b> gold</div>`
-        html += `<div>You keep: <b>${short(me.gold - S.asGoldAmount)}</b> gold</div>`
+        html += `<div style="color:#7ff2a3;font-size:15px;margin-top:8px">✅ Will send: <b>${short(sendAmount)}</b> gold (${S.asGoldRatio}% of ${short(myGold)})</div>`
+        html += `<div>You keep: <b>${short(myGold - sendAmount)}</b> gold</div>`
       } else {
-        html += `<div style="color:#ff8b94;margin-top:8px">❌ Below threshold (need ${short(S.asGoldThreshold)}, have ${short(me.gold)})</div>`
+        html += `<div style="color:#ff8b94;margin-top:8px">❌ Below threshold (need ${short(S.asGoldThreshold)}, have ${short(myGold)})</div>`
       }
       html += '</div>'
     }
 
     html += '<div class="box">'
     html += '<div class="title" style="margin-top:0">⚙️ Settings</div>'
-    html += `<div class="row"><div>Amount</div><input id="ag-amount" type="number" value="${S.asGoldAmount}" min="1000" step="1000" style="width:120px"></div>`
-    html += `<div class="row"><div>Threshold</div><input id="ag-threshold" type="number" value="${S.asGoldThreshold}" min="0" step="1000" style="width:120px"></div>`
-    html += `<div class="row"><div>Cooldown</div><input id="ag-cooldown" type="number" value="${S.asGoldCooldownSec}" min="10" max="60" step="1" style="width:80px"><div class="muted" style="margin-left:8px">seconds</div></div>`
+    html += `<div class="row"><div>Ratio: <b>${S.asGoldRatio}%</b></div>`
+    html += '<div style="display:flex;gap:4px">'
+    html += '<button id="ag-ratio-minus">−</button>'
+    html += `<input id="ag-ratio-input" type="number" value="${S.asGoldRatio}" min="1" max="100" step="1" style="width:60px;text-align:center">`
+    html += '<button id="ag-ratio-plus">+</button>'
+    html += '</div></div>'
+    html += `<div class="row"><div>Min Gold Threshold</div><input id="ag-threshold" type="number" value="${S.asGoldThreshold}" min="0" step="10000" style="width:120px"></div>`
+    html += `<div class="row"><div>Cooldown</div><input id="ag-cooldown" type="number" value="${S.asGoldCooldownSec}" min="10" max="60" step="1" style="width:80px"><div class="muted" style="margin-left:8px">seconds (min 10s)</div></div>`
     html += '</div>'
 
     html += '<div class="box">'
@@ -1986,14 +3064,16 @@
 
       if (allTargets.length > 0) {
         html += '<div class="help" style="margin-top:8px">Available Targets (click to toggle):</div>'
-        html += '<div style="max-height:300px;overflow-y:auto">'
+        html += `<div style="border:1px solid #2a4a6a;border-radius:4px;padding:4px;background:#0a1a2a">`
         for (const p of allTargets) {
           const name = p.displayName || p.name || 'Unknown'
           const isSelected = S.asGoldTargets.includes(name)
+          // Safely convert BigInt gold to number for display
+          const goldAmount = p.gold ? Number(p.gold) : 0
           html += '<div class="box" style="margin:4px 0;cursor:pointer" data-toggle-gold-target="' + esc(name) + '">'
           html += '<div class="row">'
           html += `<div style="font-weight:${isSelected ? '700' : '400'};color:${isSelected ? '#7ff2a3' : 'inherit'}">${isSelected ? '✓ ' : ''}${esc(name)}</div>`
-          html += `<div class="mono" style="color:#ffcf5d">${short(p.gold || 0)} 💰</div>`
+          html += `<div class="mono" style="color:#ffcf5d">${short(goldAmount)} 💰</div>`
           html += '</div>'
           html += '</div>'
         }
@@ -2010,6 +3090,10 @@
     html += '<div class="row">'
     html += `<button id="ag-start" class="${S.asGoldRunning ? 'danger' : 'active'}" style="flex:1">${S.asGoldRunning ? 'STOP' : 'START'}</button>`
     html += '<button id="ag-clear" style="margin-left:8px">Clear Log</button>'
+    html += '</div>'
+    html += '<div class="help" style="margin-top:8px">Manual Test (sends to first target immediately):</div>'
+    html += '<div class="row" style="margin-top:4px">'
+    html += '<button id="ag-test-send" style="flex:1;background:#4a90e2">🧪 Test Send Gold Now</button>'
     html += '</div>'
     html += '</div>'
 
@@ -2066,6 +3150,141 @@
     return html
   }
 
+  function diagnosticsView() {
+    return `
+      <div style="padding: 10px; font-size: 11px; color: #ccc;">
+        <h3 style="margin: 0 0 10px 0; color: #fff;">System Status</h3>
+        <div id="diag-status" style="background: #1a1a1a; padding: 8px; border-radius: 4px; margin-bottom: 10px;">
+          <p style="margin: 4px 0;">
+            <strong>GameView Hook:</strong>
+            <span id="diag-gameview">❓ Unknown</span>
+          </p>
+          <p style="margin: 4px 0;">
+            <strong>DisplayEvents Received:</strong>
+            <span id="diag-displayevents" style="color: #f90;">0</span>
+          </p>
+          <p style="margin: 4px 0;">
+            <strong>Player Data Ready:</strong>
+            <span id="diag-playerdata">❓ Unknown</span>
+          </p>
+          <p style="margin: 4px 0;">
+            <strong>Donations Tracked:</strong>
+            <span id="diag-donations" style="color: #6cf;">0</span>
+          </p>
+        </div>
+
+        <h3 style="margin: 15px 0 10px 0; color: #fff;">Auto-Send Status</h3>
+        <div style="background: #1a1a1a; padding: 8px; border-radius: 4px; margin-bottom: 10px;">
+          <p style="margin: 4px 0;">
+            <strong>Send Method:</strong>
+            <span style="color: ${eventBus ? '#6f6' : '#f90'};">
+              ${eventBus ? '🟢 EventBus (Preferred)' : '🟠 WebSocket (Fallback)'}
+            </span>
+          </p>
+          <p style="margin: 4px 0;">
+            <strong>Auto-Gold:</strong>
+            <span style="color: ${S.asGoldRunning ? '#6f6' : '#f66'};">
+              ${S.asGoldRunning ? '🟢 RUNNING' : '🔴 STOPPED'}
+            </span>
+          </p>
+          <p style="margin: 4px 0;">
+            <strong>Auto-Troops:</strong>
+            <span style="color: ${S.asTroopsRunning ? '#6f6' : '#f66'};">
+              ${S.asTroopsRunning ? '🟢 RUNNING' : '🔴 STOPPED'}
+            </span>
+          </p>
+          <p style="margin: 4px 0;">
+            <strong>EventBus:</strong>
+            <span style="color: ${eventBus ? '#6f6' : '#f66'};">
+              ${eventBus ? '🟢 Found' : '🔴 Not Found'}
+            </span>
+          </p>
+          <p style="margin: 4px 0;">
+            <strong>gameSocket:</strong>
+            <span style="color: ${gameSocket ? (gameSocket.readyState === 1 ? '#6f6' : '#f90') : '#f66'};">
+              ${gameSocket ? (gameSocket.readyState === 1 ? '🟢 OPEN' : `🟠 State ${gameSocket.readyState}`) : '🔴 NULL'}
+            </span>
+          </p>
+          <p style="margin: 4px 0;">
+            <strong>currentClientID:</strong>
+            <span style="color: ${currentClientID ? '#6f6' : '#f66'};">
+              ${currentClientID || '🔴 NOT SET'}
+            </span>
+          </p>
+          <p style="margin: 4px 0;">
+            <strong>Gold Tick Interval:</strong>
+            <span style="color: ${asGoldTimer ? '#6f6' : '#f66'};">
+              ${asGoldTimer ? '🟢 Active' : '🔴 Not Running'}
+            </span>
+          </p>
+          <p style="margin: 4px 0;">
+            <strong>Troops Tick Interval:</strong>
+            <span style="color: ${asTroopsTimer ? '#6f6' : '#f66'};">
+              ${asTroopsTimer ? '🟢 Active' : '🔴 Not Running'}
+            </span>
+          </p>
+        </div>
+
+        <div style="margin-top: 10px; padding: 8px; background: #1a3a1a; border-radius: 4px; font-size: 10px;">
+          <p style="margin: 0;"><strong>How it works:</strong></p>
+          <p style="margin: 5px 0 0 0; color: #aaa;">
+            ${eventBus
+              ? '✅ Using EventBus: Emitting the same events the game UI emits. This is the most reliable method!'
+              : '⚠️ Using WebSocket fallback: Sending intents directly. If this doesn\'t work, the game might need EventBus.'}
+          </p>
+        </div>
+
+        <div style="margin-top: 10px; padding: 8px; background: #1a3a1a; border-radius: 4px; font-size: 10px;">
+          <p style="margin: 0;"><strong>Debug Logging:</strong> Check console for [AUTO-SEND] messages</p>
+          <p style="margin: 5px 0 0 0; color: #aaa;">Open Chrome DevTools (F12) and look for green [AUTO-SEND] logs to see detailed execution flow</p>
+        </div>
+
+        <h3 style="margin: 15px 0 10px 0; color: #fff;">Recent Events (Last 10)</h3>
+        <div id="diag-events" style="max-height: 200px; overflow-y: auto; background: #1a1a1a; padding: 5px; border-radius: 4px; font-family: 'Courier New', monospace; font-size: 10px;">
+          <div style="color: #888;">No events yet. Send a donation to see activity.</div>
+        </div>
+
+        <div style="margin-top: 15px;">
+          <button onclick="window.__HAMMER__.exportDiagnostics()" style="
+            background: #4a90e2;
+            color: white;
+            border: none;
+            padding: 10px 20px;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 12px;
+            margin-right: 10px;
+          ">
+            📥 Download Diagnostic Report
+          </button>
+
+          <button onclick="window.__HAMMER__.clearDiagnostics()" style="
+            background: #666;
+            color: white;
+            border: none;
+            padding: 10px 20px;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 12px;
+          ">
+            🗑️ Clear Events
+          </button>
+        </div>
+
+        <div style="margin-top: 15px; padding: 10px; background: #1a3a1a; border-radius: 4px; font-size: 10px;">
+          <p style="margin: 0;"><strong>How to use:</strong></p>
+          <ol style="margin: 5px 0 0 20px; padding: 0;">
+            <li>Check that GameView Hook shows ✅ Hooked</li>
+            <li>Form an alliance with another player</li>
+            <li>Send gold or troops to them</li>
+            <li>Watch the counters above increase</li>
+            <li>If something fails, download the diagnostic report</li>
+          </ol>
+        </div>
+      </div>
+    `
+  }
+
   function render() {
     const content = ui.querySelector('#hm-content')
     if (!content) return
@@ -2080,11 +3299,17 @@
       alliances: alliancesView,
       autotroops: autoDonateTroopsView,
       autogold: autoDonateGoldView,
+      diag: diagnosticsView,
       hotkeys: hotkeysView
     }
 
     const fn = views[S.view]
     if (fn) content.innerHTML = fn()
+
+    // Update diagnostic UI if diagnostic tab is active
+    if (S.view === 'diag') {
+      setTimeout(updateDiagnosticUI, 10)
+    }
 
     ui.querySelectorAll('.tab').forEach(b => {
       b.classList.toggle('active', b.getAttribute('data-v') === S.view)
@@ -2154,6 +3379,30 @@
       }
     }
 
+    const atTestSend = ui.querySelector('#at-test-send')
+    if (atTestSend) {
+      atTestSend.onclick = () => {
+        const me = readMyPlayer()
+        if (!me) {
+          showStatus('❌ Player data not available')
+          return
+        }
+        const targets = asResolveTargets()
+        if (targets.length === 0) {
+          showStatus('❌ No targets configured')
+          return
+        }
+        const target = targets[0]
+        const toSend = Math.max(1, Math.floor(me.troops * (S.asTroopsRatio / 100)))
+        if (asSendTroops(target.id, toSend)) {
+          showStatus(`✅ Test: Sent ${short(toSend)} troops to ${target.name}`)
+          S.asTroopsLog.push(`[${fmtTime(nowDate())}] TEST: Sent ${short(toSend)} troops to ${target.name}`)
+        } else {
+          showStatus('❌ Test failed - check connection')
+        }
+      }
+    }
+
     // Intelligent recommendation click handlers
     ui.querySelectorAll('[data-apply-ratio]').forEach(div => {
       div.onclick = () => {
@@ -2187,21 +3436,33 @@
     })
 
     // Auto-gold handlers
-    const agAmount = ui.querySelector('#ag-amount')
+    const agRatioMinus = ui.querySelector('#ag-ratio-minus')
+    const agRatioPlus = ui.querySelector('#ag-ratio-plus')
+    const agRatioInput = ui.querySelector('#ag-ratio-input')
     const agThreshold = ui.querySelector('#ag-threshold')
     const agCooldown = ui.querySelector('#ag-cooldown')
     const agAllTeamToggle = ui.querySelector('#ag-allteam-toggle')
     const agStart = ui.querySelector('#ag-start')
     const agClear = ui.querySelector('#ag-clear')
 
-    if (agAmount) {
-      agAmount.onchange = () => {
-        S.asGoldAmount = num(agAmount.value)
+    if (agRatioMinus) {
+      agRatioMinus.onclick = () => {
+        S.asGoldRatio = Math.max(1, S.asGoldRatio - 5)
+      }
+    }
+    if (agRatioPlus) {
+      agRatioPlus.onclick = () => {
+        S.asGoldRatio = Math.min(100, S.asGoldRatio + 5)
+      }
+    }
+    if (agRatioInput) {
+      agRatioInput.onchange = () => {
+        S.asGoldRatio = Math.max(1, Math.min(100, num(agRatioInput.value)))
       }
     }
     if (agThreshold) {
       agThreshold.onchange = () => {
-        S.asGoldThreshold = num(agThreshold.value)
+        S.asGoldThreshold = Math.max(0, num(agThreshold.value))
       }
     }
     if (agCooldown) {
@@ -2223,6 +3484,30 @@
     if (agClear) {
       agClear.onclick = () => {
         S.asGoldLog = []
+      }
+    }
+
+    const agTestSend = ui.querySelector('#ag-test-send')
+    if (agTestSend) {
+      agTestSend.onclick = () => {
+        const me = readMyPlayer()
+        if (!me) {
+          showStatus('❌ Player data not available')
+          return
+        }
+        const targets = asResolveGoldTargets()
+        if (targets.length === 0) {
+          showStatus('❌ No targets configured')
+          return
+        }
+        const target = targets[0]
+        const toSend = Math.floor(me.gold * (S.asGoldRatio / 100))
+        if (asSendGold(target.id, toSend)) {
+          showStatus(`✅ Test: Sent ${short(toSend)} gold to ${target.name}`)
+          S.asGoldLog.push(`[${fmtTime(nowDate())}] TEST: Sent ${short(toSend)} gold to ${target.name}`)
+        } else {
+          showStatus('❌ Test failed - check connection')
+        }
       }
     }
 
@@ -2307,12 +3592,15 @@
   window.__HAMMER__ = {
     cleanup,
     ui: { root: ui },
-    version: '9.0.1-debug',
+    version: '9.0.2-diagnostic',
     exportLogs: Logger.exportLogs,
+    exportDiagnostics,
+    clearDiagnostics,
     // Exposed for testing
     asSendGold,
     asSendTroops,
     findPlayer,
+    verifyClientID,
     // Debug helpers
     getState: () => ({
       mySmallID,
@@ -2321,12 +3609,175 @@
       pendingMessagesCount: pendingMessages.length,
       playersCount: playersById.size,
       playerNamesCount: playersByName.size,
+      myAllies,
+      myTeam,
+      playersById,
+      playersBySmallId,
+      playersByName,
+      eventBus: !!eventBus,
+      eventBusMethod: eventBus ? 'EventBus' : 'WebSocket',
       gameSocket: !!gameSocket,
+      gameSocketReady: gameSocket?.readyState,
+      gameSocketReadyStateText: gameSocket?.readyState === 1 ? 'OPEN' : gameSocket?.readyState === 0 ? 'CONNECTING' : gameSocket?.readyState === 2 ? 'CLOSING' : gameSocket?.readyState === 3 ? 'CLOSED' : 'UNKNOWN',
+      gameViewHooked,
+      displayEventsReceived,
+      donationsTracked,
       inboundCount: S.inbound.size,
       outboundCount: S.outbound.size,
       feedInCount: S.feedIn.length,
-      feedOutCount: S.feedOut.length
-    })
+      feedOutCount: S.feedOut.length,
+      autoSendReady: !!(eventBus || (gameSocket && gameSocket.readyState === 1 && currentClientID)),
+      autoSendMethod: eventBus ? 'EventBus (preferred)' : 'WebSocket (fallback)',
+      autoSendBlockers: [
+        !eventBus && !gameSocket ? 'Neither EventBus nor gameSocket available' : null,
+        !eventBus && gameSocket && gameSocket.readyState !== 1 ? `gameSocket not OPEN (state: ${gameSocket.readyState})` : null,
+        !eventBus && !currentClientID ? 'currentClientID not set (needed for WebSocket fallback)' : null
+      ].filter(x => x)
+    }),
+    testAutoSend: () => {
+      console.log('[HAMMER] Auto-send test:')
+      console.log('  gameSocket:', !!gameSocket)
+      console.log('  gameSocket.readyState:', gameSocket?.readyState, gameSocket?.readyState === 1 ? '(OPEN)' : '(NOT OPEN)')
+      console.log('  currentClientID:', currentClientID || '(NOT SET)')
+      console.log('  playersByName.size:', playersByName.size)
+      console.log('  Teammates:', getTeammates().map(p => p.displayName || p.name))
+
+      if (!gameSocket) {
+        console.error('[HAMMER] ❌ gameSocket not captured - WebSocket interception failed')
+        return false
+      }
+      if (gameSocket.readyState !== 1) {
+        console.error('[HAMMER] ❌ gameSocket not OPEN - state:', gameSocket.readyState)
+        return false
+      }
+      if (!currentClientID) {
+        console.error('[HAMMER] ❌ currentClientID not set - client ID not captured')
+        return false
+      }
+
+      console.log('[HAMMER] ✅ Auto-send prerequisites met!')
+      return true
+    },
+    clearCooldowns: () => {
+      S.asGoldLastSend = {}
+      S.asTroopsLastSend = {}
+      console.log('[HAMMER] ✅ All cooldowns cleared!')
+    },
+    discoverEvents: () => {
+      console.log('[HAMMER] 🔍 Discovering donation event classes...')
+      if (!eventBus) {
+        console.error('[HAMMER] ❌ EventBus not available')
+        return false
+      }
+      const result = discoverDonationEventClasses()
+      if (result) {
+        console.log('[HAMMER] ✅ Discovery successful!')
+        console.log('[HAMMER] Gold event class:', donateGoldEventClass?.name)
+        console.log('[HAMMER] Troops event class:', donateTroopsEventClass?.name)
+      } else {
+        console.log('[HAMMER] ⚠️ Could not auto-discover - will need manual identification')
+        console.log('[HAMMER] Available event classes:')
+        for (const [eventClass, handlers] of eventBus.listeners.entries()) {
+          console.log(`  - ${eventClass.name} (${handlers.length} listeners)`)
+        }
+      }
+      return result
+    },
+    listEventClasses: () => {
+      if (!eventBus) {
+        console.error('[HAMMER] ❌ EventBus not available')
+        return []
+      }
+      const classes = []
+      for (const [eventClass, handlers] of eventBus.listeners.entries()) {
+        classes.push({ name: eventClass.name, class: eventClass, handlerCount: handlers.length })
+      }
+      console.log('[HAMMER] Found', classes.length, 'event classes:')
+      classes.forEach(c => console.log(`  - ${c.name} (${c.handlerCount} listeners)`))
+      return classes
+    },
+    testEventClass: (className, playerName, goldAmount = 1000) => {
+      console.log(`[HAMMER] 🧪 Testing event class "${className}" for donation...`)
+
+      if (!eventBus) {
+        console.error('[HAMMER] ❌ EventBus not available')
+        return false
+      }
+
+      // Find the event class by name
+      let EventClass = null
+      for (const [eventClass, handlers] of eventBus.listeners.entries()) {
+        if (eventClass.name === className) {
+          EventClass = eventClass
+          console.log('[HAMMER] ✅ Found event class:', className, 'with', handlers.length, 'listeners')
+          break
+        }
+      }
+
+      if (!EventClass) {
+        console.error(`[HAMMER] ❌ Event class "${className}" not found`)
+        console.log('[HAMMER] Use window.__HAMMER__.listEventClasses() to see available classes')
+        return false
+      }
+
+      // Find the player
+      const player = findPlayer(playerName)
+      if (!player) {
+        console.error(`[HAMMER] ❌ Player "${playerName}" not found`)
+        return false
+      }
+
+      // Get PlayerView
+      const playerView = getPlayerView(player.id)
+      if (!playerView) {
+        console.error('[HAMMER] ❌ PlayerView not found for ID:', player.id)
+        return false
+      }
+
+      console.log('[HAMMER] ✅ Player found:', player.displayName || player.name)
+      console.log('[HAMMER] ✅ PlayerView obtained')
+
+      try {
+        // Gold (Rp) needs BigInt, Troops (Op) needs regular number
+        const amount = className === 'Rp' ? BigInt(goldAmount) : goldAmount
+        const event = new EventClass(playerView, amount)
+        console.log('[HAMMER] ✅ Event created:', event)
+        console.log('[HAMMER] Event properties:', Object.keys(event))
+
+        // Emit it
+        eventBus.emit(event)
+        console.log('[HAMMER] ✅ Event emitted!')
+        console.log('[HAMMER] 📋 Check game UI - did the donation appear?')
+        return true
+      } catch (err) {
+        console.error('[HAMMER] ❌ Failed to create/emit event:', err)
+        return false
+      }
+    },
+    testManualSend: (playerName, goldAmount = 1000) => {
+      console.log(`[HAMMER] 🧪 Testing manual send to "${playerName}" for ${goldAmount} gold...`)
+
+      const player = findPlayer(playerName)
+      if (!player) {
+        console.error(`[HAMMER] ❌ Player "${playerName}" not found`)
+        console.log('[HAMMER] Available players:', Array.from(playersByName.keys()).slice(0, 20))
+        return false
+      }
+
+      console.log('[HAMMER] ✅ Player found:', player.displayName || player.name, 'ID:', player.id)
+      console.log('[HAMMER] EventBus available:', !!eventBus)
+      console.log('[HAMMER] Discovered gold class:', donateGoldEventClass?.name || 'not discovered yet')
+
+      const result = asSendGold(player.id, goldAmount)
+      if (result) {
+        console.log('[HAMMER] ✅ Send function returned TRUE')
+        console.log('[HAMMER] 📋 Check game UI to see if donation appeared!')
+      } else {
+        console.log('[HAMMER] ❌ Send function returned FALSE - check [AUTO-SEND] error logs above')
+      }
+      return result
+    },
+    state: S  // Expose state for debugging
   }
 
   render()
