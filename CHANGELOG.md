@@ -5,6 +5,26 @@ All notable changes to Hammer Script will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.4.0] - 2026-02-03
+
+### Added
+- **Quick Reciprocate Feature** - New "Troops for Gold Trust" reciprocation system
+  - Interactive popup notifications when troops are received
+  - Quick-send gold at preset percentages (10%, 25%, 50%, 75%, 100%)
+  - Two modes: Manual (popup with buttons) or Auto (fixed percentage)
+  - Dedicated Reciprocate tab with settings and history
+  - Recent troop donors list with one-click gold sending
+  - Reciprocation history tracking
+  - Configurable notification duration and auto-percentage
+  - Eliminates need to manually find players on map and calculate amounts
+
+### Technical Details
+- Notification queue system with popup rendering
+- Auto-reciprocate and manual-reciprocate handlers
+- Integration with existing donation tracking (S.feedIn, S.inbound)
+- History limited to 100 entries to prevent memory issues
+- All gold calculations use Number type (converted from BigInt)
+
 ## [2.3.0] - 2026-02-02
 
 ### Fixed

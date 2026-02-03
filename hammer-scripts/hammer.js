@@ -292,6 +292,226 @@
     }, duration)
   }
 
+  // ===== RECIPROCATION NOTIFICATION SYSTEM =====
+  let reciprocateNotifications = []
+
+  function showReciprocateNotification(donor) {
+    reciprocateNotifications.push({
+      id: Date.now(),
+      donorId: donor.id,
+      donorName: donor.name,
+      troops: donor.troops,
+      timestamp: Date.now(),
+      dismissed: false
+    })
+
+    if (reciprocateNotifications.length > 5) {
+      reciprocateNotifications.shift()
+    }
+
+    renderReciprocatePopup()
+  }
+
+  function dismissReciprocateNotification(notificationId) {
+    const idx = reciprocateNotifications.findIndex(n => n.id === notificationId)
+    if (idx >= 0) {
+      reciprocateNotifications[idx].dismissed = true
+    }
+    renderReciprocatePopup()
+  }
+
+  function clearReciprocateNotifications() {
+    reciprocateNotifications = []
+    const popup = document.getElementById('hm-reciprocate-popup')
+    if (popup) popup.remove()
+  }
+
+  function renderReciprocatePopup() {
+    let popup = document.getElementById('hm-reciprocate-popup')
+    if (!popup) {
+      popup = document.createElement('div')
+      popup.id = 'hm-reciprocate-popup'
+      document.body.appendChild(popup)
+    }
+
+    const active = reciprocateNotifications.filter(n => !n.dismissed)
+
+    if (active.length === 0) {
+      popup.style.display = 'none'
+      return
+    }
+
+    const latest = active[active.length - 1]
+    const me = readMyPlayer()
+    const myGold = me ? Number(me.gold || 0n) : 0
+
+    popup.style.cssText = `
+      position: fixed;
+      top: 120px;
+      right: 20px;
+      background: rgba(10, 20, 40, 0.98);
+      border: 2px solid #7ff2a3;
+      border-radius: 12px;
+      padding: 20px;
+      z-index: 2147483646;
+      min-width: 320px;
+      box-shadow: 0 8px 32px rgba(0,0,0,0.8);
+      font-family: Consolas, monospace;
+      color: #fff;
+    `
+
+    popup.innerHTML = `
+      <div style="font-size: 16px; font-weight: bold; margin-bottom: 12px; color: #7ff2a3;">
+        🪖 ${esc(latest.donorName)} sent you ${short(latest.troops)} troops
+      </div>
+      <div style="font-size: 13px; margin-bottom: 12px; color: #9bb0c8;">
+        You have ${short(myGold)} gold
+      </div>
+      <div style="font-size: 14px; font-weight: bold; margin-bottom: 8px;">
+        Send Gold Back:
+      </div>
+      <div style="display: flex; gap: 8px; margin-bottom: 12px;">
+        ${[10, 25, 50, 75, 100].map(pct => `
+          <button
+            data-reciprocate-pct="${pct}"
+            data-reciprocate-id="${latest.id}"
+            style="flex: 1; padding: 8px; background: #2a4a6a; color: #fff; border: 1px solid #7bb8ff; border-radius: 6px; cursor: pointer; font-weight: bold;"
+            onmouseover="this.style.background='#3a5a7a'"
+            onmouseout="this.style.background='#2a4a6a'"
+          >
+            ${pct}%<br><span style="font-size:10px">${short(Math.floor(myGold * pct / 100))}</span>
+          </button>
+        `).join('')}
+      </div>
+      <div style="display: flex; gap: 8px;">
+        <button
+          id="reciprocate-dismiss"
+          style="flex: 1; padding: 6px; background: #3a2a2a; color: #ff8b94; border: 1px solid #ff8b94; border-radius: 4px; cursor: pointer; font-size: 12px;"
+        >
+          Dismiss
+        </button>
+        <button
+          id="reciprocate-viewall"
+          style="flex: 1; padding: 6px; background: #2a3a2a; color: #7bb8ff; border: 1px solid #7bb8ff; border-radius: 4px; cursor: pointer; font-size: 12px;"
+        >
+          View All (${active.length})
+        </button>
+      </div>
+    `
+
+    popup.style.display = 'block'
+
+    setupReciprocatePopupHandlers(popup, latest)
+
+    setTimeout(() => {
+      dismissReciprocateNotification(latest.id)
+    }, S.reciprocateNotifyDuration * 1000)
+  }
+
+  function setupReciprocatePopupHandlers(popup, notification) {
+    popup.querySelectorAll('[data-reciprocate-pct]').forEach(btn => {
+      btn.onclick = () => {
+        const pct = parseInt(btn.getAttribute('data-reciprocate-pct'))
+        const notifId = parseInt(btn.getAttribute('data-reciprocate-id'))
+        handleQuickReciprocate(notification.donorId, notification.donorName, pct, notifId)
+      }
+    })
+
+    const dismissBtn = popup.querySelector('#reciprocate-dismiss')
+    if (dismissBtn) {
+      dismissBtn.onclick = () => {
+        dismissReciprocateNotification(notification.id)
+      }
+    }
+
+    const viewAllBtn = popup.querySelector('#reciprocate-viewall')
+    if (viewAllBtn) {
+      viewAllBtn.onclick = () => {
+        S.view = 'reciprocate'
+        clearReciprocateNotifications()
+      }
+    }
+  }
+
+  function handleQuickReciprocate(donorId, donorName, percentage, notificationId) {
+    const me = readMyPlayer()
+    if (!me) {
+      showStatus('❌ Player data not available')
+      return
+    }
+
+    const myGold = Number(me.gold || 0n)
+    const goldToSend = Math.floor(myGold * percentage / 100)
+
+    if (goldToSend === 0) {
+      showStatus('❌ Not enough gold to send')
+      if (notificationId) dismissReciprocateNotification(notificationId)
+      return
+    }
+
+    const success = asSendGold(donorId, goldToSend)
+
+    if (success) {
+      S.reciprocateHistory.push({
+        donorId,
+        donorName,
+        goldSent: goldToSend,
+        percentage,
+        timestamp: Date.now(),
+        mode: 'manual'
+      })
+
+      if (S.reciprocateHistory.length > 100) {
+        S.reciprocateHistory.shift()
+      }
+
+      showStatus(`✅ Sent ${short(goldToSend)} gold (${percentage}%) to ${donorName}`)
+      if (notificationId) dismissReciprocateNotification(notificationId)
+    } else {
+      showStatus(`❌ Failed to send gold to ${donorName}`)
+    }
+  }
+
+  function handleAutoReciprocate(donorId, donorName, troopsReceived) {
+    const me = readMyPlayer()
+    if (!me) {
+      log('[RECIPROCATE] Player data not available for auto-send')
+      return
+    }
+
+    const myGold = Number(me.gold || 0n)
+    const percentage = S.reciprocateAutoPct
+    const goldToSend = Math.floor(myGold * percentage / 100)
+
+    if (goldToSend === 0) {
+      log(`[RECIPROCATE] Not enough gold to auto-send to ${donorName}`)
+      return
+    }
+
+    const success = asSendGold(donorId, goldToSend)
+
+    if (success) {
+      S.reciprocateHistory.push({
+        donorId,
+        donorName,
+        goldSent: goldToSend,
+        percentage,
+        troopsReceived,
+        timestamp: Date.now(),
+        mode: 'auto'
+      })
+
+      if (S.reciprocateHistory.length > 100) {
+        S.reciprocateHistory.shift()
+      }
+
+      showStatus(`✅ Auto-sent ${short(goldToSend)} gold (${percentage}%) to ${donorName}`)
+      log(`[RECIPROCATE] Auto-sent ${goldToSend} gold (${percentage}%) to ${donorName} (received ${troopsReceived} troops)`)
+    } else {
+      log(`[RECIPROCATE] Failed to auto-send gold to ${donorName}`)
+    }
+  }
+
   // ===== STATE =====
   const SIZES = [
     { w: 520, h: 420, bodyH: 372, label: 'S' },
@@ -332,7 +552,16 @@
     asGoldNextSend: {},
     asGoldCooldownSec: 10,
     asGoldLog: [],
-    asGoldAllTeamMode: false
+    asGoldAllTeamMode: false,
+
+    // Reciprocation settings
+    reciprocateEnabled: true,
+    reciprocateMode: 'manual',         // 'manual' or 'auto'
+    reciprocateAutoPct: 50,            // Percentage for auto mode
+    reciprocateNotifySound: false,
+    reciprocateNotifyDuration: 30,
+    reciprocateOnlyTroops: true,
+    reciprocateHistory: []
   }
 
   function bump(map, key) {
@@ -633,6 +862,19 @@
             name: name,
             amount: amt
           })
+
+          // Trigger reciprocation (manual or auto)
+          if (S.reciprocateEnabled && S.reciprocateOnlyTroops) {
+            if (S.reciprocateMode === 'auto') {
+              handleAutoReciprocate(from.id, name, amt)
+            } else {
+              showReciprocateNotification({
+                id: from.id,
+                name: name,
+                troops: amt
+              })
+            }
+          }
         }
       } else {
         log('[DEBUG] No params for RECEIVED_TROOPS:', { params, text })
@@ -2254,7 +2496,7 @@
     overflow: 'hidden', userSelect: 'none', resize: 'both'
   })
 
-  const tabs = ['summary', 'stats', 'aiinsights', 'ports', 'feed', 'goldrate', 'alliances', 'autotroops', 'autogold', 'diag', 'hotkeys']
+  const tabs = ['summary', 'stats', 'aiinsights', 'ports', 'feed', 'goldrate', 'alliances', 'autotroops', 'autogold', 'reciprocate', 'diag', 'hotkeys']
   ui.innerHTML = `
     <div id="hm-head" style="display:flex;align-items:center;justify-content:space-between;padding:8px 10px;background:#151f33;border-bottom:1px solid #86531f;cursor:move;flex-shrink:0">
       <div><b>HAMMER v8.10</b> <span style="opacity:.85">SMOOTH</span></div>
@@ -3137,6 +3379,130 @@
     return html
   }
 
+  function reciprocateView() {
+    const me = readMyPlayer()
+    const myGold = me ? Number(me.gold || 0n) : 0
+
+    let html = '<div class="title">🔄 Quick Reciprocate</div>'
+    html += `<div class="help">Quickly send gold to players who sent you troops</div>`
+
+    // Settings Box
+    html += '<div class="box">'
+    html += '<div class="title" style="margin-top:0">⚙️ Settings</div>'
+
+    html += `<div class="row">`
+    html += `<div>Reciprocation System</div>`
+    html += `<button id="recip-toggle" class="${S.reciprocateEnabled ? 'active' : ''}">${S.reciprocateEnabled ? 'ON' : 'OFF'}</button>`
+    html += `</div>`
+
+    html += `<div class="row">`
+    html += `<div><b>Mode</b></div>`
+    html += `<div style="display:flex;gap:8px">`
+    html += `<button id="recip-mode-manual" class="${S.reciprocateMode === 'manual' ? 'active' : ''}" style="flex:1">Manual</button>`
+    html += `<button id="recip-mode-auto" class="${S.reciprocateMode === 'auto' ? 'active' : ''}" style="flex:1">Auto</button>`
+    html += `</div>`
+    html += `</div>`
+
+    if (S.reciprocateMode === 'manual') {
+      html += `<div class="help">Manual: Popup with buttons for each donation</div>`
+      html += `<div class="row">`
+      html += `<div>Notification Duration</div>`
+      html += `<input id="recip-duration" type="number" value="${S.reciprocateNotifyDuration}" min="10" max="60" step="5" style="width:80px">`
+      html += `<span class="muted" style="margin-left:8px">seconds</span>`
+      html += `</div>`
+    } else {
+      html += `<div class="help">Auto: Automatically send fixed % when troops received</div>`
+      html += `<div class="row">`
+      html += `<div>Auto Percentage</div>`
+      html += `<div style="display:flex;gap:4px">`
+      for (const pct of [10, 25, 50, 75, 100]) {
+        html += `<button class="recip-auto-pct-btn" data-pct="${pct}" style="flex:1;padding:4px;background:${S.reciprocateAutoPct === pct ? '#2a5a4a' : '#2a3a4a'};border:1px solid ${S.reciprocateAutoPct === pct ? '#7ff2a3' : '#7bb8ff'};border-radius:4px;cursor:pointer;font-weight:${S.reciprocateAutoPct === pct ? 'bold' : 'normal'}">${pct}%</button>`
+      }
+      html += `</div>`
+      html += `</div>`
+    }
+
+    html += `<div class="row">`
+    html += `<div>Only Reciprocate Troops</div>`
+    html += `<button id="recip-troops-only" class="${S.reciprocateOnlyTroops ? 'active' : ''}">${S.reciprocateOnlyTroops ? 'YES' : 'NO'}</button>`
+    html += `</div>`
+    html += '</div>'
+
+    // Current Gold Display
+    html += '<div class="box">'
+    html += `<div class="row" style="font-size:16px">`
+    html += `<div><b>Your Current Gold:</b></div>`
+    html += `<div class="mono" style="color:#ffcf5d">${short(myGold)} 💰</div>`
+    html += `</div>`
+    html += '</div>'
+
+    // Recent Donors (from inbound)
+    const recentDonors = [...S.inbound.entries()]
+      .filter(([id, data]) => data.troops > 0)
+      .map(([id, data]) => ({
+        id,
+        name: playersById.get(id)?.displayName || playersById.get(id)?.name || 'Unknown',
+        troops: data.troops,
+        lastTime: data.last
+      }))
+      .sort((a, b) => b.lastTime - a.lastTime)
+      .slice(0, 10)
+
+    if (recentDonors.length > 0) {
+      html += '<div class="box">'
+      html += '<div class="title" style="margin-top:0">🎯 Recent Troop Donors</div>'
+      html += '<div class="help">Click percentage to send that % of your current gold</div>'
+
+      for (const donor of recentDonors) {
+        const timeSince = Math.floor((Date.now() - donor.lastTime.getTime()) / 1000)
+        html += '<div class="box" style="margin:8px 0;background:#0d1520">'
+        html += '<div class="row">'
+        html += `<div><b>${esc(donor.name)}</b></div>`
+        html += `<div class="muted" style="font-size:10px">${fmtDuration(timeSince * 1000)} ago</div>`
+        html += '</div>'
+        html += '<div class="row" style="margin-top:4px">'
+        html += `<div class="mono" style="color:#7ff2a3">${short(donor.troops)} 🪖 received</div>`
+        html += '</div>'
+        html += '<div style="display:flex;gap:4px;margin-top:8px">'
+        for (const pct of [10, 25, 50, 75, 100]) {
+          const goldAmt = Math.floor(myGold * pct / 100)
+          html += `<button class="recip-send-btn" data-donor-id="${donor.id}" data-donor-name="${esc(donor.name)}" data-pct="${pct}" style="flex:1;padding:6px;background:#2a4a6a;border:1px solid #7bb8ff;border-radius:4px;cursor:pointer;font-size:11px">`
+          html += `<div style="font-weight:bold">${pct}%</div>`
+          html += `<div style="font-size:9px;color:#9bb0c8">${short(goldAmt)}</div>`
+          html += `</button>`
+        }
+        html += '</div>'
+        html += '</div>'
+      }
+      html += '</div>'
+    } else {
+      html += '<div class="box">'
+      html += '<div class="muted">No recent troop donors. When players send you troops, they\'ll appear here for quick reciprocation.</div>'
+      html += '</div>'
+    }
+
+    // Reciprocation History
+    if (S.reciprocateHistory.length > 0) {
+      html += '<div class="box">'
+      html += '<div class="title" style="margin-top:0">📋 Recent Reciprocations</div>'
+
+      const recent = S.reciprocateHistory.slice(-10).reverse()
+      html += '<div style="font-size:10px">'
+      for (const entry of recent) {
+        const ts = new Date(entry.timestamp)
+        html += `<div style="margin:2px 0;padding:4px;background:#0d1520;border-radius:4px;color:#9bb0c8">`
+        html += `[${fmtTime(ts)}] Sent ${short(entry.goldSent)} 💰 (${entry.percentage}%) to ${esc(entry.donorName)}`
+        html += `</div>`
+      }
+      html += '</div>'
+
+      html += '<button id="recip-clear-history" style="margin-top:8px;padding:6px;background:#3a2a2a;color:#ff8b94;border:1px solid #ff8b94;border-radius:4px;cursor:pointer;font-size:11px">Clear History</button>'
+      html += '</div>'
+    }
+
+    return html
+  }
+
 
   function hotkeysView() {
     let html = '<div class="title">⌨️ Keyboard Shortcuts</div>'
@@ -3299,6 +3665,7 @@
       alliances: alliancesView,
       autotroops: autoDonateTroopsView,
       autogold: autoDonateGoldView,
+      reciprocate: reciprocateView,
       diag: diagnosticsView,
       hotkeys: hotkeysView
     }
@@ -3529,6 +3896,71 @@
         const target = span.getAttribute('data-remove-gold-target')
         const idx = S.asGoldTargets.indexOf(target)
         if (idx >= 0) S.asGoldTargets.splice(idx, 1)
+      }
+    })
+
+    // Reciprocate tab handlers
+    const recipToggle = ui.querySelector('#recip-toggle')
+    if (recipToggle) {
+      recipToggle.onclick = () => {
+        S.reciprocateEnabled = !S.reciprocateEnabled
+        if (!S.reciprocateEnabled) {
+          clearReciprocateNotifications()
+        }
+      }
+    }
+
+    const recipModeManual = ui.querySelector('#recip-mode-manual')
+    if (recipModeManual) {
+      recipModeManual.onclick = () => {
+        S.reciprocateMode = 'manual'
+        clearReciprocateNotifications()
+      }
+    }
+
+    const recipModeAuto = ui.querySelector('#recip-mode-auto')
+    if (recipModeAuto) {
+      recipModeAuto.onclick = () => {
+        S.reciprocateMode = 'auto'
+        clearReciprocateNotifications()
+      }
+    }
+
+    const recipDuration = ui.querySelector('#recip-duration')
+    if (recipDuration) {
+      recipDuration.onchange = () => {
+        S.reciprocateNotifyDuration = Math.max(10, Math.min(60, parseInt(recipDuration.value) || 30))
+      }
+    }
+
+    const recipTroopsOnly = ui.querySelector('#recip-troops-only')
+    if (recipTroopsOnly) {
+      recipTroopsOnly.onclick = () => {
+        S.reciprocateOnlyTroops = !S.reciprocateOnlyTroops
+      }
+    }
+
+    const recipClearHistory = ui.querySelector('#recip-clear-history')
+    if (recipClearHistory) {
+      recipClearHistory.onclick = () => {
+        S.reciprocateHistory = []
+      }
+    }
+
+    // Auto mode percentage buttons
+    ui.querySelectorAll('.recip-auto-pct-btn').forEach(btn => {
+      btn.onclick = () => {
+        S.reciprocateAutoPct = parseInt(btn.getAttribute('data-pct'))
+      }
+    })
+
+    // Quick send buttons (manual mode via tab)
+    ui.querySelectorAll('.recip-send-btn').forEach(btn => {
+      btn.onclick = () => {
+        const donorId = btn.getAttribute('data-donor-id')
+        const donorName = btn.getAttribute('data-donor-name')
+        const pct = parseInt(btn.getAttribute('data-pct'))
+        handleQuickReciprocate(donorId, donorName, pct, null)
       }
     })
 

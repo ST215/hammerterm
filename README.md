@@ -8,33 +8,44 @@ Hammer Script monitors and tracks resource donations (gold and troops) in OpenFr
 
 ## Features
 
-### 📊 Five Powerful Views
+### 📊 Multiple Powerful Views
 
-1. **Inbound** - Track who sent you resources
-   - Gold and troop donations received
-   - Transaction counts and timestamps
-   - Sorted by total contribution
+1. **Summary** - Overview of match statistics and key metrics
 
-2. **Outbound** - Monitor your donations
-   - Resources you've sent to others
-   - Identify your key trading partners
-   - Track your generosity metrics
+2. **Stats** - Detailed player statistics and comparisons
 
-3. **Ports** - Analyze trade port performance
+3. **AI Insights** - Intelligent analysis and recommendations
+
+4. **Ports** - Analyze trade port performance
    - Gold per minute (GPM) calculations
    - Average and last interval timing
    - Embargo recommendations for inefficient routes
    - Identifies long routes vs. profitable partners
 
-4. **Feed** - Real-time transaction stream
+5. **Feed** - Real-time transaction stream
    - Chronological view of all donations
    - Both sent and received in one place
    - Auto-scrolls to show latest activity
 
-5. **Debug** - Technical diagnostics
-   - View raw message capture
-   - Verify the script is detecting game events
-   - Troubleshoot if data isn't appearing
+6. **Gold Rate** - Track gold generation rates
+
+7. **Alliances** - Monitor alliance relationships
+
+8. **Auto-Troops** - Automated troop donation system
+
+9. **Auto-Gold** - Automated gold donation system
+
+10. **Reciprocate** - Quick reciprocation for "Troops for Gold Trust" playstyle
+    - Popup notifications when troops received
+    - One-click gold sending at preset percentages (10%, 25%, 50%, 75%, 100%)
+    - Manual mode (case-by-case decisions) or Auto mode (fixed percentage)
+    - Recent donors list with quick-send buttons
+    - Reciprocation history tracking
+    - Eliminates manual player searching and amount calculations
+
+11. **Diagnostics** - Technical diagnostics and debugging
+
+12. **Hotkeys** - Keyboard shortcut reference
 
 ### 🎯 Key Capabilities
 
