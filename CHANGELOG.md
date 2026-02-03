@@ -5,6 +5,27 @@ All notable changes to Hammer Script will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.3.0] - 2026-02-02
+
+### Fixed
+- **MAJOR: Auto-send gold and troops now fully working**
+  - Discovered actual minified event classes from game ('Rp' for gold, 'Op' for troops)
+  - Fixed EventBus routing by using game's native event classes instead of custom ones
+  - Fixed BigInt/Number mixing errors in gold calculations and display
+  - Auto-gold tab now renders correctly with proper BigInt conversion
+  - Both single-player and multi-player modes supported
+
+### Changed
+- Event discovery system automatically finds and caches minified event classes
+- All gold BigInt values converted to Number for safe calculations
+- Exposed playersById, myAllies, myTeam in getState() for debugging
+- Added testEventClass() helper for testing different event classes
+
+### Technical Details
+- Root cause: Custom event classes didn't match minified game classes, so EventBus didn't route events
+- Solution: Use game's actual 'Rp' (gold) and 'Op' (troops) event classes discovered via EventBus.listeners
+- Gold events require BigInt amounts, troops events require number amounts
+
 ## [2.2.0] - 2025-11-04
 
 ### Added
