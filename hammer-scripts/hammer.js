@@ -1,5 +1,5 @@
 // =====================================================================
-// HAMMER v9.0 "MINIMAL EDITION"
+// HAMMER v10.4 "CONTROL PANEL"
 //
 // Core automation tool for OpenFront.io focused on essential features:
 // - Stats tracking (gold/troops sent/received with logs)
@@ -48,11 +48,20 @@
 // =====================================================================
 // CHANGELOG
 // =====================================================================
-// v9.0 - Minimal refactor (Feb 2026)
-//   - Enhanced logging system with export
-//   - Removed: SAM/Atom/Hydrogen overlays, embargo controls
-//   - Slimmed down from 2360 to 2184 lines (84KB)
-//   - Based on v8.10 SMOOTH EDITION
+// v10.4 - Singleplayer/Team Mode & Mid-Match Fixes (Feb 2026)
+//   - Fixed singleplayer/team mode: uses events-display.game path when game-view is null
+//   - Bootstrap now finds _myClientID, _players, _myPlayer correctly
+//   - Deep Worker/WebSocket discovery in both game-view and events-display paths
+//   - Immediate hook attempts for faster mid-match startup
+//   - Stale hook clearing for re-injection scenarios
+//
+// v10.0 - Control Panel (Feb 2026)
+//   - Renamed to Hammer Control Panel
+//   - Reciprocate tab: split troops/gold toggles, donor stats, popup toggle
+//   - Auto-Troops & Auto-Gold: enhanced live preview
+//   - Summary: separated port data from player donations
+//   - Stats: expanded metrics, leaderboards, fun stats
+//   - Popup performance improvements (debounce, event delegation)
 //
 // =====================================================================
 (() => {
@@ -129,7 +138,7 @@
 
       logs = logs.slice(-limit)
       return JSON.stringify({
-        version: '9.0',
+        version: '10.4',
         timestamp: new Date().toISOString(),
         totalLogs: logBuffer.length,
         exportedLogs: logs.length,
@@ -137,8 +146,12 @@
       }, null, 2)
     }
 
+    // Debug mode - OFF by default for max performance
+    let debugEnabled = false
+
     // Simple logging functions
     const log = (...args) => {
+      if (!debugEnabled) return
       addLog({ level: 'log', args: args.map(serializeValue), timestamp: new Date().toISOString() })
       console.log('[HAMMER]', ...args)
     }
@@ -151,7 +164,10 @@
       console.error('[HAMMER]', ...args)
     }
 
-    return { log, warn, error, exportLogs }
+    function setDebug(on) { debugEnabled = !!on }
+    function isDebug() { return debugEnabled }
+
+    return { log, warn, error, exportLogs, setDebug, isDebug }
   })()
 
   // Convenient alias for internal logging
@@ -177,7 +193,6 @@
     RECEIVED_TROOPS_FROM_PLAYER: 22
   }
 
-  const TICK_MS = 100
   const MAX_AGE_MS = 2 * 60 * 1000
 
   // ===== GLOBAL STATE =====
@@ -190,7 +205,6 @@
   let mySmallID = null, myTeam = null, myAllies = new Set()
   const playersById = new Map()
   const playersBySmallId = new Map()
-  const playersByName = new Map()
   let lastPlayers = []
 
   // Message buffering for timing fix
@@ -200,10 +214,7 @@
   // Resource tracking for alternative donation detection
   let lastMyGold = 0
   let lastMyTroops = 0
-  const recentIntents = [] // Track our own intents
-
-  // Diagnostic system state
-  const diagnosticEvents = []
+  // System status
   let gameViewHooked = false
   let displayEventsReceived = 0
   let donationsTracked = 0
@@ -234,9 +245,6 @@
   // Game socket
   let gameSocket = null
 
-  // Status overlay for hotkey feedback
-  let statusOverlay = null
-
   // ===== UTILS =====
   const num = v => Number(v) || 0
   const nowDate = () => new Date()
@@ -264,43 +272,40 @@
 
   // ===== STATUS OVERLAY =====
   function showStatus(message, duration = 2000) {
-    if (!statusOverlay) {
-      statusOverlay = document.createElement('div')
-      Object.assign(statusOverlay.style, {
-        position: 'fixed',
-        top: '50%',
-        left: '50%',
-        transform: 'translate(-50%, -50%)',
-        background: 'rgba(0, 0, 0, 0.9)',
-        color: '#7ff2a3',
-        padding: '20px 40px',
-        borderRadius: '12px',
-        font: 'bold 16px Consolas, monospace',
-        zIndex: '2147483647',
-        boxShadow: '0 8px 32px rgba(0,0,0,0.8)',
-        border: '2px solid #7ff2a3',
-        pointerEvents: 'none'
-      })
-      document.body.appendChild(statusOverlay)
-    }
-    statusOverlay.textContent = message
-    statusOverlay.style.display = 'block'
-
-    clearTimeout(statusOverlay._timer)
-    statusOverlay._timer = setTimeout(() => {
-      statusOverlay.style.display = 'none'
-    }, duration)
+    const el = document.createElement('div')
+    Object.assign(el.style, {
+      position: 'fixed', top: '50%', left: '50%', transform: 'translate(-50%, -50%)',
+      background: 'rgba(0,0,0,0.9)', color: '#7ff2a3', padding: '20px 40px',
+      borderRadius: '12px', font: 'bold 16px Consolas, monospace',
+      zIndex: '2147483647', boxShadow: '0 8px 32px rgba(0,0,0,0.8)',
+      border: '2px solid #7ff2a3', pointerEvents: 'none'
+    })
+    el.textContent = message
+    document.body.appendChild(el)
+    setTimeout(() => el.remove(), duration)
   }
 
   // ===== RECIPROCATION NOTIFICATION SYSTEM =====
   let reciprocateNotifications = []
 
   function showReciprocateNotification(donor) {
+    console.log('[HAMMER][RECIPROCATE] showReciprocateNotification called for', donor.name, '| troops:', donor.troops, '| gold:', donor.gold)
+    // Merge with existing notification from same donor if not dismissed
+    const existing = reciprocateNotifications.find(n => n.donorId === donor.id && !n.dismissed)
+    if (existing) {
+      existing.troops += (donor.troops || 0)
+      existing.gold += (donor.gold || 0)
+      existing.timestamp = Date.now()
+      debouncedRenderReciprocatePopup()
+      return
+    }
+
     reciprocateNotifications.push({
       id: Date.now(),
       donorId: donor.id,
       donorName: donor.name,
-      troops: donor.troops,
+      troops: donor.troops || 0,
+      gold: donor.gold || 0,
       timestamp: Date.now(),
       dismissed: false
     })
@@ -309,7 +314,7 @@
       reciprocateNotifications.shift()
     }
 
-    renderReciprocatePopup()
+    debouncedRenderReciprocatePopup()
   }
 
   function dismissReciprocateNotification(notificationId) {
@@ -317,13 +322,22 @@
     if (idx >= 0) {
       reciprocateNotifications[idx].dismissed = true
     }
-    renderReciprocatePopup()
+    debouncedRenderReciprocatePopup()
   }
 
   function clearReciprocateNotifications() {
     reciprocateNotifications = []
     const popup = document.getElementById('hm-reciprocate-popup')
     if (popup) popup.remove()
+  }
+
+  let _recipPopupTimer = null
+  function debouncedRenderReciprocatePopup() {
+    if (_recipPopupTimer) clearTimeout(_recipPopupTimer)
+    _recipPopupTimer = setTimeout(() => {
+      renderReciprocatePopup()
+      _recipPopupTimer = null
+    }, 150)
   }
 
   function renderReciprocatePopup() {
@@ -362,7 +376,8 @@
 
     popup.innerHTML = `
       <div style="font-size: 16px; font-weight: bold; margin-bottom: 12px; color: #7ff2a3;">
-        🪖 ${esc(latest.donorName)} sent you ${short(latest.troops)} troops
+        ${latest.troops > 0 ? `🪖 ${esc(latest.donorName)} sent you ${short(latest.troops)} troops` : ''}
+        ${latest.gold > 0 ? `💰 ${esc(latest.donorName)} sent you ${short(latest.gold)} gold` : ''}
       </div>
       <div style="font-size: 13px; margin-bottom: 12px; color: #9bb0c8;">
         You have ${short(myGold)} gold
@@ -409,24 +424,18 @@
   }
 
   function setupReciprocatePopupHandlers(popup, notification) {
-    popup.querySelectorAll('[data-reciprocate-pct]').forEach(btn => {
-      btn.onclick = () => {
-        const pct = parseInt(btn.getAttribute('data-reciprocate-pct'))
-        const notifId = parseInt(btn.getAttribute('data-reciprocate-id'))
-        handleQuickReciprocate(notification.donorId, notification.donorName, pct, notifId)
+    popup.onclick = (e) => {
+      const pctBtn = e.target.closest('[data-reciprocate-pct]')
+      if (pctBtn) {
+        const pct = parseInt(pctBtn.getAttribute('data-reciprocate-pct'))
+        handleQuickReciprocate(notification.donorId, notification.donorName, pct, notification.id)
+        return
       }
-    })
-
-    const dismissBtn = popup.querySelector('#reciprocate-dismiss')
-    if (dismissBtn) {
-      dismissBtn.onclick = () => {
+      if (e.target.closest('#reciprocate-dismiss')) {
         dismissReciprocateNotification(notification.id)
+        return
       }
-    }
-
-    const viewAllBtn = popup.querySelector('#reciprocate-viewall')
-    if (viewAllBtn) {
-      viewAllBtn.onclick = () => {
+      if (e.target.closest('#reciprocate-viewall')) {
         S.view = 'reciprocate'
         clearReciprocateNotifications()
       }
@@ -473,44 +482,119 @@
   }
 
   function handleAutoReciprocate(donorId, donorName, troopsReceived) {
+    console.log('[HAMMER][RECIPROCATE] handleAutoReciprocate called for', donorName, '| troops:', troopsReceived)
+    // Check cooldown first
+    const lastSent = reciprocateCooldowns.get(donorId)
+    if (lastSent && (Date.now() - lastSent) < RECIPROCATE_COOLDOWN_MS) {
+      log(`[RECIPROCATE] Cooldown active for ${donorName}, skipping`)
+      return
+    }
+
+    // Add to pending queue instead of sending immediately
+    const pending = {
+      donorId,
+      donorName,
+      troopsReceived,
+      addedAt: Date.now(),
+      attempts: 0,
+      maxAttempts: 5
+    }
+
+    reciprocatePending.push(pending)
+    log(`[RECIPROCATE] Queued auto-send for ${donorName} (${troopsReceived} troops, queue size: ${reciprocatePending.length})`)
+  }
+
+  function processReciprocateQueue() {
+    if (!S.reciprocateEnabled || S.reciprocateMode !== 'auto') {
+      reciprocatePending.length = 0  // Clear queue if disabled
+      return
+    }
+
+    if (reciprocatePending.length === 0) return
+
     const me = readMyPlayer()
     if (!me) {
-      log('[RECIPROCATE] Player data not available for auto-send')
+      log('[RECIPROCATE] Player data not ready, deferring queue processing')
       return
     }
 
     const myGold = Number(me.gold || 0n)
-    const percentage = S.reciprocateAutoPct
-    const goldToSend = Math.floor(myGold * percentage / 100)
+    const now = Date.now()
 
-    if (goldToSend === 0) {
-      log(`[RECIPROCATE] Not enough gold to auto-send to ${donorName}`)
-      return
-    }
+    // Process up to 3 pending reciprocations per interval
+    const toProcess = reciprocatePending.splice(0, 3)
 
-    const success = asSendGold(donorId, goldToSend)
-
-    if (success) {
-      S.reciprocateHistory.push({
-        donorId,
-        donorName,
-        goldSent: goldToSend,
-        percentage,
-        troopsReceived,
-        timestamp: Date.now(),
-        mode: 'auto'
-      })
-
-      if (S.reciprocateHistory.length > 100) {
-        S.reciprocateHistory.shift()
+    for (const pending of toProcess) {
+      // Check if too old (5 minutes)
+      if (now - pending.addedAt > 300000) {
+        log(`[RECIPROCATE] Dropping stale request for ${pending.donorName} (age: ${Math.floor((now - pending.addedAt) / 1000)}s)`)
+        continue
       }
 
-      showStatus(`✅ Auto-sent ${short(goldToSend)} gold (${percentage}%) to ${donorName}`)
-      log(`[RECIPROCATE] Auto-sent ${goldToSend} gold (${percentage}%) to ${donorName} (received ${troopsReceived} troops)`)
-    } else {
-      log(`[RECIPROCATE] Failed to auto-send gold to ${donorName}`)
+      // Check cooldown
+      const lastSent = reciprocateCooldowns.get(pending.donorId)
+      if (lastSent && (now - lastSent) < RECIPROCATE_COOLDOWN_MS) {
+        log(`[RECIPROCATE] Cooldown active for ${pending.donorName}, re-queueing`)
+        reciprocatePending.push(pending)  // Re-queue
+        continue
+      }
+
+      // Calculate gold to send
+      const percentage = S.reciprocateAutoPct
+      const goldToSend = Math.floor(myGold * percentage / 100)
+
+      if (goldToSend === 0) {
+        pending.attempts++
+        if (pending.attempts < pending.maxAttempts) {
+          log(`[RECIPROCATE] Not enough gold, re-queueing (attempt ${pending.attempts}/${pending.maxAttempts})`)
+          reciprocatePending.push(pending)  // Re-queue for later
+        } else {
+          log(`[RECIPROCATE] Max attempts reached for ${pending.donorName}, dropping`)
+        }
+        continue
+      }
+
+      // Attempt to send gold
+      const success = asSendGold(pending.donorId, goldToSend)
+
+      if (success) {
+        // Record in history
+        S.reciprocateHistory.push({
+          donorId: pending.donorId,
+          donorName: pending.donorName,
+          goldSent: goldToSend,
+          percentage,
+          troopsReceived: pending.troopsReceived,
+          timestamp: Date.now(),
+          mode: 'auto'
+        })
+
+        if (S.reciprocateHistory.length > 100) {
+          S.reciprocateHistory.shift()
+        }
+
+        // Set cooldown
+        reciprocateCooldowns.set(pending.donorId, now)
+
+        showStatus(`✅ Auto-sent ${short(goldToSend)} gold (${percentage}%) to ${pending.donorName}`)
+        log(`[RECIPROCATE] Successfully sent ${goldToSend} gold to ${pending.donorName} (queue size: ${reciprocatePending.length})`)
+      } else {
+        // Failed to send, retry
+        pending.attempts++
+        if (pending.attempts < pending.maxAttempts) {
+          log(`[RECIPROCATE] Send failed, re-queueing (attempt ${pending.attempts}/${pending.maxAttempts})`)
+          reciprocatePending.push(pending)  // Re-queue
+        } else {
+          log(`[RECIPROCATE] Max attempts reached for ${pending.donorName}, dropping`)
+        }
+      }
     }
   }
+
+  // ===== RECIPROCATION QUEUE & COOLDOWN TRACKING =====
+  const reciprocatePending = []  // Queue of pending reciprocations
+  const reciprocateCooldowns = new Map()  // playerId → timestamp
+  const RECIPROCATE_COOLDOWN_MS = 10000  // 10 seconds between sends to same player
 
   // ===== STATE =====
   const SIZES = [
@@ -522,7 +606,6 @@
   const S = {
     view: 'autotroops',
     paused: false, minimized: false, sizeIdx: 1,
-    myTag: null, filterTagMates: false,
     seen: new Set(),
 
     // Donation tracking
@@ -560,12 +643,24 @@
     reciprocateAutoPct: 50,            // Percentage for auto mode
     reciprocateNotifySound: false,
     reciprocateNotifyDuration: 30,
-    reciprocateOnlyTroops: true,
-    reciprocateHistory: []
+    reciprocateOnTroops: true,       // Reciprocate when receiving troops
+    reciprocateOnGold: false,        // Reciprocate when receiving gold
+    reciprocatePopupsEnabled: true,  // Show popup notifications
+    reciprocateHistory: [],
+
+    // Comms state
+    commsTargets: new Set(),         // Set of player IDs to send to
+    commsGroupMode: null,            // null, 'all', 'all-team', 'all-non-team'
+    commsOthersExpanded: false,      // Whether non-team block is expanded
+    commsPendingQC: null,            // quickchat key awaiting target selection
+    commsRecentSent: [],             // last 10 sent items { type, emoji/key, target, timestamp }
+
+    // Alliance inline comms
+    allianceCommsExpanded: null      // player ID whose comms panel is expanded (null = none)
   }
 
   function bump(map, key) {
-    if (!map.has(key)) map.set(key, { gold: 0, troops: 0, count: 0, last: null })
+    if (!map.has(key)) map.set(key, { gold: 0, troops: 0, count: 0, goldSends: 0, troopsSends: 0, last: null, lastDonorTroops: 0 })
     return map.get(key)
   }
 
@@ -632,18 +727,6 @@
     return me || null
   }
 
-  // ===== TAG HELPERS =====
-  const tagOf = n => {
-    const m = String(n || '').match(/\[\s*([^\]]+?)\s*\]/)
-    return m ? m[1].trim() : null
-  }
-
-  function hasTag(player, tag) {
-    if (!tag || !player) return false
-    const t = tagOf(player.displayName || player.name || '')
-    return t && t.toLowerCase() === tag.toLowerCase()
-  }
-
   // ===== ALLY/TEAMMATE HELPERS =====
   function getTeammates() {
     const me = readMyPlayer()
@@ -661,29 +744,8 @@
       .sort((a, b) => (a.displayName || a.name || '').localeCompare(b.displayName || b.name || ''))
   }
 
-  function getTagMates() {
-    if (!S.myTag) return []
-    const me = readMyPlayer()
-    if (!me) return []
-    return [...playersById.values()]
-      .filter(p => p.id !== me.id && p.isAlive && hasTag(p, S.myTag))
-      .sort((a, b) => (a.displayName || a.name || '').localeCompare(b.displayName || b.name || ''))
-  }
-
   function asIsAlly(tid) {
     const p = playersById.get(tid)
-
-    log('[ALLIANCE CHECK] asIsAlly(', tid, '):', {
-      playerFound: !!p,
-      playerName: p ? (p.displayName || p.name) : null,
-      myTeam,
-      theirTeam: p?.team,
-      teamsMatch: p?.team != null && myTeam != null && p.team === myTeam,
-      myAlliesSize: myAllies.size,
-      myAlliesHas: p ? myAllies.has(p.smallID) : false,
-      theirSmallID: p?.smallID
-    })
-
     if (!p) return false
     if (p.team != null && myTeam != null && p.team === myTeam) return true
     if (myAllies.has(p.smallID)) return true
@@ -718,13 +780,10 @@
         lastPlayers = players.slice()
         playersById.clear()
         playersBySmallId.clear()
-        playersByName.clear()
         for (const p of players) {
           if (!p) continue
           playersById.set(p.id, p)
           if (p.smallID != null) playersBySmallId.set(p.smallID, p)
-          if (p.name) playersByName.set(String(p.name).toLowerCase(), p)
-          if (p.displayName) playersByName.set(String(p.displayName).toLowerCase(), p)
         }
 
         let my = null
@@ -737,8 +796,8 @@
           if (S.goldRateEnabled) updateGoldRate(my)
 
           // Track resource changes for alternative donation detection
-          const currentGold = my.gold || 0
-          const currentTroops = my.troops || 0
+          const currentGold = Number(my.gold || 0)
+          const currentTroops = Number(my.troops || 0)
           if (lastMyGold > 0 || lastMyTroops > 0) {
             const goldChange = currentGold - lastMyGold
             const troopChange = currentTroops - lastMyTroops
@@ -827,19 +886,21 @@
     const params = msg.params || {}
     const text = msg.message || ''
 
+    // Log all incoming display messages for diagnostics
+    console.log('[HAMMER] DisplayMessage:', { type: mt, pid, mySmallID, params: JSON.stringify(params).slice(0, 200) })
+
     if (pid !== mySmallID) {
-      log('[DEBUG] Message filtered - wrong player:', {
-        messagePID: pid,
-        mySmallID: mySmallID,
-        text: text
-      })
       return
     }
 
-    const key = `${mt}:${text}:${params.name || ''}`
-    if (S.seen.has(key)) return
+    // Improved deduplication with timestamp
+    const timestamp = Math.floor(Date.now() / 1000)  // 1-second granularity
+    const key = `${mt}:${params.name || ''}:${params.troops || params.gold || ''}:${timestamp}`
+    if (S.seen.has(key)) {
+      log('[DEBUG] Duplicate message detected, skipping:', key)
+      return
+    }
     S.seen.add(key)
-    if (S.seen.size > 5000) S.seen.clear()
 
     const now = Date.now()
 
@@ -851,27 +912,26 @@
         log('[DEBUG] Matched RECEIVED_TROOPS:', { name, amt, params })
         const from = findPlayer(name)
         if (from) {
+          const donorPlayer = playersById.get(from.id)
+          const donorTroopSnapshot = donorPlayer ? (donorPlayer.troops || 0) : 0
           const r = bump(S.inbound, from.id)
-          r.troops += amt; r.count++; r.last = nowDate()
-          S.feedIn.push({ ts: nowDate(), type: 'troops', name, amount: amt, isPort: false })
+          r.troops += amt; r.count++; r.troopsSends++; r.last = nowDate()
+          r.lastDonorTroops = donorTroopSnapshot
+          S.feedIn.push({ ts: nowDate(), type: 'troops', name, amount: amt, isPort: false, donorTroops: donorTroopSnapshot })
+          console.log('[HAMMER] Received troops from', name, ':', amt, '| Reciprocate enabled:', S.reciprocateEnabled, '| OnTroops:', S.reciprocateOnTroops, '| Mode:', S.reciprocateMode)
           if (S.feedIn.length > 500) S.feedIn.shift()
           donationsTracked++
-          addDiagnosticEvent('DONATION_TRACKED', {
-            messageType: mt,
-            typeName: 'RECEIVED_TROOPS',
-            name: name,
-            amount: amt
-          })
 
           // Trigger reciprocation (manual or auto)
-          if (S.reciprocateEnabled && S.reciprocateOnlyTroops) {
+          if (S.reciprocateEnabled && S.reciprocateOnTroops) {
             if (S.reciprocateMode === 'auto') {
               handleAutoReciprocate(from.id, name, amt)
-            } else {
+            } else if (S.reciprocatePopupsEnabled) {
               showReciprocateNotification({
                 id: from.id,
                 name: name,
-                troops: amt
+                troops: amt,
+                gold: 0
               })
             }
           }
@@ -887,16 +947,10 @@
         const to = findPlayer(name)
         if (to) {
           const r = bump(S.outbound, to.id)
-          r.troops += amt; r.count++; r.last = nowDate()
+          r.troops += amt; r.count++; r.troopsSends++; r.last = nowDate()
           S.feedOut.push({ ts: nowDate(), type: 'troops', name, amount: amt, isPort: false })
           if (S.feedOut.length > 500) S.feedOut.shift()
           donationsTracked++
-          addDiagnosticEvent('DONATION_TRACKED', {
-            messageType: mt,
-            typeName: 'SENT_TROOPS',
-            name: name,
-            amount: amt
-          })
         }
       } else {
         log('[DEBUG] No params for SENT_TROOPS:', { params, text })
@@ -908,18 +962,15 @@
         log('[DEBUG] Matched RECEIVED_GOLD_TRADE:', { name, amt, params })
         const from = findPlayer(name)
         if (from) {
+          const donorPlayer = playersById.get(from.id)
+          const donorTroopSnapshot = donorPlayer ? (donorPlayer.troops || 0) : 0
           const r = bump(S.inbound, from.id)
-          r.gold += amt; r.count++; r.last = nowDate()
-          S.feedIn.push({ ts: nowDate(), type: 'gold', name, amount: amt, isPort: true })
+          r.gold += amt; r.count++; r.goldSends++; r.last = nowDate()
+          r.lastDonorTroops = donorTroopSnapshot
+          S.feedIn.push({ ts: nowDate(), type: 'gold', name, amount: amt, isPort: true, donorTroops: donorTroopSnapshot })
           if (S.feedIn.length > 500) S.feedIn.shift()
           bumpPorts(from.id, amt, now)
           donationsTracked++
-          addDiagnosticEvent('DONATION_TRACKED', {
-            messageType: mt,
-            typeName: 'TRADE_GOLD',
-            name: name,
-            amount: amt
-          })
         }
       } else {
         log('[DEBUG] No params for RECEIVED_GOLD_TRADE:', { params, text })
@@ -931,17 +982,29 @@
         log('[DEBUG] Matched RECEIVED_GOLD:', { name, amt, params })
         const from = findPlayer(name)
         if (from) {
+          const donorPlayer = playersById.get(from.id)
+          const donorTroopSnapshot = donorPlayer ? (donorPlayer.troops || 0) : 0
           const r = bump(S.inbound, from.id)
-          r.gold += amt; r.count++; r.last = nowDate()
-          S.feedIn.push({ ts: nowDate(), type: 'gold', name, amount: amt, isPort: false })
+          r.gold += amt; r.count++; r.goldSends++; r.last = nowDate()
+          r.lastDonorTroops = donorTroopSnapshot
+          S.feedIn.push({ ts: nowDate(), type: 'gold', name, amount: amt, isPort: false, donorTroops: donorTroopSnapshot })
+          console.log('[HAMMER] Received gold from', name, ':', amt, '| Reciprocate enabled:', S.reciprocateEnabled, '| OnGold:', S.reciprocateOnGold)
           if (S.feedIn.length > 500) S.feedIn.shift()
           donationsTracked++
-          addDiagnosticEvent('DONATION_TRACKED', {
-            messageType: mt,
-            typeName: 'RECEIVED_GOLD',
-            name: name,
-            amount: amt
-          })
+
+          // Trigger reciprocation on gold received
+          if (S.reciprocateEnabled && S.reciprocateOnGold) {
+            if (S.reciprocateMode === 'auto') {
+              handleAutoReciprocate(from.id, name, amt)
+            } else if (S.reciprocatePopupsEnabled) {
+              showReciprocateNotification({
+                id: from.id,
+                name: name,
+                troops: 0,
+                gold: amt
+              })
+            }
+          }
         }
       } else {
         log('[DEBUG] No params for RECEIVED_GOLD:', { params, text })
@@ -954,16 +1017,10 @@
         const to = findPlayer(name)
         if (to) {
           const r = bump(S.outbound, to.id)
-          r.gold += amt; r.count++; r.last = nowDate()
+          r.gold += amt; r.count++; r.goldSends++; r.last = nowDate()
           S.feedOut.push({ ts: nowDate(), type: 'gold', name, amount: amt, isPort: false })
           if (S.feedOut.length > 500) S.feedOut.shift()
           donationsTracked++
-          addDiagnosticEvent('DONATION_TRACKED', {
-            messageType: mt,
-            typeName: 'SENT_GOLD',
-            name: name,
-            amount: amt
-          })
         }
       } else {
         log('[DEBUG] No params for SENT_GOLD:', { params, text })
@@ -982,146 +1039,13 @@
   }
 
   function findPlayer(name) {
-    if (!name) return null
+    if (!name || playersById.size === 0) return null
     const lower = String(name).toLowerCase()
-    let found = playersByName.get(lower)
-    if (found) {
-      log('[DEBUG] findPlayer SUCCESS (map):', {
-        input: name,
-        found: found.displayName || found.name,
-        mapSize: playersByName.size
-      })
-      return { id: found.id, name: found.displayName || found.name || name }
-    }
     for (const p of playersById.values()) {
-      const pn = p.displayName || p.name || ''
-      if (pn.toLowerCase() === lower) {
-        log('[DEBUG] findPlayer SUCCESS (iteration):', {
-          input: name,
-          found: pn,
-          mapSize: playersByName.size
-        })
-        return { id: p.id, name: pn }
-      }
+      const pn = (p.displayName || p.name || '').toLowerCase()
+      if (pn === lower) return { id: p.id, name: p.displayName || p.name || name }
     }
-    log('[DEBUG] findPlayer FAILED:', {
-      input: name,
-      mapSize: playersByName.size,
-      playersCount: playersById.size
-    })
     return null
-  }
-
-  // ===== DIAGNOSTIC HELPER FUNCTIONS =====
-  function addDiagnosticEvent(type, data) {
-    const event = {
-      timestamp: new Date().toISOString(),
-      type,
-      data
-    }
-    diagnosticEvents.push(event)
-    if (diagnosticEvents.length > 100) diagnosticEvents.shift()
-    // Note: UI updates handled by render() function every 500ms to prevent flickering
-  }
-
-  function updateDiagnosticUI() {
-    const gameviewSpan = document.getElementById('diag-gameview')
-    const displayeventsSpan = document.getElementById('diag-displayevents')
-    const playerdataSpan = document.getElementById('diag-playerdata')
-    const donationsSpan = document.getElementById('diag-donations')
-    const eventsDiv = document.getElementById('diag-events')
-
-    if (gameviewSpan) {
-      gameviewSpan.textContent = gameViewHooked ? '✅ Hooked' : '❌ Not Hooked'
-      gameviewSpan.style.color = gameViewHooked ? '#0f0' : '#f00'
-    }
-
-    if (displayeventsSpan) {
-      displayeventsSpan.textContent = displayEventsReceived.toString()
-      displayeventsSpan.style.color = displayEventsReceived > 0 ? '#0f0' : '#f90'
-    }
-
-    if (playerdataSpan) {
-      playerdataSpan.textContent = playerDataReady ? '✅ Ready' : '⏳ Loading'
-      playerdataSpan.style.color = playerDataReady ? '#0f0' : '#f90'
-    }
-
-    if (donationsSpan) {
-      donationsSpan.textContent = donationsTracked.toString()
-      donationsSpan.style.color = donationsTracked > 0 ? '#0f0' : '#6cf'
-    }
-
-    if (eventsDiv && diagnosticEvents.length > 0) {
-      eventsDiv.innerHTML = diagnosticEvents.slice(-10).reverse().map(e => {
-        const time = e.timestamp.substring(11, 19)
-        const dataStr = JSON.stringify(e.data).substring(0, 100)
-        return `<div style="border-bottom: 1px solid #333; padding: 3px 0;">
-          <span style="color: #888;">${time}</span>
-          <span style="color: #6cf; font-weight: bold;"> ${e.type}</span>:
-          <span style="color: #fc6;">${dataStr}</span>
-        </div>`
-      }).join('')
-    }
-  }
-
-  function exportDiagnostics() {
-    try {
-      const report = {
-        timestamp: new Date().toISOString(),
-        version: '9.0.2-diagnostic',
-        status: {
-          gameViewHooked,
-          displayEventsReceived,
-          playerDataReady,
-          donationsTracked,
-          mySmallID,
-          currentClientID,
-          playersCount: playersById.size,
-          playerNamesCount: playersByName.size,
-          gameSocket: !!gameSocket,
-          gameSocketReady: gameSocket?.readyState
-        },
-        events: diagnosticEvents,
-        state: {
-          inboundCount: S.inbound.size,
-          outboundCount: S.outbound.size,
-          feedInCount: S.feedIn.length,
-          feedOutCount: S.feedOut.length,
-          rawMessagesCount: S.rawMessages.length
-        },
-        recentLogs: Logger?.getRecentLogs ? Logger.getRecentLogs(50) : []
-      }
-
-      const json = JSON.stringify(report, null, 2)
-      const blob = new Blob([json], { type: 'application/json' })
-      const url = URL.createObjectURL(blob)
-      const a = document.createElement('a')
-      a.href = url
-      a.download = `hammer-diagnostics-${Date.now()}.json`
-      a.style.display = 'none'
-      document.body.appendChild(a)
-      a.click()
-      setTimeout(() => {
-        document.body.removeChild(a)
-        URL.revokeObjectURL(url)
-      }, 100)
-
-      log('[HAMMER] Diagnostic report downloaded')
-      console.log('[HAMMER] ✅ Diagnostic report downloaded!')
-      return true
-    } catch (err) {
-      log('[ERROR] Failed to export diagnostics:', err)
-      console.error('[HAMMER] Failed to export diagnostics:', err)
-      return false
-    }
-  }
-
-  function clearDiagnostics() {
-    diagnosticEvents.length = 0
-    displayEventsReceived = 0
-    donationsTracked = 0
-    updateDiagnosticUI()
-    log('[HAMMER] Diagnostics cleared')
   }
 
   function updateGoldRate(my) {
@@ -1187,20 +1111,26 @@
     value: WrappedWorker
   })
 
-  // Discover and wrap EXISTING Worker instances
+  // Discover and wrap EXISTING Worker instances - including deep search in game components
   let foundWorker = false
-  try {
-    for (let prop in window) {
-      try {
-        const val = window[prop]
-        if (val && val instanceof OriginalWorker && !val.__hammerWrapped) {
-          console.log(`[HAMMER] 🔍 Found existing Worker at window.${prop}`)
-          wrapWorker(val)
-          foundWorker = true
-        }
-      } catch {}
-    }
 
+  function deepFindWorker() {
+    // Try window properties first
+    try {
+      for (let prop in window) {
+        try {
+          const val = window[prop]
+          if (val && val instanceof OriginalWorker && !val.__hammerWrapped) {
+            console.log(`[HAMMER] 🔍 Found existing Worker at window.${prop}`)
+            wrapWorker(val)
+            foundWorker = true
+            return true
+          }
+        } catch {}
+      }
+    } catch {}
+
+    // Try common window property names
     const commonProps = ['gameWorker', 'worker', '_worker', 'mainWorker']
     for (const prop of commonProps) {
       try {
@@ -1208,15 +1138,60 @@
           console.log(`[HAMMER] 🔍 Found existing Worker at window.${prop}`)
           wrapWorker(window[prop])
           foundWorker = true
+          return true
         }
       } catch {}
     }
-  } catch (e) {
-    console.warn('[HAMMER] Worker discovery error:', e)
+
+    // Deep search: look inside game-view component
+    try {
+      const gameView = document.querySelector('game-view')
+      if (gameView) {
+        // Worker is nested inside WorkerClient: runner.worker.worker
+        const workerClient = gameView.clientGameRunner?.worker
+        if (workerClient?.worker && !workerClient.worker.__hammerWrapped) {
+          console.log('[HAMMER] 🔍 Found Worker in game-view.clientGameRunner.worker.worker')
+          wrapWorker(workerClient.worker)
+          foundWorker = true
+          return true
+        }
+      }
+    } catch (e) {
+      console.warn('[HAMMER] Deep Worker search error:', e)
+    }
+
+    // Deep search: look inside events-display.game (singleplayer/team mode)
+    try {
+      const eventsDisplay = document.querySelector('events-display')
+      if (eventsDisplay?.game?.worker) {
+        const workerClient = eventsDisplay.game.worker
+        // Worker might be nested: workerClient.worker
+        const actualWorker = workerClient.worker || workerClient
+        if (actualWorker && !actualWorker.__hammerWrapped && actualWorker instanceof OriginalWorker) {
+          console.log('[HAMMER] 🔍 Found Worker in events-display.game.worker')
+          wrapWorker(actualWorker)
+          foundWorker = true
+          return true
+        }
+      }
+    } catch (e) {
+      console.warn('[HAMMER] Deep Worker search (events-display) error:', e)
+    }
+
+    return false
   }
+
+  deepFindWorker()
 
   if (!foundWorker) {
     console.log('[HAMMER] ⚠️ No existing Worker found - will intercept when created')
+    // Retry deep search after a delay (game might still be initializing)
+    setTimeout(() => {
+      if (!foundWorker) {
+        console.log('[HAMMER] 🔄 Retrying Worker discovery...')
+        deepFindWorker()
+      }
+    }, 500)
   }
 
   // ===== WEBSOCKET WRAPPER =====
@@ -1301,22 +1276,217 @@
     value: WrappedWebSocket
   })
 
-  // Discover and wrap EXISTING WebSocket instances
+  // Discover and wrap EXISTING WebSocket instances - including deep search
   let foundWebSocket = false
-  try {
-    for (let prop in window) {
+
+  function deepFindWebSocket() {
+    // Try window properties first
+    try {
+      for (let prop in window) {
+        try {
+          const val = window[prop]
+          if (val && val instanceof OriginalWebSocket && !val.__hammerWrapped) {
+            console.log(`[HAMMER] 🔍 Found existing WebSocket at window.${prop}`)
+            wrapWebSocket(val)
+            foundWebSocket = true
+            return true
+          }
+        } catch {}
+      }
+    } catch {}
+
+    // Try common window property names
+    const commonProps = ['socket', 'ws', 'gameSocket', '_socket', 'connection']
+    for (const prop of commonProps) {
       try {
-        const val = window[prop]
-        if (val && val instanceof OriginalWebSocket && !val.__hammerWrapped) {
+        if (window[prop] && window[prop] instanceof OriginalWebSocket && !window[prop].__hammerWrapped) {
           console.log(`[HAMMER] 🔍 Found existing WebSocket at window.${prop}`)
-          wrapWebSocket(val)
+          wrapWebSocket(window[prop])
           foundWebSocket = true
+          return true
         }
       } catch {}
     }
 
-    const commonProps = ['socket', 'ws', 'gameSocket', '_socket', 'connection']
-    for (const prop of commonProps) {
+    // Deep search: look inside game-view component
+    try {
+      const gameView = document.querySelector('game-view')
+      if (gameView) {
+        // Try clientGameRunner.transport.socket
+        const transport = gameView.clientGameRunner?.transport
+        if (transport?.socket && !transport.socket.__hammerWrapped) {
+          console.log('[HAMMER] 🔍 Found WebSocket in game-view.clientGameRunner.transport.socket')
+          wrapWebSocket(transport.socket)
+          foundWebSocket = true
+          gameSocket = transport.socket
+          return true
+        }
+        // Try clientGameRunner.transport.ws
+        if (transport?.ws && !transport.ws.__hammerWrapped) {
+          console.log('[HAMMER] 🔍 Found WebSocket in game-view.clientGameRunner.transport.ws')
+          wrapWebSocket(transport.ws)
+          foundWebSocket = true
+          gameSocket = transport.ws
+          return true
+        }
+      }
+    } catch (e) {
+      console.warn('[HAMMER] Deep WebSocket search error:', e)
+    }
+
+    // Deep search: look inside events-display.game (singleplayer/team mode)
+    try {
+      const eventsDisplay = document.querySelector('events-display')
+      if (eventsDisplay?.game?.worker) {
+        // In singleplayer mode, WebSocket might be in worker's transport
+        const workerClient = eventsDisplay.game.worker
+        if (workerClient?.transport?.socket && !workerClient.transport.socket.__hammerWrapped) {
+          console.log('[HAMMER] 🔍 Found WebSocket in events-display.game.worker.transport.socket')
+          wrapWebSocket(workerClient.transport.socket)
+          foundWebSocket = true
+          gameSocket = workerClient.transport.socket
+          return true
+        }
+      }
+    } catch (e) {
+      console.warn('[HAMMER] Deep WebSocket search (events-display) error:', e)
+    }
+
+    return false
+  }
+
+  deepFindWebSocket()
+
+  if (!foundWebSocket) {
+    console.log('[HAMMER] ⚠️ No existing WebSocket found - will intercept when created')
+    // Retry deep search
+    setTimeout(() => {
+      if (!foundWebSocket) {
+        console.log('[HAMMER] 🔄 Retrying WebSocket discovery...')
+        deepFindWebSocket()
+      }
+    }, 500)
+  }
+
+  // ===== BOOTSTRAP PLAYER DATA FROM GAME (for mid-match injection) =====
+  function bootstrapPlayerData() {
+    // Try game-view path first (multiplayer)
+    try {
+      const gameView = document.querySelector('game-view')
+      if (gameView?.clientGameRunner) {
+        const runner = gameView.clientGameRunner
+
+        // Get clientID from lobby (not lobbyConfig)
+        if (runner.lobby?.clientID && !currentClientID) {
+          currentClientID = runner.lobby.clientID
+          console.log('[HAMMER] 🆔 Bootstrapped clientID from game-view:', currentClientID)
+        }
+
+        // Try to get players from gameView
+        const gv = runner.gameView
+        if (gv?.players) {
+          const playersFunc = typeof gv.players === 'function' ? gv.players() : gv.players
+          const playerList = playersFunc instanceof Map ? [...playersFunc.values()] :
+                            Array.isArray(playersFunc) ? playersFunc : []
+
+          if (playerList.length > 0) {
+            return bootstrapPlayersFromList(playerList, 'game-view')
+          }
+        }
+      }
+    } catch (e) {
+      console.warn('[HAMMER] Bootstrap (game-view) error:', e)
+    }
+
+    // Try events-display.game path (singleplayer/team mode)
+    try {
+      const eventsDisplay = document.querySelector('events-display')
+      if (eventsDisplay?.game) {
+        const game = eventsDisplay.game
+
+        // Get clientID from _myClientID
+        if (game._myClientID && !currentClientID) {
+          currentClientID = game._myClientID
+          console.log('[HAMMER] 🆔 Bootstrapped clientID from events-display:', currentClientID)
+        }
+
+        // Try to get players from _players
+        if (game._players) {
+          const playersMap = game._players
+          const playerList = playersMap instanceof Map ? [...playersMap.values()] :
+                            Array.isArray(playersMap) ? playersMap :
+                            Object.values(playersMap)
+
+          if (playerList.length > 0) {
+            return bootstrapPlayersFromList(playerList, 'events-display')
+          }
+        }
+
+        // Also try _myPlayer directly if we have clientID
+        if (game._myPlayer && currentClientID) {
+          const p = game._myPlayer
+          const smallID = typeof p.smallID === 'function' ? p.smallID() : p.smallID
+          if (smallID != null) {
+            mySmallID = smallID
+            myTeam = typeof p.team === 'function' ? p.team() : p.team
+            playerDataReady = true
+            console.log('[HAMMER] 🎮 Bootstrapped myPlayer from events-display - mySmallID:', mySmallID)
+            return true
+          }
+        }
+      }
+    } catch (e) {
+      console.warn('[HAMMER] Bootstrap (events-display) error:', e)
+    }
+
+    return false
+  }
+
+  // Helper to bootstrap players from a list
+  function bootstrapPlayersFromList(playerList, source) {
+    for (const p of playerList) {
+      if (!p) continue
+      // Players might be PlayerView objects with methods
+      const id = typeof p.id === 'function' ? p.id() : p.id
+      const smallID = typeof p.smallID === 'function' ? p.smallID() : p.smallID
+      const clientID = typeof p.clientID === 'function' ? p.clientID() : p.clientID
+      const name = typeof p.name === 'function' ? p.name() : (p.displayName || p.name)
+      const isAlive = typeof p.isAlive === 'function' ? p.isAlive() : p.isAlive
+      const team = typeof p.team === 'function' ? p.team() : p.team
+      const troops = typeof p.troops === 'function' ? p.troops() : p.troops
+      const gold = typeof p.gold === 'function' ? p.gold() : p.gold
+
+      const playerData = { id, smallID, clientID, name, displayName: name, isAlive, team, troops, gold }
+      playersById.set(id, playerData)
+      if (smallID != null) playersBySmallId.set(smallID, playerData)
+
+      // Find our player
+      if (clientID === currentClientID) {
+        mySmallID = smallID
+        myTeam = team
+        playerDataReady = true
+        console.log('[HAMMER] 🎮 Bootstrapped player data from', source, '- mySmallID:', mySmallID)
+      }
+    }
+
+    if (playersById.size > 0) {
+      console.log('[HAMMER] 📊 Bootstrapped', playersById.size, 'players from', source)
+      playerDataReady = true
+      return true
+    }
+    return false
+  }
+
+  // Try to bootstrap immediately and after delays
+  setTimeout(bootstrapPlayerData, 100)
+  setTimeout(bootstrapPlayerData, 500)
+  setTimeout(bootstrapPlayerData, 1000)
+
+  // Legacy compatibility - keep old code path but it won't match anymore
+  // (the deepFindWebSocket above handles everything now)
+  try {
+    const commonPropsLegacy = ['socket', 'ws', 'gameSocket', '_socket', 'connection']
+    for (const prop of commonPropsLegacy) {
       try {
         if (window[prop] && window[prop] instanceof OriginalWebSocket && !window[prop].__hammerWrapped) {
           console.log(`[HAMMER] 🔍 Found existing WebSocket at window.${prop}`)
@@ -1338,22 +1508,27 @@
   let eventBusAttempts = 0
   const maxEventBusAttempts = 50
 
+  function onEventBusFound() {
+    // Run initial scan and discovery as soon as EventBus is available
+    setTimeout(() => {
+      scanAllEventClasses()
+      discoverDonationEventClasses()
+    }, 100)
+  }
+
   function findEventBus() {
     if (eventBus) return true
 
     eventBusAttempts++
-    console.log(`[HAMMER] 🔍 EventBus search attempt ${eventBusAttempts}/${maxEventBusAttempts}`)
+    console.log(`[HAMMER] EventBus search attempt ${eventBusAttempts}/${maxEventBusAttempts}`)
 
     // Try to find EventBus via events-display element
     try {
       const eventsDisplay = document.querySelector('events-display')
-      console.log('[HAMMER] events-display element:', eventsDisplay ? 'found' : 'not found')
-      if (eventsDisplay) {
-        console.log('[HAMMER] events-display.eventBus:', eventsDisplay.eventBus ? 'found' : 'not found')
-      }
       if (eventsDisplay && eventsDisplay.eventBus) {
         eventBus = eventsDisplay.eventBus
-        console.log('[HAMMER] ✅ Found EventBus via events-display')
+        console.log('[HAMMER] Found EventBus via events-display')
+        onEventBusFound()
         return true
       }
     } catch (e) {
@@ -1365,7 +1540,8 @@
       const gameView = document.querySelector('game-view')
       if (gameView && gameView.eventBus) {
         eventBus = gameView.eventBus
-        console.log('[HAMMER] ✅ Found EventBus via game-view')
+        console.log('[HAMMER] Found EventBus via game-view')
+        onEventBusFound()
         return true
       }
     } catch (e) {
@@ -1378,7 +1554,8 @@
       try {
         if (window[prop] && typeof window[prop].emit === 'function') {
           eventBus = window[prop]
-          console.log(`[HAMMER] ✅ Found EventBus at window.${prop}`)
+          console.log(`[HAMMER] Found EventBus at window.${prop}`)
+          onEventBusFound()
           return true
         }
       } catch {}
@@ -1395,37 +1572,33 @@
     return false
   }
 
-  // Start searching for EventBus immediately and aggressively
-  setTimeout(findEventBus, 100)
-  setTimeout(findEventBus, 500)
-  setTimeout(findEventBus, 1000)
-  setTimeout(findEventBus, 2000)
-  setTimeout(findEventBus, 3000)
-
-  // Also search whenever DOM changes
-  const eventBusObserver = new MutationObserver(() => {
-    if (!eventBus) findEventBus()
-  })
-  eventBusObserver.observe(document.body, { childList: true, subtree: true })
-
-  // ===== EVENTBUS DONATION EVENTS =====
-  // These mirror the game's own event classes from SendResourceModal.ts
-
-  class SendDonateGoldIntentEvent {
-    constructor(recipient, gold) {
-      this.recipient = recipient  // Must be player object with .id property
-      this.gold = gold              // BigInt or number
-    }
-  }
-
-  class SendDonateTroopsIntentEvent {
-    constructor(recipient, troops) {
-      this.recipient = recipient    // Must be player object with .id property
-      this.troops = troops          // number
-    }
-  }
+  // Search for EventBus periodically until found
+  const eventBusSearchInterval = setInterval(() => {
+    if (findEventBus()) clearInterval(eventBusSearchInterval)
+  }, 200)
+  eventCleanup.push(() => clearInterval(eventBusSearchInterval))
 
   // ===== GAMEVIEW HOOK FOR DISPLAYEVENTS =====
+  // Clear stale hooks from previous script injections at startup
+  function clearStaleHooks() {
+    try {
+      const eventsDisplay = document.querySelector('events-display')
+      if (eventsDisplay?.game?.__hammerHooked) {
+        console.log('[HAMMER] Clearing stale hook from previous session')
+        delete eventsDisplay.game.__hammerHooked
+      }
+      if (eventsDisplay?.__hammerComponentHooked) {
+        console.log('[HAMMER] Clearing stale component hook from previous session')
+        delete eventsDisplay.__hammerComponentHooked
+      }
+    } catch (e) {
+      // Ignore errors during cleanup
+    }
+  }
+
+  // Run cleanup immediately
+  clearStaleHooks()
+
   function hookGameView() {
     // Try to find GameView instance via EventsDisplay element
     const eventsDisplay = document.querySelector('events-display')
@@ -1433,13 +1606,11 @@
     // Diagnostic logging
     if (!eventsDisplay) {
       log('[DEBUG] GameView hook attempt: events-display element not found')
-      addDiagnosticEvent('HOOK_ATTEMPT', { reason: 'events-display not found', attempt: gameViewHookAttempts })
       return false
     }
 
     if (!eventsDisplay.game) {
       log('[DEBUG] GameView hook attempt: events-display found but .game property not set')
-      addDiagnosticEvent('HOOK_ATTEMPT', { reason: 'eventsDisplay.game not set', attempt: gameViewHookAttempts })
       return false
     }
 
@@ -1447,13 +1618,19 @@
 
     if (!gameView.updatesSinceLastTick) {
       log('[ERROR] GameView found but no updatesSinceLastTick method')
-      addDiagnosticEvent('HOOK_FAILED', { reason: 'updatesSinceLastTick method missing' })
       return false
     }
 
-    if (gameView.__hammerHooked) {
-      log('[DEBUG] GameView already hooked')
+    // Check if already hooked by THIS session (not stale)
+    if (gameView.__hammerHooked && gameViewHooked) {
+      log('[DEBUG] GameView already hooked by this session')
       return true
+    }
+
+    // Clear stale hook if present
+    if (gameView.__hammerHooked && !gameViewHooked) {
+      console.log('[HAMMER] Re-hooking GameView (stale hook detected)')
+      delete gameView.__hammerHooked
     }
 
     const originalUpdatesSinceLastTick = gameView.updatesSinceLastTick.bind(gameView)
@@ -1466,15 +1643,6 @@
         const displayEvents = updates[GameUpdateType.DisplayEvent]
         if (displayEvents?.length) {
           displayEventsReceived += displayEvents.length
-          addDiagnosticEvent('DISPLAY_EVENTS', {
-            count: displayEvents.length,
-            events: displayEvents.map(e => ({
-              type: e.messageType,
-              message: e.message,
-              playerID: e.playerID,
-              hasParams: !!e.params
-            }))
-          })
           log('[DEBUG] DisplayEvents from GameView:', displayEvents.length)
           for (const evt of displayEvents) {
             try {
@@ -1491,7 +1659,6 @@
 
     gameView.__hammerHooked = true
     gameViewHooked = true
-    addDiagnosticEvent('GAMEVIEW_HOOKED', { success: true, attempts: gameViewHookAttempts })
     console.log('[HAMMER] ✅ Successfully hooked GameView.updatesSinceLastTick() after', gameViewHookAttempts, 'attempts')
     return true
   }
@@ -1515,7 +1682,6 @@
     if (gameViewHookAttempts >= maxGameViewAttempts) {
       log('[ERROR] Failed to hook GameView after', maxGameViewAttempts, 'attempts')
       log('[ERROR] Donation tracking will NOT work - DisplayEvents cannot be captured')
-      addDiagnosticEvent('HOOK_FAILED', { reason: 'max attempts reached', attempts: maxGameViewAttempts })
       if (hookCheckInterval) {
         clearInterval(hookCheckInterval)
         hookCheckInterval = null
@@ -1526,30 +1692,7 @@
     return false
   }
 
-  // Strategy 1: Use MutationObserver to watch for events-display element
-  const hookObserver = new MutationObserver((mutations) => {
-    if (gameViewHooked) {
-      hookObserver.disconnect()
-      return
-    }
-
-    const eventsDisplay = document.querySelector('events-display')
-    if (eventsDisplay) {
-      log('[DEBUG] events-display element detected via MutationObserver')
-      addDiagnosticEvent('ELEMENT_DETECTED', { method: 'MutationObserver' })
-      // Give it a moment for the game property to be set
-      setTimeout(() => {
-        if (!gameViewHooked) {
-          tryHookGameView()
-        }
-      }, 100)
-    }
-  })
-
-  hookObserver.observe(document.body, { childList: true, subtree: true })
-  eventCleanup.push(() => hookObserver.disconnect())
-
-  // Strategy 2: Periodic checks (fallback)
+  // Periodic GameView hook attempts until successful
   hookCheckInterval = setInterval(() => {
     if (!gameViewHooked) {
       tryHookGameView()
@@ -1557,238 +1700,27 @@
       clearInterval(hookCheckInterval)
       hookCheckInterval = null
     }
-  }, 100)
+  }, 100)  // Check every 100ms for faster mid-match hooking
   eventCleanup.push(() => {
     if (hookCheckInterval) clearInterval(hookCheckInterval)
   })
 
-  // Strategy 3: Immediate attempt
+  // Immediate hook attempts for mid-match start (try immediately, then at 50ms, 100ms, 250ms, 500ms)
+  tryHookGameView()  // Immediate
+  setTimeout(tryHookGameView, 50)
+  setTimeout(tryHookGameView, 100)
+  setTimeout(tryHookGameView, 250)
   setTimeout(tryHookGameView, 500)
 
-  // ===== DIRECT COMPONENT HOOK =====
-  // Hook directly into EventsDisplay.onDisplayMessageEvent
-  let componentHooked = false
-
-  function hookEventsDisplayComponent() {
-    const eventsDisplay = document.querySelector('events-display')
-
-    if (!eventsDisplay) {
-      setTimeout(hookEventsDisplayComponent, 200)
-      return
-    }
-
-    if (componentHooked) return
-
-    // Hook the onDisplayMessageEvent method directly
-    if (eventsDisplay.onDisplayMessageEvent) {
-      const originalMethod = eventsDisplay.onDisplayMessageEvent.bind(eventsDisplay)
-
-      eventsDisplay.onDisplayMessageEvent = function(event) {
-        // Log the raw event
-        log('[COMPONENT] DisplayEvent received:', {
-          message: event.message,
-          messageType: event.messageType,
-          playerID: event.playerID,
-          goldAmount: event.goldAmount,
-          params: event.params
-        })
-
-        addDiagnosticEvent('COMPONENT_EVENT', {
-          message: event.message,
-          messageType: event.messageType,
-          hasParams: !!event.params,
-          hasGoldAmount: event.goldAmount !== undefined
-        })
-
-        // Process the event
-        try {
-          processDisplayMessage(event)
-        } catch (err) {
-          log('[COMPONENT] Error processing:', err)
-        }
-
-        // Call original method
-        return originalMethod(event)
-      }
-
-      componentHooked = true
-      log('[HAMMER] ✅ Hooked EventsDisplay.onDisplayMessageEvent()')
-      addDiagnosticEvent('COMPONENT_HOOKED', { success: true })
+  // Status log after 1 second
+  setTimeout(() => {
+    if (gameViewHooked) {
+      console.log('[HAMMER] ✅ Donation tracking ready')
     } else {
-      log('[COMPONENT] onDisplayMessageEvent not found, retrying...')
-      setTimeout(hookEventsDisplayComponent, 200)
+      console.log('[HAMMER] ⏳ Still waiting for game to load... (this is normal if in lobby)')
     }
-  }
+  }, 1000)
 
-  setTimeout(hookEventsDisplayComponent, 1000)
-
-  // ===== NOVEL APPROACH: DOM OBSERVATION =====
-  // Watch the EventsDisplay element for new messages appearing in the UI
-  // This works regardless of code-level interception success
-  let domObserverActive = false
-  let donationsFromDOM = 0
-
-  function setupDOMObserver() {
-    const eventsDisplay = document.querySelector('events-display')
-
-    if (!eventsDisplay) {
-      // Retry until element exists
-      setTimeout(setupDOMObserver, 200)
-      return
-    }
-
-    if (domObserverActive) return // Already set up
-
-    log('[HAMMER] 🎯 Setting up DOM observer for EventsDisplay')
-    addDiagnosticEvent('DOM_OBSERVER', { status: 'starting' })
-
-    const domObserver = new MutationObserver((mutations) => {
-      for (const mutation of mutations) {
-        for (const node of mutation.addedNodes) {
-          if (!node.textContent) continue
-
-          const text = node.textContent.trim()
-
-          // Look for donation-related messages
-          if (text.includes('gold') || text.includes('troops') || text.includes('Gold') || text.includes('Troops')) {
-            log('[DOM] New message detected:', text)
-            addDiagnosticEvent('DOM_MESSAGE', { text })
-            donationsFromDOM++
-
-            try {
-              parseDonationFromDOM(text)
-            } catch (err) {
-              log('[DOM] Error parsing:', err)
-            }
-          }
-        }
-      }
-    })
-
-    // Observe the EventsDisplay element for any child changes
-    domObserver.observe(eventsDisplay, {
-      childList: true,
-      subtree: true,
-      characterData: true
-    })
-
-    eventCleanup.push(() => domObserver.disconnect())
-    domObserverActive = true
-    log('[HAMMER] ✅ DOM observer active - watching for donation messages')
-    addDiagnosticEvent('DOM_OBSERVER', { status: 'active' })
-  }
-
-  function parseDonationFromDOM(text) {
-    // Try to extract donation info from the visible text
-    // Common patterns:
-    // "Received 1000 gold from PlayerName"
-    // "Sent 500 troops to PlayerName"
-    // "Received 1.5K gold from trade with PlayerName"
-
-    let match
-
-    // Received gold
-    match = text.match(/Received\s+([\d,\.]+[KkMm]?)\s+gold\s+from\s+(?:trade\s+with\s+)?(.+?)(?:\.|$)/i)
-    if (match) {
-      const [_, amtStr, name] = match
-      const amt = parseAbbreviatedNumber(amtStr)
-      log('[DOM] ✅ Parsed RECEIVED GOLD:', { name, amt })
-      recordInboundGold(name, amt)
-      addDiagnosticEvent('DONATION_PARSED', { type: 'received_gold', name, amt, source: 'DOM' })
-      return
-    }
-
-    // Sent gold
-    match = text.match(/Sent\s+([\d,\.]+[KkMm]?)\s+gold\s+to\s+(.+?)(?:\.|$)/i)
-    if (match) {
-      const [_, amtStr, name] = match
-      const amt = parseAbbreviatedNumber(amtStr)
-      log('[DOM] ✅ Parsed SENT GOLD:', { name, amt })
-      recordOutboundGold(name, amt)
-      addDiagnosticEvent('DONATION_PARSED', { type: 'sent_gold', name, amt, source: 'DOM' })
-      return
-    }
-
-    // Received troops
-    match = text.match(/Received\s+([\d,\.]+[KkMm]?)\s+troops\s+from\s+(.+?)(?:\.|$)/i)
-    if (match) {
-      const [_, amtStr, name] = match
-      const amt = parseAbbreviatedNumber(amtStr)
-      log('[DOM] ✅ Parsed RECEIVED TROOPS:', { name, amt })
-      recordInboundTroops(name, amt)
-      addDiagnosticEvent('DONATION_PARSED', { type: 'received_troops', name, amt, source: 'DOM' })
-      return
-    }
-
-    // Sent troops
-    match = text.match(/Sent\s+([\d,\.]+[KkMm]?)\s+troops\s+to\s+(.+?)(?:\.|$)/i)
-    if (match) {
-      const [_, amtStr, name] = match
-      const amt = parseAbbreviatedNumber(amtStr)
-      log('[DOM] ✅ Parsed SENT TROOPS:', { name, amt })
-      recordOutboundTroops(name, amt)
-      addDiagnosticEvent('DONATION_PARSED', { type: 'sent_troops', name, amt, source: 'DOM' })
-      return
-    }
-
-    log('[DOM] No match for:', text)
-  }
-
-  // Helper functions to record donations
-  function recordInboundGold(playerName, amount) {
-    const key = `gold-${playerName}`
-    S.inbound.set(key, (S.inbound.get(key) || 0) + amount)
-    S.feedIn.push({
-      type: 'gold',
-      from: playerName,
-      amt: amount,
-      ts: Date.now()
-    })
-    if (S.feedIn.length > 100) S.feedIn.shift()
-    donationsTracked++
-  }
-
-  function recordOutboundGold(playerName, amount) {
-    const key = `gold-${playerName}`
-    S.outbound.set(key, (S.outbound.get(key) || 0) + amount)
-    S.feedOut.push({
-      type: 'gold',
-      to: playerName,
-      amt: amount,
-      ts: Date.now()
-    })
-    if (S.feedOut.length > 100) S.feedOut.shift()
-    donationsTracked++
-  }
-
-  function recordInboundTroops(playerName, amount) {
-    const key = `troops-${playerName}`
-    S.inbound.set(key, (S.inbound.get(key) || 0) + amount)
-    S.feedIn.push({
-      type: 'troops',
-      from: playerName,
-      amt: amount,
-      ts: Date.now()
-    })
-    if (S.feedIn.length > 100) S.feedIn.shift()
-    donationsTracked++
-  }
-
-  function recordOutboundTroops(playerName, amount) {
-    const key = `troops-${playerName}`
-    S.outbound.set(key, (S.outbound.get(key) || 0) + amount)
-    S.feedOut.push({
-      type: 'troops',
-      to: playerName,
-      amt: amount,
-      ts: Date.now()
-    })
-    if (S.feedOut.length > 100) S.feedOut.shift()
-    donationsTracked++
-  }
-
-  // Start the DOM observer
-  setTimeout(setupDOMObserver, 1000)
 
   // ===== CANVAS INTERCEPTION =====
   try {
@@ -1799,7 +1731,12 @@
         const canvas = this.canvas
         if (canvas?.width && canvas.height) {
           targetCanvas = canvas
-          currentTransform = { a: num(a) || 1, d: num(d) || 1, e: num(e) || 0, f: num(f) || 0 }
+          // Handle DOMMatrix object form: ctx.setTransform(matrix)
+          if (typeof a === 'object' && a !== null) {
+            currentTransform = { a: a.a || 1, d: a.d || 1, e: a.e || 0, f: a.f || 0 }
+          } else {
+            currentTransform = { a: num(a) || 1, d: num(d) || 1, e: num(e) || 0, f: num(f) || 0 }
+          }
           screenCanvasWidth = canvas.width | 0
           screenCanvasHeight = canvas.height | 0
         }
@@ -1857,8 +1794,16 @@
         return
       }
 
-      const mouseWorldX = Math.floor((lastMouseClient.x - currentTransform.e) / ((screenCanvasWidth / worldTilesWidth) * currentTransform.a))
-      const mouseWorldY = Math.floor((lastMouseClient.y - currentTransform.f) / ((screenCanvasHeight / worldTilesHeight) * currentTransform.d))
+      const rect = targetCanvas.getBoundingClientRect()
+      // Convert CSS pixels to canvas pixels (handles high-DPI/CSS scaling)
+      const pixelX = (lastMouseClient.x - rect.left) * (screenCanvasWidth / rect.width)
+      const pixelY = (lastMouseClient.y - rect.top) * (screenCanvasHeight / rect.height)
+      // Invert setTransform to get transform-space coordinates
+      const txX = (pixelX - currentTransform.e) / currentTransform.a
+      const txY = (pixelY - currentTransform.f) / currentTransform.d
+      // Transform space → tile coordinates (terrain drawn at -mapWidth/2, -mapHeight/2)
+      const mouseWorldX = Math.floor(txX + worldTilesWidth / 2)
+      const mouseWorldY = Math.floor(txY + worldTilesHeight / 2)
       const tileRef = mouseWorldY * worldTilesWidth + mouseWorldX
 
       const ownerSmallID = tileOwnerByRef.get(tileRef)
@@ -1903,6 +1848,7 @@
     if (e.altKey && e.code === 'KeyF') {
       e.preventDefault()
       e.stopImmediatePropagation()
+      if (Date.now() - asTroopsLastToggle < 600) { handled = true; return false }
       if (S.asTroopsRunning) {
         asTroopsStop()
         showStatus('⏸️ Auto-Feeder STOPPED')
@@ -1975,159 +1921,195 @@
   // Cache for discovered event classes
   let donateGoldEventClass = null
   let donateTroopsEventClass = null
+  let emojiEventClass = null
+  let quickChatEventClass = null
+  let discoveryMethod = { troops: null, gold: null } // 'property', 'prototype', 'cached', 'hardcoded'
+  let lastScanResults = [] // stores probe results for diagnostics UI
+
+  // Probe a single event class for donation-related properties
+  function probeEventClass(EventClass) {
+    const result = {
+      name: EventClass.name,
+      class: EventClass,
+      properties: [],
+      prototypeKeys: [],
+      hasRecipient: false,
+      hasTroops: false,
+      hasGold: false,
+      hasEmoji: false,
+      hasQuickChatKey: false,
+      constructable: false,
+      constructableWithArgs: false,
+      isDonation: false,
+      donationType: null, // 'troops', 'gold', 'emoji', or 'quick_chat'
+    }
+
+    // Check prototype for getter/method names
+    try {
+      result.prototypeKeys = Object.getOwnPropertyNames(EventClass.prototype)
+        .filter(k => k !== 'constructor')
+    } catch {}
+
+    // Try default constructor
+    try {
+      const inst = new EventClass()
+      result.constructable = true
+      result.properties = Object.keys(inst)
+      result.hasRecipient = 'recipient' in inst
+      result.hasTroops = 'troops' in inst
+      result.hasGold = 'gold' in inst
+      result.hasEmoji = 'emoji' in inst
+      result.hasQuickChatKey = 'quickChatKey' in inst
+    } catch {}
+
+    // Try constructor with args if default failed or missed properties
+    if (!result.constructable || (!result.hasRecipient && !result.hasTroops && !result.hasGold)) {
+      try {
+        const inst = new EventClass(null, 0)
+        result.constructableWithArgs = true
+        const keys = Object.keys(inst)
+        if (keys.length > result.properties.length) result.properties = keys
+        if (!result.hasRecipient) result.hasRecipient = 'recipient' in inst
+        if (!result.hasTroops) result.hasTroops = 'troops' in inst
+        if (!result.hasGold) result.hasGold = 'gold' in inst
+        if (!result.hasEmoji) result.hasEmoji = 'emoji' in inst
+        if (!result.hasQuickChatKey) result.hasQuickChatKey = 'quickChatKey' in inst
+      } catch {}
+    }
+
+    // Also check prototype keys for properties
+    if (!result.hasRecipient) result.hasRecipient = result.prototypeKeys.includes('recipient')
+    if (!result.hasTroops) result.hasTroops = result.prototypeKeys.includes('troops')
+    if (!result.hasGold) result.hasGold = result.prototypeKeys.includes('gold')
+    if (!result.hasEmoji) result.hasEmoji = result.prototypeKeys.includes('emoji')
+    if (!result.hasQuickChatKey) result.hasQuickChatKey = result.prototypeKeys.includes('quickChatKey')
+
+    // Classify
+    if (result.hasRecipient && result.hasTroops) {
+      result.isDonation = true
+      result.donationType = 'troops'
+    } else if (result.hasRecipient && result.hasGold) {
+      result.isDonation = true
+      result.donationType = 'gold'
+    } else if (result.hasRecipient && result.hasEmoji) {
+      result.donationType = 'emoji'
+    } else if (result.hasRecipient && result.hasQuickChatKey) {
+      result.donationType = 'quick_chat'
+    }
+
+    return result
+  }
+
+  // Scan all EventBus classes and return probe results
+  function scanAllEventClasses() {
+    if (!eventBus || !eventBus.listeners) return []
+
+    const results = []
+    for (const [eventClass, handlers] of eventBus.listeners.entries()) {
+      const probe = probeEventClass(eventClass)
+      probe.handlerCount = handlers.length
+      results.push(probe)
+    }
+    lastScanResults = results
+    return results
+  }
 
   // Discover the actual minified event classes used by the game
   function discoverDonationEventClasses() {
     if (!eventBus || !eventBus.listeners) {
-      log('[EVENT-DISCOVERY] ❌ EventBus or listeners not available')
+      log('[EVENT-DISCOVERY] EventBus or listeners not available')
       return false
     }
 
-    log('[EVENT-DISCOVERY] 🔍 Examining EventBus listeners...')
+    // Reset
+    donateGoldEventClass = null
+    donateTroopsEventClass = null
+    emojiEventClass = null
+    quickChatEventClass = null
+    discoveryMethod = { troops: null, gold: null }
 
-    // Hard-code known working classes (discovered through testing)
-    for (const [eventClass, handlers] of eventBus.listeners.entries()) {
-      if (eventClass.name === 'Rp') {
-        donateGoldEventClass = eventClass
-        log('[EVENT-DISCOVERY] ✅ Using known gold donation class: Rp')
+    // Scan all classes
+    const probes = scanAllEventClasses()
+
+    log('[EVENT-DISCOVERY] Scanned', probes.length, 'event classes:',
+      probes.map(p => `${p.name}(${p.handlerCount})`).join(', '))
+
+    // Property-based discovery (most reliable)
+    for (const probe of probes) {
+      if (probe.donationType === 'troops' && !donateTroopsEventClass) {
+        donateTroopsEventClass = probe.class
+        discoveryMethod.troops = 'property'
+        log('[EVENT-DISCOVERY] Troops class:', probe.name,
+          '(properties:', probe.properties.join(', '), ')')
       }
-      if (eventClass.name === 'Op') {
-        donateTroopsEventClass = eventClass
-        log('[EVENT-DISCOVERY] ✅ Using known troops donation class: Op')
+      if (probe.donationType === 'gold' && !donateGoldEventClass) {
+        donateGoldEventClass = probe.class
+        discoveryMethod.gold = 'property'
+        log('[EVENT-DISCOVERY] Gold class:', probe.name,
+          '(properties:', probe.properties.join(', '), ')')
       }
-      if (donateGoldEventClass && donateTroopsEventClass) break
-    }
-
-    const eventClasses = []
-    for (const [eventClass, handlers] of eventBus.listeners.entries()) {
-      eventClasses.push({
-        name: eventClass.name,
-        class: eventClass,
-        handlerCount: handlers.length
-      })
-    }
-
-    log('[EVENT-DISCOVERY] Found', eventClasses.length, 'event classes:',
-      eventClasses.map(e => `${e.name}(${e.handlerCount})`).join(', '))
-
-    // Try to identify troops donation event by creating test instances
-    // and checking if they have recipient/troops properties
-    for (const {name, class: EventClass} of eventClasses) {
-      try {
-        // Try to create an instance with typical donation parameters
-        const testEvent = new EventClass()
-
-        // Check if this event has properties that look like donations
-        const hasRecipient = 'recipient' in testEvent
-        const hasTroops = 'troops' in testEvent
-
-        if (hasRecipient && hasTroops && !donateTroopsEventClass) {
-          log('[EVENT-DISCOVERY] 🎯 Found troops donation event class:', name)
-          donateTroopsEventClass = EventClass
-        }
-
-        if (donateGoldEventClass && donateTroopsEventClass) {
-          log('[EVENT-DISCOVERY] ✅ Both donation event classes discovered!')
-          return true
-        }
-      } catch (err) {
-        // Some classes might not have default constructors, that's OK
+      if (probe.donationType === 'emoji' && !emojiEventClass) {
+        emojiEventClass = probe.class
+        log('[EVENT-DISCOVERY] Emoji class:', probe.name)
+      }
+      if (probe.donationType === 'quick_chat' && !quickChatEventClass) {
+        quickChatEventClass = probe.class
+        log('[EVENT-DISCOVERY] QuickChat class:', probe.name)
       }
     }
 
-    if (donateGoldEventClass && !donateTroopsEventClass) {
-      log('[EVENT-DISCOVERY] ⚠️ Gold class found (Rp), but troops class not auto-discovered')
-      log('[EVENT-DISCOVERY] Try testing similar classes: Op, Bp, Dp, Ep, Lp, Mp, Pp, etc.')
-      return false
+    // Log results
+    const troopsStatus = donateTroopsEventClass
+      ? `troops=${donateTroopsEventClass.name} (${discoveryMethod.troops})`
+      : 'troops=NOT FOUND'
+    const goldStatus = donateGoldEventClass
+      ? `gold=${donateGoldEventClass.name} (${discoveryMethod.gold})`
+      : 'gold=NOT FOUND'
+
+    if (donateGoldEventClass && donateTroopsEventClass) {
+      console.log(`%c[HAMMER]%c Event classes: ${troopsStatus}, ${goldStatus}`,
+        'color:#deb887;font-weight:bold', 'color:inherit')
+      return true
     }
 
-    log('[EVENT-DISCOVERY] ⚠️ Could not auto-discover event classes')
+    console.warn(`[HAMMER] Event class discovery incomplete: ${troopsStatus}, ${goldStatus}`)
+    if (!donateTroopsEventClass || !donateGoldEventClass) {
+      console.warn('[HAMMER] Open Hammer > Diagnostics tab to inspect and fix')
+    }
     return false
   }
 
   // ===== AUTO-DONATE TROOPS FUNCTIONS =====
   function asSendTroops(targetId, amount) {
-    log('[AUTO-SEND] asSendTroops called:', { targetId, amount })
-
     // Try EventBus approach first (preferred - doesn't need clientID)
     if (eventBus) {
-      log('[AUTO-SEND] Using EventBus approach')
+      if (!donateTroopsEventClass) discoverDonationEventClasses()
 
-      // Discover event classes if not already done
-      if (!donateTroopsEventClass && !donateGoldEventClass) {
-        discoverDonationEventClasses()
-      }
+      if (!donateTroopsEventClass) {
+        // Fall through to WebSocket fallback below
+      } else {
+        const playerView = getPlayerView(targetId)
+        if (!playerView) return false
 
-      // Get actual PlayerView instance (not plain object)
-      const playerView = getPlayerView(targetId)
-      if (!playerView) {
-        log('[AUTO-SEND] ❌ PlayerView not found for ID:', targetId)
-        return false
-      }
-
-      try {
-        let event
-        if (donateTroopsEventClass) {
-          // Use the actual minified event class from the game
-          log('[AUTO-SEND] Using discovered event class:', donateTroopsEventClass.name)
-          event = new donateTroopsEventClass(playerView, amount == null ? null : num(amount))
-        } else {
-          // Fallback to custom class (probably won't work but try anyway)
-          log('[AUTO-SEND] ⚠️ Using fallback custom event class')
-          event = new SendDonateTroopsIntentEvent(playerView, amount == null ? null : num(amount))
+        try {
+          const event = new donateTroopsEventClass(playerView, amount == null ? null : num(amount))
+          eventBus.emit(event)
+          return true
+        } catch (err) {
+          log('[AUTO-TROOPS] EventBus emit failed:', err)
         }
-
-        log('[AUTO-SEND] Emitting troops donation event:', {
-          eventClass: event.constructor.name,
-          recipientName: playerView.name ? playerView.name() : 'unknown',
-          recipientId: targetId,
-          troops: amount
-        })
-        eventBus.emit(event)
-        log('[AUTO-SEND] ✅ EventBus emit successful')
-        return true
-      } catch (err) {
-        log('[AUTO-SEND] ❌ EventBus emit failed:', err)
-        log('[AUTO-SEND] Falling back to WebSocket approach')
       }
     }
 
-    // Fallback: Direct WebSocket approach (only if EventBus failed)
-    log('[AUTO-SEND] ⚠️ EventBus not available, using WebSocket fallback')
-
-    // Verify clientID for WebSocket approach
-    const cidCheck = verifyClientID()
-    if (!cidCheck.match && cidCheck.hammerClientID) {
-      log('[AUTO-SEND] ⚠️ Warning: clientID mismatch detected')
-      log('[AUTO-SEND] Hammer clientID:', cidCheck.hammerClientID)
-      log('[AUTO-SEND] Game clientID:', cidCheck.gameViewClientID || cidCheck.transportClientID)
-    }
-
-    if (!gameSocket) {
-      log('[AUTO-SEND] ❌ gameSocket is null')
-      return false
-    }
-    if (gameSocket.readyState !== 1) {
-      log('[AUTO-SEND] ❌ gameSocket not OPEN, state:', gameSocket.readyState)
-      return false
-    }
-    if (!currentClientID) {
-      log('[AUTO-SEND] ❌ currentClientID not set')
-      return false
-    }
+    // Fallback: Direct WebSocket approach
+    if (!gameSocket || gameSocket.readyState !== 1 || !currentClientID) return false
 
     const intent = { type: 'donate_troops', clientID: currentClientID, recipient: targetId, troops: amount == null ? null : num(amount) }
-
-    log('[AUTO-SEND] Sending troops intent:', intent)
-
     try {
-      const message = JSON.stringify({ type: 'intent', intent })
-      log('[AUTO-SEND] WebSocket.send():', message)
-      gameSocket.send(message)
-      log('[AUTO-SEND] ✅ Troops send successful')
+      gameSocket.send(JSON.stringify({ type: 'intent', intent }))
       return true
     } catch (err) {
-      log('[AUTO-SEND] ❌ Exception:', err)
+      log('[AUTO-TROOPS] WebSocket send failed:', err)
       return false
     }
   }
@@ -2140,111 +2122,74 @@
     const resolved = []
     for (const tgt of S.asTroopsTargets) {
       const lower = String(tgt).toLowerCase()
-      const p = playersByName.get(lower)
+      let p = null
+      for (const player of playersById.values()) {
+        if ((player.displayName || player.name || '').toLowerCase() === lower) { p = player; break }
+      }
       if (p) resolved.push({ id: p.id, name: p.displayName || p.name })
     }
     return resolved
   }
 
   function asTroopsTick() {
-    log('[AUTO-SEND] asTroopsTick started, running:', S.asTroopsRunning)
-
     if (!S.asTroopsRunning) {
-      log('[AUTO-SEND] Not running, exiting')
+      if (asTroopsTimer) { clearInterval(asTroopsTimer); asTroopsTimer = null }
       return
     }
 
     const now = Date.now()
     const targets = asResolveTargets()
-
-    log('[AUTO-SEND] Resolved troop targets:', targets.length, targets.map(t => t.name))
-
-    if (!targets.length) {
-      log('[AUTO-SEND] No targets, exiting')
-      return
-    }
+    if (!targets.length) return
 
     const me = readMyPlayer()
-    if (!me) {
-      log('[AUTO-SEND] Player data not available')
-      return
-    }
+    if (!me) return
 
-    const troops = me.troops || 0
+    const troops = Number(me.troops || 0)
     const maxT = estimateMaxTroops(me.tilesOwned, me.smallID)
     const troopPct = maxT > 0 ? (troops / maxT) * 100 : 0
 
-    log('[AUTO-SEND] My troops:', troops, 'Max:', maxT, 'Percent:', troopPct.toFixed(1) + '%')
-
-    if (!maxT || troopPct < S.asTroopsThreshold) {
-      log(`[AUTO-SEND] Below threshold (${troopPct.toFixed(1)}% < ${S.asTroopsThreshold}%)`)
-      return
-    }
+    if (!maxT || troopPct < S.asTroopsThreshold) return
 
     const toSend = Math.max(1, Math.floor(troops * (S.asTroopsRatio / 100)))
-    log('[AUTO-SEND] Amount to send:', toSend, `(${S.asTroopsRatio}% of ${troops})`)
 
     for (const target of targets) {
-      log('[AUTO-SEND] Checking target:', target.name, target.id)
-
-      const isAlly = asIsAlly(target.id)
-      log('[AUTO-SEND] asIsAlly(', target.id, '):', isAlly)
-
-      if (!isAlly) {
-        log('[AUTO-SEND] Not an ally, skipping')
-        continue
-      }
+      if (!S.asTroopsRunning) return
+      if (!asIsAlly(target.id)) continue
 
       const last = S.asTroopsLastSend[target.id] || 0
       const cooldownMs = S.asTroopsCooldownSec * 1000
       const nextSend = last + cooldownMs
-      const remaining = Math.max(0, nextSend - now)
 
-      log('[AUTO-SEND] Cooldown check:', {
-        last,
-        cooldownMs,
-        nextSend,
-        remaining,
-        ready: now >= nextSend
-      })
-
-      // Track next send time for countdown display
       S.asTroopsNextSend[target.id] = nextSend
 
       if (now >= nextSend) {
-        log('[AUTO-SEND] ✅ Ready to send! Calling asSendTroops...')
         if (asSendTroops(target.id, toSend)) {
           S.asTroopsLastSend[target.id] = now
           S.asTroopsNextSend[target.id] = now + cooldownMs
           S.asTroopsLog.push(`[${fmtTime(nowDate())}] Sent ${short(toSend)} troops to ${target.name}`)
           if (S.asTroopsLog.length > 100) S.asTroopsLog.shift()
-          log(`[SUCCESS] Auto-troops: Sent ${toSend} troops to ${target.name}`)
         } else {
-          log(`[ERROR] Auto-troops: Send failed to ${target.name}`)
+          log(`[AUTO-TROOPS] Send failed to ${target.name}`)
         }
-      } else {
-        log('[AUTO-SEND] On cooldown, waiting', Math.ceil(remaining / 1000), 'seconds')
       }
     }
-
-    log('[AUTO-SEND] asTroopsTick finished')
   }
 
   let asTroopsTimer = null
+  let asTroopsLastToggle = 0
   function asTroopsStart() {
+    if (S.asTroopsRunning) return  // Already running
     S.asTroopsRunning = true
-    log('[AUTO-SEND] asTroopsStart called, setting up interval')
+    asTroopsLastToggle = Date.now()
     if (asTroopsTimer) clearInterval(asTroopsTimer)
-    asTroopsTimer = setInterval(() => {
-      log('[AUTO-SEND] ⏱️ Troops tick heartbeat - asTroopsTick about to run')
-      asTroopsTick()
-    }, 800)
-    log('[AUTO-SEND] ✅ Troops interval set, ID:', asTroopsTimer)
+    asTroopsTimer = setInterval(asTroopsTick, 800)
+    log('[AUTO-TROOPS] Started')
   }
   function asTroopsStop() {
     S.asTroopsRunning = false
-    log('[AUTO-SEND] asTroopsStop called')
+    asTroopsLastToggle = Date.now()
     if (asTroopsTimer) { clearInterval(asTroopsTimer); asTroopsTimer = null }
+    log('[AUTO-TROOPS] Stopped')
   }
 
   // ===== AUTO-DONATE GOLD FUNCTIONS =====
@@ -2258,15 +2203,15 @@
     }
 
     try {
-      // Try to get clientID from game-view element
+      // Try to get clientID from game-view element (lobby, not lobbyConfig)
       const gameView = document.querySelector('game-view')
-      if (gameView?.clientGameRunner?.lobbyConfig?.clientID) {
-        results.gameViewClientID = gameView.clientGameRunner.lobbyConfig.clientID
+      if (gameView?.clientGameRunner?.lobby?.clientID) {
+        results.gameViewClientID = gameView.clientGameRunner.lobby.clientID
       }
 
-      // Try to get clientID from Transport
-      if (gameView?.clientGameRunner?.transport?.lobbyConfig?.clientID) {
-        results.transportClientID = gameView.clientGameRunner.transport.lobbyConfig.clientID
+      // Try to get clientID from Transport lobby
+      if (gameView?.clientGameRunner?.transport?.lobby?.clientID) {
+        results.transportClientID = gameView.clientGameRunner.transport.lobby.clientID
       }
 
       // Check if they match
@@ -2282,92 +2227,92 @@
   }
 
   function asSendGold(targetId, amount) {
-    log('[AUTO-SEND] asSendGold called:', { targetId, amount })
-
     // Try EventBus approach first (preferred - doesn't need clientID)
     if (eventBus) {
-      log('[AUTO-SEND] Using EventBus approach')
+      if (!donateGoldEventClass) discoverDonationEventClasses()
 
-      // Discover event classes if not already done
-      if (!donateTroopsEventClass && !donateGoldEventClass) {
-        discoverDonationEventClasses()
-      }
+      if (!donateGoldEventClass) {
+        // Fall through to WebSocket fallback below
+      } else {
+        const playerView = getPlayerView(targetId)
+        if (!playerView) return false
 
-      // Get actual PlayerView instance (not plain object)
-      const playerView = getPlayerView(targetId)
-      if (!playerView) {
-        log('[AUTO-SEND] ❌ PlayerView not found for ID:', targetId)
-        return false
-      }
-
-      try {
-        // Game expects BigInt for gold amounts
-        const goldAmount = BigInt(num(amount))
-
-        let event
-        if (donateGoldEventClass) {
-          // Use the actual minified event class from the game
-          log('[AUTO-SEND] Using discovered event class:', donateGoldEventClass.name)
-          event = new donateGoldEventClass(playerView, goldAmount)
-        } else {
-          // Fallback to custom class (probably won't work but try anyway)
-          log('[AUTO-SEND] ⚠️ Using fallback custom event class')
-          event = new SendDonateGoldIntentEvent(playerView, goldAmount)
+        try {
+          const goldAmount = BigInt(num(amount))
+          const event = new donateGoldEventClass(playerView, goldAmount)
+          eventBus.emit(event)
+          return true
+        } catch (err) {
+          log('[AUTO-GOLD] EventBus emit failed:', err)
         }
-
-        log('[AUTO-SEND] Emitting gold donation event:', {
-          eventClass: event.constructor.name,
-          recipientName: playerView.name ? playerView.name() : 'unknown',
-          recipientId: targetId,
-          gold: amount
-        })
-        eventBus.emit(event)
-        log('[AUTO-SEND] ✅ EventBus emit successful')
-        return true
-      } catch (err) {
-        log('[AUTO-SEND] ❌ EventBus emit failed:', err)
-        log('[AUTO-SEND] Falling back to WebSocket approach')
       }
     }
 
-    // Fallback: Direct WebSocket approach (only if EventBus failed)
-    log('[AUTO-SEND] ⚠️ EventBus not available, using WebSocket fallback')
-
-    // Verify clientID for WebSocket approach
-    const cidCheck = verifyClientID()
-    if (!cidCheck.match && cidCheck.hammerClientID) {
-      log('[AUTO-SEND] ⚠️ Warning: clientID mismatch detected')
-      log('[AUTO-SEND] Hammer clientID:', cidCheck.hammerClientID)
-      log('[AUTO-SEND] Game clientID:', cidCheck.gameViewClientID || cidCheck.transportClientID)
-    }
-
-    if (!gameSocket) {
-      log('[AUTO-SEND] ❌ gameSocket is null')
-      return false
-    }
-    if (gameSocket.readyState !== 1) {
-      log('[AUTO-SEND] ❌ gameSocket not OPEN, state:', gameSocket.readyState)
-      return false
-    }
-    if (!currentClientID) {
-      log('[AUTO-SEND] ❌ currentClientID not set')
-      return false
-    }
+    // Fallback: Direct WebSocket approach
+    if (!gameSocket || gameSocket.readyState !== 1 || !currentClientID) return false
 
     const intent = { type: 'donate_gold', clientID: currentClientID, recipient: targetId, gold: num(amount) }
-
-    log('[AUTO-SEND] Sending gold intent:', intent)
-
     try {
-      const message = JSON.stringify({ type: 'intent', intent })
-      log('[AUTO-SEND] WebSocket.send():', message)
-      gameSocket.send(message)
-      log('[AUTO-SEND] ✅ Gold send successful')
+      gameSocket.send(JSON.stringify({ type: 'intent', intent }))
       return true
     } catch (err) {
-      log('[AUTO-SEND] ❌ Exception:', err)
+      log('[AUTO-GOLD] WebSocket send failed:', err)
       return false
     }
+  }
+
+  // ===== COMMS: EMOJI & QUICKCHAT =====
+  function sendEmoji(recipientId, emojiIndex) {
+    // Try EventBus first (but not for AllPlayers - EventBus uses PlayerView objects)
+    if (eventBus && emojiEventClass && recipientId !== 'AllPlayers') {
+      const playerView = getPlayerView(recipientId)
+      if (playerView) {
+        try {
+          const event = new emojiEventClass(playerView, emojiIndex)
+          eventBus.emit(event)
+          log('[COMMS] Emoji sent via EventBus to', recipientId)
+          return true
+        } catch (err) { log('[COMMS] EventBus emoji failed, trying WebSocket:', err) }
+      }
+    }
+    // WebSocket approach (works for AllPlayers and as fallback)
+    if (!gameSocket || gameSocket.readyState !== 1 || !currentClientID) return false
+    try {
+      const msg = { type: 'intent', intent: { type: 'emoji', clientID: currentClientID, recipient: recipientId, emoji: emojiIndex } }
+      gameSocket.send(JSON.stringify(msg))
+      log('[COMMS] Emoji sent via WebSocket:', msg.intent)
+      return true
+    } catch (err) { log('[COMMS] WebSocket emoji failed:', err); return false }
+  }
+
+  function sendQuickChat(recipientId, quickChatKey, targetId) {
+    // Try EventBus first (not for AllPlayers)
+    if (eventBus && quickChatEventClass && recipientId !== 'AllPlayers') {
+      const playerView = getPlayerView(recipientId)
+      if (playerView) {
+        try {
+          const args = targetId ? [playerView, quickChatKey, targetId] : [playerView, quickChatKey]
+          const event = new quickChatEventClass(...args)
+          eventBus.emit(event)
+          log('[COMMS] QuickChat sent via EventBus:', quickChatKey)
+          return true
+        } catch (err) { log('[COMMS] EventBus quickchat failed, trying WebSocket:', err) }
+      }
+    }
+    // WebSocket approach
+    if (!gameSocket || gameSocket.readyState !== 1 || !currentClientID) return false
+    const intent = { type: 'quick_chat', clientID: currentClientID, recipient: recipientId, quickChatKey }
+    if (targetId) intent.target = targetId
+    try {
+      gameSocket.send(JSON.stringify({ type: 'intent', intent }))
+      log('[COMMS] QuickChat sent via WebSocket:', intent)
+      return true
+    } catch (err) { log('[COMMS] WebSocket quickchat failed:', err); return false }
+  }
+
+  function logCommsSent(type, label, targetName) {
+    S.commsRecentSent.unshift({ type, label, target: targetName, timestamp: Date.now() })
+    if (S.commsRecentSent.length > 10) S.commsRecentSent.length = 10
   }
 
   function asResolveGoldTargets() {
@@ -2378,107 +2323,70 @@
     const resolved = []
     for (const tgt of S.asGoldTargets) {
       const lower = String(tgt).toLowerCase()
-      const p = playersByName.get(lower)
+      let p = null
+      for (const player of playersById.values()) {
+        if ((player.displayName || player.name || '').toLowerCase() === lower) { p = player; break }
+      }
       if (p) resolved.push({ id: p.id, name: p.displayName || p.name })
     }
     return resolved
   }
 
   function asGoldTick() {
-    log('[AUTO-SEND] asGoldTick started, running:', S.asGoldRunning)
-
     if (!S.asGoldRunning) {
-      log('[AUTO-SEND] Not running, exiting')
+      if (asGoldTimer) { clearInterval(asGoldTimer); asGoldTimer = null }
       return
     }
 
     const now = Date.now()
     const targets = asResolveGoldTargets()
-
-    log('[AUTO-SEND] Resolved gold targets:', targets.length, targets.map(t => t.name))
-
-    if (!targets.length) {
-      log('[AUTO-SEND] No targets, exiting')
-      return
-    }
+    if (!targets.length) return
 
     const me = readMyPlayer()
-    if (!me) {
-      log('[AUTO-SEND] Player data not available')
-      return
-    }
+    if (!me) return
 
-    // Convert BigInt gold to number for calculations
     const gold = Number(me.gold || 0n)
-
-    log('[AUTO-SEND] My gold:', gold)
-
-    // Calculate percentage-based send amount (like troops)
     const toSend = Math.max(1, Math.floor(gold * (S.asGoldRatio / 100)))
     if (toSend <= 0) return
-    log('[AUTO-SEND] Amount to send:', toSend, `(${S.asGoldRatio}% of ${gold})`)
 
     for (const target of targets) {
-      log('[AUTO-SEND] Checking target:', target.name, target.id)
-
-      const isAlly = asIsAlly(target.id)
-      log('[AUTO-SEND] asIsAlly(', target.id, '):', isAlly)
-
-      if (!isAlly) {
-        log('[AUTO-SEND] Not an ally, skipping')
-        continue
-      }
+      if (!S.asGoldRunning) return
+      if (!asIsAlly(target.id)) continue
 
       const last = S.asGoldLastSend[target.id] || 0
       const cooldownMs = S.asGoldCooldownSec * 1000
       const nextSend = last + cooldownMs
-      const remaining = Math.max(0, nextSend - now)
 
-      log('[AUTO-SEND] Cooldown check:', {
-        last,
-        cooldownMs,
-        nextSend,
-        remaining,
-        ready: now >= nextSend
-      })
-
-      // Track next send time for countdown display
       S.asGoldNextSend[target.id] = nextSend
 
       if (now >= nextSend) {
-        log('[AUTO-SEND] ✅ Ready to send! Calling asSendGold...')
         if (asSendGold(target.id, toSend)) {
           S.asGoldLastSend[target.id] = now
           S.asGoldNextSend[target.id] = now + cooldownMs
           S.asGoldLog.push(`[${fmtTime(nowDate())}] Sent ${short(toSend)} gold to ${target.name}`)
           if (S.asGoldLog.length > 100) S.asGoldLog.shift()
-          log(`[SUCCESS] Auto-gold: Sent ${short(toSend)} gold to ${target.name}`)
         } else {
-          log(`[ERROR] Auto-gold: Send failed to ${target.name}`)
+          log(`[AUTO-GOLD] Send failed to ${target.name}`)
         }
-      } else {
-        log('[AUTO-SEND] On cooldown, waiting', Math.ceil(remaining / 1000), 'seconds')
       }
     }
-
-    log('[AUTO-SEND] asGoldTick finished')
   }
 
   let asGoldTimer = null
+  let asGoldLastToggle = 0
   function asGoldStart() {
+    if (S.asGoldRunning) return  // Already running
     S.asGoldRunning = true
-    log('[AUTO-SEND] asGoldStart called, setting up interval')
+    asGoldLastToggle = Date.now()
     if (asGoldTimer) clearInterval(asGoldTimer)
-    asGoldTimer = setInterval(() => {
-      log('[AUTO-SEND] ⏱️ Gold tick heartbeat - asGoldTick about to run')
-      asGoldTick()
-    }, 800)
-    log('[AUTO-SEND] ✅ Gold interval set, ID:', asGoldTimer)
+    asGoldTimer = setInterval(asGoldTick, 800)
+    log('[AUTO-GOLD] Started')
   }
   function asGoldStop() {
     S.asGoldRunning = false
-    log('[AUTO-SEND] asGoldStop called')
+    asGoldLastToggle = Date.now()
     if (asGoldTimer) { clearInterval(asGoldTimer); asGoldTimer = null }
+    log('[AUTO-GOLD] Stopped')
   }
 
 
@@ -2496,10 +2404,10 @@
     overflow: 'hidden', userSelect: 'none', resize: 'both'
   })
 
-  const tabs = ['summary', 'stats', 'aiinsights', 'ports', 'feed', 'goldrate', 'alliances', 'autotroops', 'autogold', 'reciprocate', 'diag', 'hotkeys']
+  const tabs = ['summary', 'stats', 'ports', 'feed', 'alliances', 'autotroops', 'autogold', 'reciprocate', 'comms', 'hotkeys', 'about']
   ui.innerHTML = `
     <div id="hm-head" style="display:flex;align-items:center;justify-content:space-between;padding:8px 10px;background:#151f33;border-bottom:1px solid #86531f;cursor:move;flex-shrink:0">
-      <div><b>HAMMER v8.10</b> <span style="opacity:.85">SMOOTH</span></div>
+      <div><b>Hammer Control Panel</b> <span style="opacity:.85">v10.4</span></div>
       <div class="btns" style="display:flex;gap:6px;flex-wrap:wrap">
         <div id="hm-tabs" style="display:flex;gap:4px;flex-wrap:wrap">
           ${tabs.map(v => `<button class="tab" data-v="${v}">${v[0].toUpperCase() + v.slice(1)}</button>`).join('')}
@@ -2507,8 +2415,8 @@
         <button id="hm-size">${SIZES[S.sizeIdx].label}</button>
         <button id="hm-mini">▽</button>
         <button id="hm-pause">Pause</button>
-        <button id="hm-tag">Tag</button>
         <button id="hm-export">Export</button>
+        <button id="hm-debug" style="opacity:${Logger.isDebug() ? '1' : '.5'}">${Logger.isDebug() ? 'Debug ON' : 'Debug'}</button>
         <button id="hm-close">×</button>
       </div>
     </div>
@@ -2604,19 +2512,19 @@
   }
 
   ui.querySelector('#hm-close').onclick = () => { cleanup(); ui.remove() }
+  ui.querySelector('#hm-debug').onclick = () => {
+    const on = !Logger.isDebug()
+    Logger.setDebug(on)
+    const btn = ui.querySelector('#hm-debug')
+    btn.textContent = on ? 'Debug ON' : 'Debug'
+    btn.style.opacity = on ? '1' : '.5'
+    console.log(`[HAMMER] Debug logging ${on ? 'ENABLED' : 'DISABLED'}`)
+  }
   ui.querySelector('#hm-size').onclick = () => applySize(S.sizeIdx + 1)
   ui.querySelector('#hm-mini').onclick = () => setMin(!S.minimized)
   ui.querySelector('#hm-pause').onclick = () => {
     S.paused = !S.paused
     ui.querySelector('#hm-pause').textContent = S.paused ? 'Resume' : 'Pause'
-  }
-  ui.querySelector('#hm-tag').onclick = () => {
-    if (!S.filterTagMates && !S.myTag) {
-      const t = prompt('Enter your clan tag (without brackets)\nExample: If your name is [ABC]PlayerName, enter: ABC')
-      if (t?.trim()) S.myTag = t.trim()
-    }
-    S.filterTagMates = !S.filterTagMates
-    ui.querySelector('#hm-tag').textContent = S.filterTagMates ? `Tag[${S.myTag}]` : 'Tag'
   }
   ui.querySelector('#hm-export').onclick = () => {
     const obj = {
@@ -2633,11 +2541,28 @@
       stream: {
         inbound: S.feedIn.map(x => ({ ts: x.ts.toISOString(), type: x.type, name: x.name, amount: x.amount, isPort: x.isPort })),
         outbound: S.feedOut.map(x => ({ ts: x.ts.toISOString(), type: x.type, name: x.name, amount: x.amount }))
+      },
+      reciprocate: {
+        enabled: S.reciprocateEnabled,
+        mode: S.reciprocateMode,
+        autoPct: S.reciprocateAutoPct,
+        onTroops: S.reciprocateOnTroops,
+        onGold: S.reciprocateOnGold,
+        popupsEnabled: S.reciprocatePopupsEnabled,
+        queueSize: reciprocatePending.length,
+        cooldownsActive: reciprocateCooldowns.size,
+        historyCount: S.reciprocateHistory.length,
+        pendingRequests: reciprocatePending.map(p => ({
+          donor: p.donorName,
+          troops: p.troopsReceived,
+          attempts: p.attempts,
+          ageSeconds: Math.floor((Date.now() - p.addedAt) / 1000)
+        }))
       }
     }
     const a = document.createElement('a')
     a.href = URL.createObjectURL(new Blob([JSON.stringify(obj, null, 2)], { type: 'application/json' }))
-    a.download = `hammer_v8.8_${new Date().toISOString().replace(/[:.]/g, '-')}.json`
+    a.download = `hammer_v10.4_${new Date().toISOString().replace(/[:.]/g, '-')}.json`
     a.click()
     setTimeout(() => URL.revokeObjectURL(a.href), 800)
   }
@@ -2647,11 +2572,8 @@
     S.view = b.getAttribute('data-v')
   })
 
-  const isTagMate = id => {
-    if (!S.filterTagMates || !S.myTag) return true
-    const p = playersById.get(id)
-    if (!p) return false
-    return hasTag(p, S.myTag)
+  const isTagMate = () => {
+    return true
   }
 
   // ===== RENDER FUNCTIONS =====
@@ -2683,32 +2605,44 @@
       totalOutTroops += r.troops
     }
 
+    // Separate player gold from port gold in inbound totals
+    const playerInGold = totalInGold - totalInPort
+
     html += '<div class="stat-grid">'
-    html += `<div class="stat-card"><div class="stat-label">Received</div><div class="stat-value">${short(totalInGold)} 💰 | ${short(totalInTroops)} 🪖</div></div>`
+    html += `<div class="stat-card"><div class="stat-label">From Players</div><div class="stat-value">${short(playerInGold)} 💰 | ${short(totalInTroops)} 🪖</div></div>`
+    html += `<div class="stat-card"><div class="stat-label">From Ports</div><div class="stat-value">${short(totalInPort)} 💰</div></div>`
     html += `<div class="stat-card"><div class="stat-label">Sent</div><div class="stat-value">${short(totalOutGold)} 💰 | ${short(totalOutTroops)} 🪖</div></div>`
-    html += `<div class="stat-card"><div class="stat-label">Port Trades</div><div class="stat-value">${short(totalInPort)} 💰</div></div>`
-    html += `<div class="stat-card"><div class="stat-label">Net Balance</div><div class="stat-value">${short(totalInGold - totalOutGold)} 💰</div></div>`
+    html += `<div class="stat-card"><div class="stat-label">Net (Players)</div><div class="stat-value">${short(playerInGold - totalOutGold)} 💰</div></div>`
     html += '</div>'
 
     html += '<div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-top:12px">'
 
-    html += '<div><div class="title">⬅️ Inbound</div>'
-    if (!inKeys.length) {
-      html += '<div class="muted">No donations received yet</div>'
+    // Filter out port-sourced entries from inbound player list
+    const portNames = new Set()
+    for (const f of S.feedIn) {
+      if (f.isPort) portNames.add(f.name)
+    }
+    const playerInKeys = inKeys.filter(k => {
+      const p = playersById.get(k)
+      const n = p ? (p.displayName || p.name || k) : k
+      return !portNames.has(n)
+    })
+
+    html += '<div><div class="title">⬅️ Inbound (Players)</div>'
+    if (!playerInKeys.length) {
+      html += '<div class="muted">No player donations received yet</div>'
     } else {
-      const rows = inKeys.map(k => {
+      const rows = playerInKeys.map(k => {
         const p = playersById.get(k)
         const n = p ? (p.displayName || p.name || k) : k
         const r = S.inbound.get(k)
-        const hasPort = S.feedIn.some(f => f.name === n && f.isPort)
-        const portIcon = hasPort ? ' 🏪' : ''
-        return { name: n, gold: r.gold, troops: r.troops, portIcon }
+        return { name: n, gold: r.gold, troops: r.troops }
       }).sort((a, b) => (b.gold + b.troops) - (a.gold + a.troops))
 
       html += '<div style="font-size:11px">'
       for (const row of rows) {
         html += `<div class="row" style="margin:4px 0;padding:6px;background:#0d1520;border-radius:4px">`
-        html += `<div style="flex:1;overflow:hidden;text-overflow:ellipsis">${esc(row.name)}${row.portIcon}</div>`
+        html += `<div style="flex:1;overflow:hidden;text-overflow:ellipsis">${esc(row.name)}</div>`
         html += `<div class="mono" style="color:#7ff2a3">${short(row.gold)} 💰</div>`
         html += `<div class="mono" style="color:#7bb8ff">${short(row.troops)} 🪖</div>`
         html += '</div>'
@@ -2739,6 +2673,32 @@
       html += '</div>'
     }
     html += '</div></div>'
+
+    // Separate Port Income section
+    const portBySource = new Map()
+    for (const entry of S.feedIn) {
+      if (entry.isPort) {
+        if (!portBySource.has(entry.name)) portBySource.set(entry.name, { gold: 0, count: 0 })
+        const p = portBySource.get(entry.name)
+        p.gold += entry.amount; p.count++
+      }
+    }
+
+    html += '<div style="margin-top:12px">'
+    html += '<div class="title">🏪 Port Income</div>'
+    if (portBySource.size > 0) {
+      html += '<div style="font-size:11px">'
+      for (const [name, data] of [...portBySource.entries()].sort((a, b) => b[1].gold - a[1].gold)) {
+        html += `<div class="row" style="margin:4px 0;padding:6px;background:#0d1520;border-radius:4px">`
+        html += `<div style="flex:1">${esc(name)} 🏪</div>`
+        html += `<div class="mono" style="color:#ffcf5d">${short(data.gold)} 💰 (${data.count}x)</div>`
+        html += '</div>'
+      }
+      html += '</div>'
+    } else {
+      html += '<div class="muted">No port trades this session</div>'
+    }
+    html += '</div>'
 
     return html
   }
@@ -2820,51 +2780,83 @@
       html += '</div>'
     }
 
-    return html
-  }
+    // Donation Velocity
+    const durationMin = duration / 60000
+    html += '<div class="box"><div class="title" style="margin-top:0">🚀 Donation Velocity</div>'
+    const goldPerMin = durationMin > 0 ? Math.round((totalInGold + totalOutGold) / durationMin) : 0
+    const troopsPerMin = durationMin > 0 ? Math.round((totalInTroops + totalOutTroops) / durationMin) : 0
+    html += `<div class="row"><div>Gold Flow</div><div class="mono">${short(goldPerMin)}/min</div></div>`
+    html += `<div class="row"><div>Troop Flow</div><div class="mono">${short(troopsPerMin)}/min</div></div>`
+    html += `<div class="row"><div>Total Transactions</div><div class="mono">${totalInCount + totalOutCount}</div></div>`
+    html += `<div class="row"><div>Avg Donation Size</div><div class="mono">${(totalInCount + totalOutCount) > 0 ? short(Math.round((totalInGold + totalInTroops + totalOutGold + totalOutTroops) / (totalInCount + totalOutCount))) : 'N/A'}</div></div>`
+    html += '</div>'
 
-  function aiInsightsView() {
-    const me = readMyPlayer()
-    const duration = Date.now() - sessionStartTime
+    // Leaderboard - Top 5
+    const supporters = [...S.inbound.entries()]
+      .map(([k, r]) => ({ name: playersById.get(k)?.displayName || playersById.get(k)?.name || k, total: r.gold + r.troops, gold: r.gold, troops: r.troops }))
+      .sort((a, b) => b.total - a.total)
+      .slice(0, 5)
 
-    let html = '<div class="title">⚔️ Battle Insights</div>'
-    html += '<div class="help">Strategic analysis and fun metrics</div>'
+    if (supporters.length > 0) {
+      html += '<div class="box"><div class="title" style="margin-top:0">🏅 Leaderboard</div>'
+      html += '<div class="help">Top Supporters</div>'
+      const medals = ['🥇', '🥈', '🥉', '4.', '5.']
+      for (let i = 0; i < supporters.length; i++) {
+        const s = supporters[i]
+        html += `<div class="row" style="padding:4px;background:#0d1520;border-radius:4px;margin:2px 0">`
+        html += `<div>${medals[i]} ${esc(s.name)}</div>`
+        html += `<div class="mono" style="color:#7ff2a3">${short(s.gold)} 💰 + ${short(s.troops)} 🪖</div>`
+        html += '</div>'
+      }
+      html += '</div>'
+    }
 
-    const inKeys = [...S.inbound.keys()]
-    const outKeys = [...S.outbound.keys()]
-    const allKeys = new Set([...inKeys, ...outKeys])
+    // Fun Metrics
+    const totalVolume = totalInGold + totalInTroops + totalOutGold + totalOutTroops
+    const uniqueDonors = S.inbound.size
+    const uniqueRecipients = S.outbound.size
+    const generosityScore = totalVolume > 0 ? Math.min(100, Math.round(((totalOutGold + totalOutTroops) / totalVolume) * 100)) : 0
+    const popularityScore = Math.min(100, uniqueDonors * 10)
 
-    let totalVolume = 0
-    for (const k of allKeys) {
-      const inR = S.inbound.get(k)
-      const outR = S.outbound.get(k)
-      totalVolume += (inR?.gold || 0) + (inR?.troops || 0) + (outR?.gold || 0) + (outR?.troops || 0)
+    html += '<div class="box"><div class="title" style="margin-top:0">🎮 Fun Metrics</div>'
+    html += `<div class="row"><div>Generosity Score</div><div class="mono" style="color:#7ff2a3">${generosityScore}/100</div></div>`
+    html += `<div class="row"><div>Popularity Score</div><div class="mono" style="color:#7bb8ff">${popularityScore}/100</div></div>`
+    html += `<div class="row"><div>Unique Donors</div><div class="mono">${uniqueDonors}</div></div>`
+    html += `<div class="row"><div>Unique Recipients</div><div class="mono">${uniqueRecipients}</div></div>`
+
+    let biggestIn = 0, biggestInName = ''
+    for (const item of S.feedIn) {
+      if (item.amount > biggestIn && !item.isPort) { biggestIn = item.amount; biggestInName = item.name }
+    }
+    if (biggestIn > 0) {
+      html += `<div class="row"><div>Biggest Donation</div><div class="mono">${short(biggestIn)} from ${esc(biggestInName)}</div></div>`
     }
 
     const networkType = inKeys.length > outKeys.length * 2 ? 'Receiver Hub' :
                         outKeys.length > inKeys.length * 2 ? 'Feeder Hub' : 'Balanced Node'
-
-    html += '<div class="box"><div class="title" style="margin-top:0">🕸️ Network Analysis</div>'
-    html += `<div class="row"><div>Network Size</div><div class="mono">${allKeys.size} players</div></div>`
-    html += `<div class="row"><div>Total Volume</div><div class="mono">${short(totalVolume)}</div></div>`
-    html += `<div class="row"><div>Network Role</div><div class="mono" style="color:#7ff2a3">${networkType}</div></div>`
+    html += `<div class="row"><div>Network Role</div><div class="mono" style="color:#ffcf5d">${networkType}</div></div>`
+    html += '<div style="margin-top:10px;padding:8px;background:#0d1520;border-radius:4px;font-size:10px;line-height:1.7;color:#7a8fa3">'
+    html += '<div><b style="color:#7ff2a3">Generosity Score</b> (0-100): How much of total resource flow you sent vs received. 100 = you gave everything, 0 = you only received.</div>'
+    html += '<div style="margin-top:4px"><b style="color:#7bb8ff">Popularity Score</b> (0-100): Based on how many unique players donated to you. 10 points per unique donor, capped at 100.</div>'
+    html += '<div style="margin-top:4px"><b style="color:#ffcf5d">Network Role</b>: "Receiver Hub" = you receive 2x more than you send. "Feeder Hub" = you send 2x more than you receive. "Balanced Node" = roughly equal flow.</div>'
+    html += '</div>'
     html += '</div>'
 
+    // Gold Rate section (merged from Gold Rate tab)
+    html += '<div class="box"><div class="title" style="margin-top:0">💰 Gold Rate</div>'
     if (me) {
-      const maxT = estimateMaxTroops(me.tilesOwned, me.smallID)
-      const troopPct = maxT > 0 ? (me.troops / maxT) * 100 : 0
-
-      html += '<div class="box"><div class="title" style="margin-top:0">💡 Strategic Insights</div>'
-      if (troopPct > 80) html += '<div class="recommendation">⚠️ High troop capacity - Consider sending troops to allies</div>'
-      if (me.gold > 500000) html += '<div class="recommendation">💰 High gold reserves - Good for cities or infrastructure</div>'
-      if (troopPct < 30) html += '<div class="recommendation">🪖 Low troops - Focus on rebuilding</div>'
-      if (networkType === 'Receiver Hub') html += '<div class="recommendation">🎯 You are a key receiver - Allies investing in you</div>'
-      if (networkType === 'Feeder Hub') html += '<div class="recommendation">🤝 You are a key supporter - Fueling your alliance</div>'
-      html += '</div>'
+      html += `<div class="row"><div>Current Gold</div><div class="mono" style="color:#ffcf5d">${short(me.gold)}</div></div>`
+      html += `<div class="row"><div>Gold/Sec (30s)</div><div class="mono" style="color:#7ff2a3">${(S.gps30 || 0).toFixed(2)}</div></div>`
+      html += `<div class="row"><div>Gold/Min (60s)</div><div class="mono" style="color:#7ff2a3">${short(S.gpm60 || 0)}</div></div>`
+      html += `<div class="row"><div>Gold/Min (120s)</div><div class="mono" style="color:#7ff2a3">${short(S.gpm120 || 0)}</div></div>`
+    } else {
+      html += '<div class="muted">Player data not available</div>'
     }
+    html += '</div>'
 
     return html
   }
+
 
   function portsView() {
     let html = '<div class="title">🏪 Port Trades & Insights</div>'
@@ -2921,17 +2913,27 @@
       return html + '<div class="muted">No donations yet</div>'
     }
 
-    html += '<div style="font-size:11px">'
+    // Legend
+    html += '<div style="display:flex;gap:12px;margin-bottom:8px;font-size:10px">'
+    html += '<div style="display:flex;align-items:center;gap:4px"><span style="display:inline-block;width:10px;height:10px;background:#1a3a2a;border:1px solid #7ff2a3;border-radius:2px"></span> Incoming</div>'
+    html += '<div style="display:flex;align-items:center;gap:4px"><span style="display:inline-block;width:10px;height:10px;background:#3a2a1a;border:1px solid #ffcf5d;border-radius:2px"></span> Outgoing</div>'
+    html += '</div>'
+
+    html += '<div style="font-size:12px">'
     for (const item of all) {
-      const arrow = item.dir === 'in' ? '⬅️' : '➡️'
-      const color = item.dir === 'in' ? '#7ff2a3' : '#ffcf5d'
+      const isIn = item.dir === 'in'
+      const bg = isIn ? '#0d1a14' : '#1a150d'
+      const borderColor = isIn ? '#7ff2a3' : '#ffcf5d'
+      const label = isIn ? 'IN' : 'OUT'
+      const labelBg = isIn ? '#1a3a2a' : '#3a2a1a'
+      const color = isIn ? '#7ff2a3' : '#ffcf5d'
       const typeIcon = item.type === 'troops' ? '🪖' : '💰'
       const portIcon = item.isPort ? ' 🏪' : ''
-      html += `<div class="row" style="margin:2px 0;padding:4px;background:#0d1520;border-radius:4px">`
-      html += `<div class="mono muted" style="font-size:10px">${fmtTime(item.ts)}</div>`
-      html += `<div>${arrow}</div>`
-      html += `<div style="flex:1;overflow:hidden;text-overflow:ellipsis">${esc(item.name)}${portIcon}</div>`
-      html += `<div class="mono" style="color:${color}">${short(item.amount)} ${typeIcon}</div>`
+      html += `<div style="display:flex;align-items:center;gap:8px;margin:3px 0;padding:6px 8px;background:${bg};border-left:3px solid ${borderColor};border-radius:4px">`
+      html += `<div style="padding:2px 6px;background:${labelBg};border-radius:3px;font-size:10px;font-weight:bold;color:${color};min-width:30px;text-align:center">${label}</div>`
+      html += `<div class="mono muted" style="font-size:10px;min-width:50px">${fmtTime(item.ts)}</div>`
+      html += `<div style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(item.name)}${portIcon}</div>`
+      html += `<div class="mono" style="color:${color};font-weight:bold;font-size:13px">${short(item.amount)} ${typeIcon}</div>`
       html += '</div>'
     }
     html += '</div>'
@@ -2939,25 +2941,49 @@
     return html
   }
 
-  function goldRateView() {
-    const me = readMyPlayer()
-
-    let html = '<div class="title">💰 Gold Rate Monitor</div>'
-    html += '<div class="help">Track gold generation over time</div>'
-
-    if (!me) {
-      return html + '<div class="muted">Player data not available</div>'
+  function alliancePlayerCard(p) {
+    const maxT = estimateMaxTroops(p.tilesOwned, p.smallID)
+    const troopPct = maxT > 0 ? Math.round((p.troops / maxT) * 100) : 0
+    const tiles = p.tilesOwned || 0
+    const isExpanded = S.allianceCommsExpanded === p.id
+    let html = `<div class="box" style="margin:4px 0">`
+    html += `<div class="row"><div style="font-weight:700">${esc(p.displayName || p.name || 'Unknown')}</div><div style="display:flex;align-items:center;gap:6px"><span class="mono">${troopPct}%</span><button class="alliance-comms-toggle" data-pid="${p.id}" style="padding:2px 6px;background:${isExpanded ? '#2a5a4a' : '#1a2a3a'};border:1px solid ${isExpanded ? '#7ff2a3' : '#3a5a7a'};border-radius:3px;cursor:pointer;font-size:10px">${isExpanded ? '▲ Comms' : '▼ Comms'}</button></div></div>`
+    html += `<div style="display:grid;grid-template-columns:1fr 1fr;gap:4px;margin-top:4px;font-size:10px">`
+    html += `<div class="muted">Troops: <span class="mono" style="color:#7ff2a3">${short(p.troops)} / ${short(maxT)}</span></div>`
+    html += `<div class="muted">Tiles: <span class="mono" style="color:#7bb8ff">${tiles}</span></div>`
+    html += `</div>`
+    // Inline comms panel
+    if (isExpanded) {
+      html += `<div style="margin-top:8px;padding:8px;background:#0a0f18;border:1px solid #1a2a3a;border-radius:4px">`
+      // Emoji row - just top 10 most useful
+      html += `<div class="muted" style="font-size:9px;margin-bottom:4px">Emoji:</div>`
+      html += `<div style="display:flex;flex-wrap:wrap;gap:3px">`
+      for (let i = 0; i < EMOJI_TABLE.length; i++) {
+        html += `<button class="alliance-emoji-btn" data-pid="${p.id}" data-eidx="${i}" style="padding:2px;font-size:14px;background:#0d1520;border:1px solid #1a2a3a;border-radius:3px;cursor:pointer;width:28px;height:28px">${EMOJI_TABLE[i]}</button>`
+      }
+      html += `</div>`
+      // Quick quickchat buttons
+      html += `<div class="muted" style="font-size:9px;margin-top:6px;margin-bottom:4px">Quick Chat:</div>`
+      html += `<div style="display:flex;flex-wrap:wrap;gap:3px">`
+      const quickActions = [
+        { key: 'team.send_troops', label: 'Send Troops' },
+        { key: 'team.send_gold', label: 'Send Gold' },
+        { key: 'help.help', label: 'Help' },
+        { key: 'help.help_defend', label: 'Help Defend' },
+        { key: 'attack.attack', label: 'Attack' },
+        { key: 'defend.defend', label: 'Defend' },
+        { key: 'misc.thanks', label: 'Thanks' },
+        { key: 'misc.gg', label: 'GG' },
+        { key: 'misc.yes', label: 'Yes' },
+        { key: 'misc.no', label: 'No' }
+      ]
+      for (const qa of quickActions) {
+        html += `<button class="alliance-qc-btn" data-pid="${p.id}" data-qc="${qa.key}" style="padding:3px 6px;font-size:9px;background:#0d1520;border:1px solid #1a2a3a;border-radius:3px;cursor:pointer;color:#c8d8e8">${qa.label}</button>`
+      }
+      html += `</div>`
+      html += `</div>`
     }
-
-    html += '<div class="box">'
-    html += `<div class="row"><div>Current Gold</div><div class="mono" style="color:#ffcf5d">${short(me.gold)}</div></div>`
-    html += `<div class="row"><div>Gold/Sec (30s)</div><div class="mono" style="color:#7ff2a3">${(S.gps30 || 0).toFixed(2)}</div></div>`
-    html += `<div class="row"><div>Gold/Min (60s)</div><div class="mono" style="color:#7ff2a3">${short(S.gpm60 || 0)}</div></div>`
-    html += `<div class="row"><div>Gold/Min (120s)</div><div class="mono" style="color:#7ff2a3">${short(S.gpm120 || 0)}</div></div>`
     html += '</div>'
-
-    html += '<div class="help" style="margin-top:12px">💡 Higher rates = more port trades or territory income</div>'
-
     return html
   }
 
@@ -2965,7 +2991,7 @@
     const me = readMyPlayer()
 
     let html = '<div class="title">🤝 Alliances & Teams</div>'
-    html += '<div class="help">View teammates, allies, and tag mates</div>'
+    html += '<div class="help">View teammates, allies, and tag mates. Click Comms to send emoji/quickchat.</div>'
 
     if (!me) {
       return html + '<div class="muted">Player data not available</div>'
@@ -2977,12 +3003,7 @@
       html += '<div class="muted">No teammates (solo or FFA mode)</div>'
     } else {
       for (const p of teammates.slice(0, 20)) {
-        const maxT = estimateMaxTroops(p.tilesOwned, p.smallID)
-        const troopPct = maxT > 0 ? Math.round((p.troops / maxT) * 100) : 0
-        html += `<div class="box" style="margin:4px 0">`
-        html += `<div class="row"><div style="font-weight:700">${esc(p.displayName || p.name || 'Unknown')}</div><div class="mono">${troopPct}%</div></div>`
-        html += `<div class="row muted" style="font-size:10px"><div>Troops</div><div class="mono">${short(p.troops)} / ${short(maxT)}</div></div>`
-        html += '</div>'
+        html += alliancePlayerCard(p)
       }
     }
     html += '</div>'
@@ -2993,154 +3014,72 @@
       html += '<div class="muted">No active alliances</div>'
     } else {
       for (const p of allies.slice(0, 20)) {
-        const maxT = estimateMaxTroops(p.tilesOwned, p.smallID)
-        const troopPct = maxT > 0 ? Math.round((p.troops / maxT) * 100) : 0
-        html += `<div class="box" style="margin:4px 0">`
-        html += `<div class="row"><div style="font-weight:700">${esc(p.displayName || p.name || 'Unknown')}</div><div class="mono">${troopPct}%</div></div>`
-        html += `<div class="row muted" style="font-size:10px"><div>Troops</div><div class="mono">${short(p.troops)} / ${short(maxT)}</div></div>`
-        html += '</div>'
+        html += alliancePlayerCard(p)
       }
     }
     html += '</div>'
 
-    if (S.myTag) {
-      const tagmates = getTagMates()
-      html += '<div class="box"><div class="title" style="margin-top:0">🏷️ Tag Mates [' + esc(S.myTag) + ']</div>'
-      if (!tagmates.length) {
-        html += '<div class="muted">No other players with your tag found</div>'
-      } else {
-        for (const p of tagmates.slice(0, 20)) {
-          const maxT = estimateMaxTroops(p.tilesOwned, p.smallID)
-          const troopPct = maxT > 0 ? Math.round((p.troops / maxT) * 100) : 0
-          html += `<div class="box" style="margin:4px 0">`
-          html += `<div class="row"><div style="font-weight:700">${esc(p.displayName || p.name || 'Unknown')}</div><div class="mono">${troopPct}%</div></div>`
-          html += `<div class="row muted" style="font-size:10px"><div>Troops</div><div class="mono">${short(p.troops)} / ${short(maxT)}</div></div>`
-          html += '</div>'
-        }
-      }
-      html += '</div>'
-    }
-
     return html
   }
 
-  function calculateOptimalTroopSend(me, targetCount) {
-    if (!me) return null
-
-    const maxT = estimateMaxTroops(me.tilesOwned, me.smallID)
-    const currentTroops = me.troops || 0
-    const troopPct = maxT > 0 ? (currentTroops / maxT) * 100 : 0
-
-    // Game mechanics:
-    // - You regenerate troops based on tiles owned
-    // - Sending troops reduces your defense capability
-    // - Optimal is to stay above 40% capacity for defense
-
-    const recommendations = []
-
-    if (troopPct < 30) {
-      recommendations.push({
-        ratio: 0,
-        threshold: 50,
-        reason: "🛡️ DEFENSE MODE - You're low on troops. Don't send until 50%+",
-        color: "#ff8b94"
-      })
-    } else if (troopPct < 50) {
-      recommendations.push({
-        ratio: 10,
-        threshold: 50,
-        reason: "⚠️ CAUTIOUS - Send small amounts (10%) to maintain defense",
-        color: "#ffcf5d"
-      })
-    } else if (targetCount === 1) {
-      // Single target - can be more aggressive
-      recommendations.push({
-        ratio: 30,
-        threshold: 60,
-        reason: "🎯 FOCUSED FEED - Single ally, moderate send rate",
-        color: "#7ff2a3"
-      })
-      recommendations.push({
-        ratio: 50,
-        threshold: 70,
-        reason: "💪 POWER FEED - Single ally, aggressive boost",
-        color: "#7bb8ff"
-      })
-    } else {
-      // Multiple targets - be conservative
-      const perTarget = Math.floor(20 / targetCount)
-      recommendations.push({
-        ratio: Math.max(5, perTarget),
-        threshold: 60,
-        reason: `🔀 MULTI-FEED - Split ${Math.max(5, perTarget)}% among ${targetCount} allies`,
-        color: "#7ff2a3"
-      })
-    }
-
-    return {
-      currentPct: troopPct,
-      maxTroops: maxT,
-      currentTroops,
-      recommendations
-    }
-  }
 
   function autoDonateTroopsView() {
     const me = readMyPlayer()
     const statusDot = `<span class="status-dot ${S.asTroopsRunning ? 'running' : 'stopped'}"></span>`
 
     let html = '<div class="title">🪖 Auto-Donate Troops</div>'
-    html += `<div class="help">${statusDot}Status: <b>${S.asTroopsRunning ? 'RUNNING' : 'STOPPED'}</b></div>`
+
+    // Status header card
+    html += '<div class="box">'
+    html += '<div class="row" style="font-size:14px">'
+    html += `<div><b>Auto-Troops</b></div>`
+    html += `<div>${statusDot}<b style="color:${S.asTroopsRunning ? '#7ff2a3' : '#ff8b94'}">${S.asTroopsRunning ? 'RUNNING' : 'STOPPED'}</b></div>`
+    html += '</div>'
+    html += `<div class="row" style="margin-top:4px"><div class="muted" style="font-size:10px">Ratio: ${S.asTroopsRatio}% | Threshold: ${S.asTroopsThreshold}% | Cooldown: ${S.asTroopsCooldownSec}s</div></div>`
+    html += '</div>'
 
     if (me) {
       const maxT = estimateMaxTroops(me.tilesOwned, me.smallID)
       const troopPct = maxT > 0 ? Math.round((me.troops / maxT) * 100) : 0
       const willSend = troopPct >= S.asTroopsThreshold
       const sendAmount = willSend ? Math.floor(me.troops * (S.asTroopsRatio / 100)) : 0
+      const targetCount = S.asTroopsAllTeamMode ? getTeammates().length : S.asTroopsTargets.length
 
       html += '<div class="preview-calc">'
       html += `<div style="font-size:16px;margin-bottom:8px"><b>LIVE PREVIEW</b></div>`
       html += `<div>You have: <b>${short(me.troops)}</b> / <b>${short(maxT)}</b> troops (<b>${troopPct}%</b>)</div>`
       if (willSend) {
         html += `<div style="color:#7ff2a3;font-size:15px;margin-top:8px">✅ Will send: <b>${short(sendAmount)}</b> troops (${S.asTroopsRatio}% of ${short(me.troops)})</div>`
-        html += `<div>You keep: <b>${short(me.troops - sendAmount)}</b> troops</div>`
+        if (targetCount > 1) {
+          const perTarget = Math.floor(sendAmount / targetCount)
+          html += `<div style="color:#7bb8ff">Across <b>${targetCount}</b> targets = <b>${short(perTarget)}</b> each</div>`
+        } else if (targetCount === 0) {
+          html += `<div style="color:#ffcf5d">⚠️ No targets configured</div>`
+        }
+        const remaining = me.troops - sendAmount
+        const remainPct = maxT > 0 ? Math.round((remaining / maxT) * 100) : 0
+        html += `<div>You keep: <b>${short(remaining)}</b> troops (${remainPct}% capacity)</div>`
       } else {
         html += `<div style="color:#ff8b94;margin-top:8px">❌ Below threshold (need ${S.asTroopsThreshold}%, have ${troopPct}%)</div>`
       }
       html += '</div>'
     }
 
-    // Add intelligent calculator
-    const targetCount = S.asTroopsAllTeamMode ? getTeammates().length : S.asTroopsTargets.length
-    const calc = calculateOptimalTroopSend(me, targetCount)
-    if (calc && calc.recommendations.length > 0) {
-      html += '<div class="box">'
-      html += '<div class="title" style="margin-top:0">🧠 Intelligent Recommendations</div>'
-      html += '<div class="help">Based on your current situation:</div>'
-      for (const rec of calc.recommendations) {
-        html += `<div style="background:#0d1520;border-left:3px solid ${rec.color};padding:8px;margin:6px 0;cursor:pointer" data-apply-ratio="${rec.ratio}" data-apply-threshold="${rec.threshold}">`
-        html += `<div style="font-weight:700;color:${rec.color}">${rec.reason}</div>`
-        html += `<div style="margin-top:4px">Ratio: <b>${rec.ratio}%</b> | Threshold: <b>${rec.threshold}%</b></div>`
-        html += `<div class="help" style="margin-top:4px">Click to apply these settings</div>`
-        html += '</div>'
-      }
-      html += '</div>'
-    }
-
     html += '<div class="box">'
     html += '<div class="title" style="margin-top:0">⚙️ Settings</div>'
-    html += `<div class="row"><div>Ratio: <b>${S.asTroopsRatio}%</b></div>`
-    html += '<div style="display:flex;gap:4px">'
-    html += '<button id="at-ratio-minus">−</button>'
-    html += `<input id="at-ratio-input" type="number" value="${S.asTroopsRatio}" min="1" max="100" step="1" style="width:60px;text-align:center">`
-    html += '<button id="at-ratio-plus">+</button>'
-    html += '</div></div>'
-    html += `<div class="row"><div>Threshold: <b>${S.asTroopsThreshold}%</b></div>`
-    html += '<div style="display:flex;gap:4px">'
-    html += '<button id="at-threshold-minus">−</button>'
-    html += `<input id="at-threshold-input" type="number" value="${S.asTroopsThreshold}" min="0" max="100" step="1" style="width:60px;text-align:center">`
-    html += '<button id="at-threshold-plus">+</button>'
-    html += '</div></div>'
+    html += `<div class="row"><div>Send Ratio: <b>${S.asTroopsRatio}%</b></div></div>`
+    html += `<div style="display:flex;gap:4px;flex-wrap:wrap;margin:4px 0">`
+    for (const pct of [5, 10, 15, 20, 25, 33, 50, 75, 100]) {
+      html += `<button class="at-ratio-btn" data-pct="${pct}" style="flex:1;min-width:32px;padding:4px;background:${S.asTroopsRatio === pct ? '#2a5a4a' : '#2a3a4a'};border:1px solid ${S.asTroopsRatio === pct ? '#7ff2a3' : '#7bb8ff'};border-radius:4px;cursor:pointer;font-weight:${S.asTroopsRatio === pct ? 'bold' : 'normal'}">${pct}%</button>`
+    }
+    html += `</div>`
+    html += `<div class="row" style="margin-top:4px"><div class="muted">Custom:</div><input id="at-ratio-input" type="number" value="${S.asTroopsRatio}" min="1" max="100" step="1" style="width:60px;text-align:center"></div>`
+    html += `<div class="row" style="margin-top:8px"><div>Threshold: <b>${S.asTroopsThreshold}%</b></div></div>`
+    html += `<div style="display:flex;gap:4px;flex-wrap:wrap;margin:4px 0">`
+    for (const pct of [0, 25, 50, 75]) {
+      html += `<button class="at-threshold-btn" data-pct="${pct}" style="flex:1;padding:4px;background:${S.asTroopsThreshold === pct ? '#2a5a4a' : '#2a3a4a'};border:1px solid ${S.asTroopsThreshold === pct ? '#7ff2a3' : '#7bb8ff'};border-radius:4px;cursor:pointer;font-weight:${S.asTroopsThreshold === pct ? 'bold' : 'normal'}">${pct}%</button>`
+    }
+    html += `</div>`
     html += `<div class="row"><div>Cooldown</div><input id="at-cooldown" type="number" value="${S.asTroopsCooldownSec}" min="10" max="60" step="1" style="width:80px"><div class="muted" style="margin-left:8px">seconds (min 10s)</div></div>`
     html += '</div>'
 
@@ -3164,8 +3103,7 @@
 
       const teammates = getTeammates()
       const allies = getAllies()
-      const tagmates = getTagMates()
-      const allTargets = [...teammates, ...allies, ...tagmates].filter((p, i, arr) =>
+      const allTargets = [...teammates, ...allies].filter((p, i, arr) =>
         arr.findIndex(x => x.id === p.id) === i
       )
 
@@ -3247,19 +3185,34 @@
     const statusDot = `<span class="status-dot ${S.asGoldRunning ? 'running' : 'stopped'}"></span>`
 
     let html = '<div class="title">💰 Auto-Donate Gold</div>'
-    html += `<div class="help">${statusDot}Status: <b>${S.asGoldRunning ? 'RUNNING' : 'STOPPED'}</b></div>`
+
+    // Status header card
+    html += '<div class="box">'
+    html += '<div class="row" style="font-size:14px">'
+    html += `<div><b>Auto-Gold</b></div>`
+    html += `<div>${statusDot}<b style="color:${S.asGoldRunning ? '#7ff2a3' : '#ff8b94'}">${S.asGoldRunning ? 'RUNNING' : 'STOPPED'}</b></div>`
+    html += '</div>'
+    html += `<div class="row" style="margin-top:4px"><div class="muted" style="font-size:10px">Ratio: ${S.asGoldRatio}% | Min: ${short(S.asGoldThreshold)} | Cooldown: ${S.asGoldCooldownSec}s</div></div>`
+    html += '</div>'
 
     if (me) {
       // Convert BigInt gold to number for calculations and display
       const myGold = Number(me.gold || 0n)
       const willSend = myGold >= S.asGoldThreshold
       const sendAmount = willSend ? Math.floor(myGold * (S.asGoldRatio / 100)) : 0
+      const targetCount = S.asGoldAllTeamMode ? getTeammates().length : S.asGoldTargets.length
 
       html += '<div class="preview-calc">'
       html += `<div style="font-size:16px;margin-bottom:8px"><b>LIVE PREVIEW</b></div>`
       html += `<div>You have: <b>${short(myGold)}</b> gold</div>`
       if (willSend) {
         html += `<div style="color:#7ff2a3;font-size:15px;margin-top:8px">✅ Will send: <b>${short(sendAmount)}</b> gold (${S.asGoldRatio}% of ${short(myGold)})</div>`
+        if (targetCount > 1) {
+          const perTarget = Math.floor(sendAmount / targetCount)
+          html += `<div style="color:#7bb8ff">Across <b>${targetCount}</b> targets = <b>${short(perTarget)}</b> each</div>`
+        } else if (targetCount === 0) {
+          html += `<div style="color:#ffcf5d">⚠️ No targets configured</div>`
+        }
         html += `<div>You keep: <b>${short(myGold - sendAmount)}</b> gold</div>`
       } else {
         html += `<div style="color:#ff8b94;margin-top:8px">❌ Below threshold (need ${short(S.asGoldThreshold)}, have ${short(myGold)})</div>`
@@ -3269,13 +3222,14 @@
 
     html += '<div class="box">'
     html += '<div class="title" style="margin-top:0">⚙️ Settings</div>'
-    html += `<div class="row"><div>Ratio: <b>${S.asGoldRatio}%</b></div>`
-    html += '<div style="display:flex;gap:4px">'
-    html += '<button id="ag-ratio-minus">−</button>'
-    html += `<input id="ag-ratio-input" type="number" value="${S.asGoldRatio}" min="1" max="100" step="1" style="width:60px;text-align:center">`
-    html += '<button id="ag-ratio-plus">+</button>'
-    html += '</div></div>'
-    html += `<div class="row"><div>Min Gold Threshold</div><input id="ag-threshold" type="number" value="${S.asGoldThreshold}" min="0" step="10000" style="width:120px"></div>`
+    html += `<div class="row"><div>Send Ratio: <b>${S.asGoldRatio}%</b></div></div>`
+    html += `<div style="display:flex;gap:4px;flex-wrap:wrap;margin:4px 0">`
+    for (const pct of [5, 10, 15, 20, 25, 33, 50, 75, 100]) {
+      html += `<button class="ag-ratio-btn" data-pct="${pct}" style="flex:1;min-width:32px;padding:4px;background:${S.asGoldRatio === pct ? '#2a5a4a' : '#2a3a4a'};border:1px solid ${S.asGoldRatio === pct ? '#7ff2a3' : '#7bb8ff'};border-radius:4px;cursor:pointer;font-weight:${S.asGoldRatio === pct ? 'bold' : 'normal'}">${pct}%</button>`
+    }
+    html += `</div>`
+    html += `<div class="row" style="margin-top:4px"><div class="muted">Custom:</div><input id="ag-ratio-input" type="number" value="${S.asGoldRatio}" min="1" max="100" step="1" style="width:60px;text-align:center"></div>`
+    html += `<div class="row" style="margin-top:8px"><div>Min Gold Threshold</div><input id="ag-threshold" type="number" value="${S.asGoldThreshold}" min="0" step="10000" style="width:120px"></div>`
     html += `<div class="row"><div>Cooldown</div><input id="ag-cooldown" type="number" value="${S.asGoldCooldownSec}" min="10" max="60" step="1" style="width:80px"><div class="muted" style="margin-left:8px">seconds (min 10s)</div></div>`
     html += '</div>'
 
@@ -3299,8 +3253,7 @@
 
       const teammates = getTeammates()
       const allies = getAllies()
-      const tagmates = getTagMates()
-      const allTargets = [...teammates, ...allies, ...tagmates].filter((p, i, arr) =>
+      const allTargets = [...teammates, ...allies].filter((p, i, arr) =>
         arr.findIndex(x => x.id === p.id) === i
       )
 
@@ -3423,8 +3376,18 @@
     }
 
     html += `<div class="row">`
-    html += `<div>Only Reciprocate Troops</div>`
-    html += `<button id="recip-troops-only" class="${S.reciprocateOnlyTroops ? 'active' : ''}">${S.reciprocateOnlyTroops ? 'YES' : 'NO'}</button>`
+    html += `<div>Reciprocate on Troops</div>`
+    html += `<button id="recip-on-troops" class="${S.reciprocateOnTroops ? 'active' : ''}">${S.reciprocateOnTroops ? 'ON' : 'OFF'}</button>`
+    html += `</div>`
+
+    html += `<div class="row">`
+    html += `<div>Reciprocate on Gold</div>`
+    html += `<button id="recip-on-gold" class="${S.reciprocateOnGold ? 'active' : ''}">${S.reciprocateOnGold ? 'ON' : 'OFF'}</button>`
+    html += `</div>`
+
+    html += `<div class="row">`
+    html += `<div>Show Popups</div>`
+    html += `<button id="recip-popups-toggle" class="${S.reciprocatePopupsEnabled ? 'active' : ''}">${S.reciprocatePopupsEnabled ? 'ON' : 'OFF'}</button>`
     html += `</div>`
     html += '</div>'
 
@@ -3436,21 +3399,36 @@
     html += `</div>`
     html += '</div>'
 
-    // Recent Donors (from inbound)
+    // Recent Donors (from inbound) - show troops or gold donors
     const recentDonors = [...S.inbound.entries()]
-      .filter(([id, data]) => data.troops > 0)
-      .map(([id, data]) => ({
-        id,
-        name: playersById.get(id)?.displayName || playersById.get(id)?.name || 'Unknown',
-        troops: data.troops,
-        lastTime: data.last
-      }))
+      .filter(([id, data]) => data.troops > 0 || data.gold > 0)
+      .map(([id, data]) => {
+        const playerObj = playersById.get(id)
+        const name = playerObj?.displayName || playerObj?.name || 'Unknown'
+        // Find last donation from feedIn
+        const lastFeed = [...S.feedIn].reverse().find(f => f.name === name && !f.isPort)
+        // Use snapshotted donor troops from last donation time (not live)
+        const snapshotTroops = data.lastDonorTroops || 0
+        const pctOfArmy = snapshotTroops > 0 ? Math.round((data.troops / snapshotTroops) * 100) : 0
+        return {
+          id, name,
+          totalTroops: data.troops,
+          totalGold: data.gold,
+          troopsSends: data.troopsSends || 0,
+          goldSends: data.goldSends || 0,
+          lastAmount: lastFeed ? lastFeed.amount : 0,
+          lastType: lastFeed ? lastFeed.type : 'troops',
+          pctOfArmy,
+          lastTime: data.last
+        }
+      })
       .sort((a, b) => b.lastTime - a.lastTime)
       .slice(0, 10)
 
     if (recentDonors.length > 0) {
       html += '<div class="box">'
-      html += '<div class="title" style="margin-top:0">🎯 Recent Troop Donors</div>'
+      html += '<div class="row" style="margin-bottom:4px"><div class="title" style="margin-top:0">🎯 Recent Donors</div>'
+      html += '<button id="recip-clear-all-donors" style="padding:4px 8px;background:#3a2a2a;color:#ff8b94;border:1px solid #ff8b94;border-radius:4px;cursor:pointer;font-size:10px">Clear All</button></div>'
       html += '<div class="help">Click percentage to send that % of your current gold</div>'
 
       for (const donor of recentDonors) {
@@ -3458,11 +3436,19 @@
         html += '<div class="box" style="margin:8px 0;background:#0d1520">'
         html += '<div class="row">'
         html += `<div><b>${esc(donor.name)}</b></div>`
-        html += `<div class="muted" style="font-size:10px">${fmtDuration(timeSince * 1000)} ago</div>`
+        html += `<div style="display:flex;align-items:center;gap:6px">`
+        html += `<span class="muted" style="font-size:10px">${fmtDuration(timeSince * 1000)} ago</span>`
+        html += `<button class="recip-clear-donor" data-donor-id="${donor.id}" style="padding:2px 6px;background:#3a2a2a;color:#ff8b94;border:1px solid #ff8b94;border-radius:3px;cursor:pointer;font-size:9px">✕</button>`
+        html += `</div>`
         html += '</div>'
-        html += '<div class="row" style="margin-top:4px">'
-        html += `<div class="mono" style="color:#7ff2a3">${short(donor.troops)} 🪖 received</div>`
+        // Donor stats grid - 2x2 layout
+        html += '<div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;margin-top:6px;font-size:10px">'
+        html += `<div><span class="muted">Troops recv:</span><br><span class="mono" style="color:#7ff2a3">${short(donor.totalTroops)} 🪖</span> <span class="muted">(${donor.troopsSends} sends)</span></div>`
+        html += `<div><span class="muted">Gold recv:</span><br><span class="mono" style="color:#ffcf5d">${short(donor.totalGold)} 💰</span> <span class="muted">(${donor.goldSends} sends)</span></div>`
+        html += `<div><span class="muted">Last send:</span><br><span class="mono" style="color:#7bb8ff">${short(donor.lastAmount)} ${donor.lastType === 'troops' ? '🪖' : '💰'}</span></div>`
+        html += `<div><span class="muted">% of army:</span><br><span class="mono" style="color:#ffcf5d">${donor.pctOfArmy}%</span> <span class="muted">(at donation)</span></div>`
         html += '</div>'
+        // Percentage send buttons
         html += '<div style="display:flex;gap:4px;margin-top:8px">'
         for (const pct of [10, 25, 50, 75, 100]) {
           const goldAmt = Math.floor(myGold * pct / 100)
@@ -3477,7 +3463,7 @@
       html += '</div>'
     } else {
       html += '<div class="box">'
-      html += '<div class="muted">No recent troop donors. When players send you troops, they\'ll appear here for quick reciprocation.</div>'
+      html += '<div class="muted">No recent donors. When players send you troops or gold, they\'ll appear here for quick reciprocation.</div>'
       html += '</div>'
     }
 
@@ -3504,6 +3490,258 @@
   }
 
 
+  // ===== COMMS VIEW =====
+  const EMOJI_TABLE = [
+    '😀','😊','🥰','😇','😎', '😞','🥺','😭','😱','😡',
+    '😈','🤡','🥱','🫡','🖕', '👋','👏','✋','🙏','💪',
+    '👍','👎','🫴','🤌','🤦‍♂️', '🤝','🆘','🕊️','🏳️','⏳',
+    '🔥','💥','💀','☢️','⚠️', '↖️','⬆️','↗️','👑','🥇',
+    '⬅️','🎯','➡️','🥈','🥉', '↙️','⬇️','↘️','❤️','💔',
+    '💰','⚓','⛵','🏡','🛡️', '🏭','🚂','❓','🐔','🐀'
+  ]
+
+  // Keys that require a target player (requiresPlayer: true in QuickChat.json)
+  const QC_NEEDS_TARGET = new Set([
+    'help.help_defend',
+    'attack.attack', 'attack.mirv', 'attack.focus', 'attack.finish',
+    'defend.defend', 'defend.defend_from', 'defend.dont_attack', 'defend.ally',
+    'misc.team_up',
+    'warnings.strong', 'warnings.weak', 'warnings.mirv_soon',
+    'warnings.has_allies', 'warnings.no_allies', 'warnings.betrayed',
+    'warnings.betrayed_me', 'warnings.getting_big', 'warnings.danger_base',
+    'warnings.saving_for_mirv', 'warnings.mirv_ready', 'warnings.snowballing',
+    'warnings.cheating', 'warnings.stop_trading'
+  ])
+
+  const QUICKCHAT = {
+    greet: { label: '👋 Greetings', keys: ['hello','good_job','good_luck','have_fun','gg','nice_to_meet','well_played','hi_again','bye','thanks','oops','trust_me','trust_broken','ruining_games','dont_do_that','same_team'] },
+    help: { label: '🆘 Help', keys: ['troops','troops_frontlines','gold','no_attack','sorry_attack','alliance','help_defend','trade_partners'] },
+    attack: { label: '⚔️ Attack', keys: ['attack','mirv','focus','finish','build_warships'] },
+    defend: { label: '🛡️ Defend', keys: ['defend','defend_from','dont_attack','ally','build_posts'] },
+    misc: { label: '💬 Misc', keys: ['go','strategy','fun','team_up','pr','build_closer','coastline'] },
+    warnings: { label: '⚠️ Warnings', keys: ['strong','weak','mirv_soon','number1_warning','stalemate','has_allies','no_allies','betrayed','betrayed_me','getting_big','danger_base','saving_for_mirv','mirv_ready','snowballing','cheating','stop_trading'] }
+  }
+
+  // Helper to resolve current comms targets to player list
+  function resolveCommsTargets() {
+    const me = readMyPlayer()
+    if (!me) return []
+
+    const results = []
+    const seen = new Set()
+
+    function addPlayer(p) {
+      if (!p || p.id === me.id || seen.has(p.id)) return
+      seen.add(p.id)
+      results.push({ id: p.id, name: p.displayName || p.name || 'Unknown' })
+    }
+
+    if (S.commsGroupMode === 'all') {
+      for (const p of playersById.values()) {
+        if (p.isAlive) addPlayer(p)
+      }
+    } else if (S.commsGroupMode === 'all-team') {
+      for (const p of getTeammates()) addPlayer(p)
+    } else if (S.commsGroupMode === 'all-non-team') {
+      const teammates = getTeammates()
+      const teamIds = new Set(teammates.map(t => t.id))
+      teamIds.add(me.id)
+      for (const p of playersById.values()) {
+        if (p.isAlive && !teamIds.has(p.id)) addPlayer(p)
+      }
+    }
+
+    // Also add individually selected players
+    for (const id of S.commsTargets) {
+      const p = playersById.get(id) || playersById.get(Number(id))
+      if (p) addPlayer(p)
+    }
+
+    return results
+  }
+
+  function commsView() {
+    let html = '<div class="title">📡 Comms</div>'
+    html += '<div class="help">Send emojis and quick messages to players</div>'
+
+    // Connection status
+    const canSend = (gameSocket && gameSocket.readyState === 1 && currentClientID) || eventBus
+    html += `<div style="margin-bottom:8px;padding:4px 8px;border-radius:4px;font-size:10px;background:${canSend ? '#1a2a1a' : '#2a1a1a'};color:${canSend ? '#7ff2a3' : '#ff8b94'}">`
+    html += canSend ? '● Connected — ready to send' : '● Not connected — waiting for game'
+    html += '</div>'
+
+    // If picking a target for a QuickChat message, show player picker
+    if (S.commsPendingQC) {
+      const display = S.commsPendingQC.split('.').pop().replace(/_/g, ' ')
+      html += '<div class="box" style="border-color:#ffcf5d">'
+      html += `<div class="title" style="margin-top:0;color:#ffcf5d">🎯 Select target for: "${display}"</div>`
+      html += '<div class="help">This message requires a target player. Click a name below:</div>'
+
+      const teammates = getTeammates()
+      const allies = getAllies()
+      const others = [...playersById.values()].filter(p => {
+        const me = readMyPlayer()
+        if (!me || p.id === me.id || !p.isAlive) return false
+        return !teammates.find(t => t.id === p.id) && !allies.find(a => a.id === p.id)
+      }).sort((a, b) => (a.displayName || a.name || '').localeCompare(b.displayName || b.name || ''))
+
+      if (teammates.length > 0) {
+        html += '<div style="font-size:10px;font-weight:bold;color:#7ff2a3;margin:6px 0 3px">Teammates</div>'
+        html += '<div style="display:flex;flex-wrap:wrap;gap:3px">'
+        for (const p of teammates) {
+          html += `<button class="comms-qc-target-btn" data-qc-target-id="${p.id}" style="padding:4px 10px;font-size:11px;background:#1a2a1a;border:1px solid #4a8864;border-radius:4px;cursor:pointer;color:#7ff2a3">${esc(p.displayName || p.name)}</button>`
+        }
+        html += '</div>'
+      }
+      if (allies.length > 0) {
+        html += '<div style="font-size:10px;font-weight:bold;color:#7bb8ff;margin:6px 0 3px">Allies</div>'
+        html += '<div style="display:flex;flex-wrap:wrap;gap:3px">'
+        for (const p of allies) {
+          html += `<button class="comms-qc-target-btn" data-qc-target-id="${p.id}" style="padding:4px 10px;font-size:11px;background:#1a1a2a;border:1px solid #4a6894;border-radius:4px;cursor:pointer;color:#7bb8ff">${esc(p.displayName || p.name)}</button>`
+        }
+        html += '</div>'
+      }
+      if (others.length > 0) {
+        html += '<div style="font-size:10px;font-weight:bold;color:#9bb0c8;margin:6px 0 3px">Others</div>'
+        html += '<div style="display:flex;flex-wrap:wrap;gap:3px">'
+        for (const p of others) {
+          html += `<button class="comms-qc-target-btn" data-qc-target-id="${p.id}" style="padding:3px 8px;font-size:10px;background:#0d1520;border:1px solid #1a2a3a;border-radius:3px;cursor:pointer;color:#9bb0c8">${esc(p.displayName || p.name)}</button>`
+        }
+        html += '</div>'
+      }
+
+      html += '<button id="comms-qc-cancel" style="margin-top:8px;padding:4px 12px;background:#3a2a2a;color:#ff8b94;border:1px solid #ff8b94;border-radius:4px;cursor:pointer;font-size:11px">Cancel</button>'
+      html += '</div>'
+      return html
+    }
+
+    // Target selector
+    const teammates = getTeammates()
+    const allies = getAllies()
+    const allyOnly = allies.filter(a => !teammates.find(t => t.id === a.id))
+
+    // Build list of all non-team players
+    const me = readMyPlayer()
+    const teamIds = new Set(teammates.map(t => t.id))
+    if (me) teamIds.add(me.id)
+    const nonTeamPlayers = [...playersById.values()].filter(p => {
+      if (!p.isAlive || teamIds.has(p.id)) return false
+      if (me && p.id === me.id) return false
+      return true
+    }).sort((a, b) => (a.displayName || a.name || '').localeCompare(b.displayName || b.name || ''))
+
+    const resolvedTargets = resolveCommsTargets()
+    const selectedCount = resolvedTargets.length
+
+    html += '<div class="box"><div class="title" style="margin-top:0">🎯 Send To</div>'
+    html += `<div class="help" style="margin-bottom:6px">Selected: <b>${selectedCount}</b> player${selectedCount !== 1 ? 's' : ''} (click to toggle, groups are shortcuts)</div>`
+
+    // Group buttons row
+    html += '<div style="display:flex;gap:4px;margin-bottom:8px">'
+    const grpAll = S.commsGroupMode === 'all'
+    const grpTeam = S.commsGroupMode === 'all-team'
+    const grpNonTeam = S.commsGroupMode === 'all-non-team'
+    html += `<button id="comms-grp-all" style="flex:1;padding:6px;border-radius:4px;cursor:pointer;font-size:11px;font-weight:bold;border:1px solid ${grpAll ? '#ffcf5d' : '#2a4a6a'};background:${grpAll ? '#3a3520' : '#0a1a2a'};color:${grpAll ? '#ffcf5d' : '#9bb0c8'}">📢 All</button>`
+    html += `<button id="comms-grp-team" style="flex:1;padding:6px;border-radius:4px;cursor:pointer;font-size:11px;font-weight:bold;border:1px solid ${grpTeam ? '#7ff2a3' : '#2a4a2a'};background:${grpTeam ? '#1a3a1a' : '#0a1a0a'};color:${grpTeam ? '#7ff2a3' : '#7a9a7a'}">👥 All Team</button>`
+    html += `<button id="comms-grp-nonteam" style="flex:1;padding:6px;border-radius:4px;cursor:pointer;font-size:11px;font-weight:bold;border:1px solid ${grpNonTeam ? '#ff9f5d' : '#2a2a1a'};background:${grpNonTeam ? '#2a1a0a' : '#0a0a0a'};color:${grpNonTeam ? '#ff9f5d' : '#7a7a5a'}">🌍 All Non-Team</button>`
+    html += '<button id="comms-grp-clear" style="padding:6px 10px;border-radius:4px;cursor:pointer;font-size:11px;border:1px solid #ff8b94;background:#2a1a1a;color:#ff8b94">Clear</button>'
+    html += '</div>'
+
+    // Team section
+    if (teammates.length > 0) {
+      html += '<div style="font-size:10px;font-weight:bold;color:#7ff2a3;margin:6px 0 3px">Team</div>'
+      html += '<div style="display:flex;flex-wrap:wrap;gap:3px">'
+      for (const p of teammates) {
+        const name = p.displayName || p.name || '?'
+        const sel = S.commsTargets.has(String(p.id)) || S.commsTargets.has(p.id) || grpAll || grpTeam
+        html += `<button class="comms-target-btn" data-comms-target="${p.id}" style="padding:4px 8px;border-radius:4px;cursor:pointer;font-size:10px;border:1px solid ${sel ? '#7ff2a3' : '#2a4a2a'};background:${sel ? '#1a3a1a' : '#0a1a0a'};color:${sel ? '#7ff2a3' : '#7a9a7a'}">${esc(name)}</button>`
+      }
+      html += '</div>'
+    }
+
+    // Allies section
+    if (allyOnly.length > 0) {
+      html += '<div style="font-size:10px;font-weight:bold;color:#7bb8ff;margin:6px 0 3px">Allies</div>'
+      html += '<div style="display:flex;flex-wrap:wrap;gap:3px">'
+      for (const p of allyOnly) {
+        const name = p.displayName || p.name || '?'
+        const sel = S.commsTargets.has(String(p.id)) || S.commsTargets.has(p.id) || grpAll || grpNonTeam
+        html += `<button class="comms-target-btn" data-comms-target="${p.id}" style="padding:4px 8px;border-radius:4px;cursor:pointer;font-size:10px;border:1px solid ${sel ? '#7bb8ff' : '#1a2a4a'};background:${sel ? '#1a2a4a' : '#0a0a1a'};color:${sel ? '#7bb8ff' : '#5a7a9a'}">${esc(name)}</button>`
+      }
+      html += '</div>'
+    }
+
+    // Non-team / Others section (collapsible block)
+    if (nonTeamPlayers.length > 0) {
+      // Filter out allies already shown above
+      const shownIds = new Set(allyOnly.map(p => p.id))
+      const otherPlayers = nonTeamPlayers.filter(p => !shownIds.has(p.id))
+
+      if (otherPlayers.length > 0) {
+        html += '<div style="margin-top:8px">'
+        html += `<button id="comms-others-toggle" style="padding:4px 10px;border-radius:4px;cursor:pointer;font-size:10px;border:1px solid #2a3a55;background:#0d1520;color:#9bb0c8;width:100%;text-align:left">${S.commsOthersExpanded ? '▼' : '▶'} Others (${otherPlayers.length} players)</button>`
+
+        if (S.commsOthersExpanded) {
+          html += '<div style="border:1px solid #2a3a55;border-radius:4px;padding:6px;background:#0a1020;margin-top:4px">'
+          html += '<div style="display:flex;flex-wrap:wrap;gap:3px">'
+          for (const p of otherPlayers) {
+            const name = p.displayName || p.name || '?'
+            const sel = S.commsTargets.has(String(p.id)) || S.commsTargets.has(p.id) || grpAll || grpNonTeam
+            html += `<button class="comms-target-btn" data-comms-target="${p.id}" style="padding:3px 8px;font-size:10px;border-radius:3px;cursor:pointer;border:1px solid ${sel ? '#ff9f5d' : '#1a2a3a'};background:${sel ? '#2a1a0a' : '#0d1520'};color:${sel ? '#ff9f5d' : '#9bb0c8'}">${esc(name)}</button>`
+          }
+          html += '</div></div>'
+        }
+        html += '</div>'
+      }
+    }
+
+    html += '</div>'
+
+    // Emoji grid
+    html += '<div class="box"><div class="title" style="margin-top:0">😀 Emojis</div>'
+    html += '<div class="help">Click to send. Note: you may not see your own emojis in-game.</div>'
+    html += '<div style="display:grid;grid-template-columns:repeat(10,1fr);gap:2px">'
+    for (let i = 0; i < EMOJI_TABLE.length; i++) {
+      html += `<button class="comms-emoji-btn" data-emoji-idx="${i}" style="padding:4px;font-size:18px;background:#0d1520;border:1px solid #1a2a3a;border-radius:4px;cursor:pointer" title="Emoji ${i}">${EMOJI_TABLE[i]}</button>`
+    }
+    html += '</div></div>'
+
+    // QuickChat sections
+    html += '<div class="box"><div class="title" style="margin-top:0">💬 Quick Chat</div>'
+    html += '<div class="help">🎯 = requires target player selection</div>'
+    for (const [cat, data] of Object.entries(QUICKCHAT)) {
+      html += '<div style="margin-bottom:8px">'
+      html += `<div style="font-size:11px;font-weight:bold;color:#9bb0c8;margin-bottom:4px">${data.label}</div>`
+      html += '<div style="display:flex;flex-wrap:wrap;gap:3px">'
+      for (const key of data.keys) {
+        const fullKey = `${cat}.${key}`
+        const needsTarget = QC_NEEDS_TARGET.has(fullKey)
+        const display = key.replace(/_/g, ' ')
+        const border = needsTarget ? '#4a4a2a' : '#1a2a3a'
+        const prefix = needsTarget ? '🎯 ' : ''
+        html += `<button class="comms-qc-btn" data-qc-key="${fullKey}" style="padding:3px 8px;font-size:10px;background:#0d1520;border:1px solid ${border};border-radius:3px;cursor:pointer;color:#c8d8e8">${prefix}${display}</button>`
+      }
+      html += '</div></div>'
+    }
+    html += '</div>'
+
+    // Recent sent log - no nested scroll
+    if (S.commsRecentSent.length > 0) {
+      html += '<div class="box"><div class="title" style="margin-top:0">📤 Recently Sent</div>'
+      for (const entry of S.commsRecentSent) {
+        const ts = new Date(entry.timestamp)
+        const icon = entry.type === 'emoji' ? entry.label : '💬'
+        html += `<div style="margin:2px 0;padding:3px 6px;background:#0d1520;border-radius:3px;font-size:10px;color:#9bb0c8">`
+        html += `[${fmtTime(ts)}] ${icon} ${entry.type === 'emoji' ? '' : entry.label} → ${esc(entry.target)}`
+        html += '</div>'
+      }
+      html += '</div>'
+    }
+
+    return html
+  }
+
+
   function hotkeysView() {
     let html = '<div class="title">⌨️ Keyboard Shortcuts</div>'
     html += '<div class="help">Available keyboard shortcuts</div>'
@@ -3516,140 +3754,79 @@
     return html
   }
 
-  function diagnosticsView() {
-    return `
-      <div style="padding: 10px; font-size: 11px; color: #ccc;">
-        <h3 style="margin: 0 0 10px 0; color: #fff;">System Status</h3>
-        <div id="diag-status" style="background: #1a1a1a; padding: 8px; border-radius: 4px; margin-bottom: 10px;">
-          <p style="margin: 4px 0;">
-            <strong>GameView Hook:</strong>
-            <span id="diag-gameview">❓ Unknown</span>
-          </p>
-          <p style="margin: 4px 0;">
-            <strong>DisplayEvents Received:</strong>
-            <span id="diag-displayevents" style="color: #f90;">0</span>
-          </p>
-          <p style="margin: 4px 0;">
-            <strong>Player Data Ready:</strong>
-            <span id="diag-playerdata">❓ Unknown</span>
-          </p>
-          <p style="margin: 4px 0;">
-            <strong>Donations Tracked:</strong>
-            <span id="diag-donations" style="color: #6cf;">0</span>
-          </p>
-        </div>
+  function aboutView() {
+    let html = '<div class="title">📖 About</div>'
 
-        <h3 style="margin: 15px 0 10px 0; color: #fff;">Auto-Send Status</h3>
-        <div style="background: #1a1a1a; padding: 8px; border-radius: 4px; margin-bottom: 10px;">
-          <p style="margin: 4px 0;">
-            <strong>Send Method:</strong>
-            <span style="color: ${eventBus ? '#6f6' : '#f90'};">
-              ${eventBus ? '🟢 EventBus (Preferred)' : '🟠 WebSocket (Fallback)'}
-            </span>
-          </p>
-          <p style="margin: 4px 0;">
-            <strong>Auto-Gold:</strong>
-            <span style="color: ${S.asGoldRunning ? '#6f6' : '#f66'};">
-              ${S.asGoldRunning ? '🟢 RUNNING' : '🔴 STOPPED'}
-            </span>
-          </p>
-          <p style="margin: 4px 0;">
-            <strong>Auto-Troops:</strong>
-            <span style="color: ${S.asTroopsRunning ? '#6f6' : '#f66'};">
-              ${S.asTroopsRunning ? '🟢 RUNNING' : '🔴 STOPPED'}
-            </span>
-          </p>
-          <p style="margin: 4px 0;">
-            <strong>EventBus:</strong>
-            <span style="color: ${eventBus ? '#6f6' : '#f66'};">
-              ${eventBus ? '🟢 Found' : '🔴 Not Found'}
-            </span>
-          </p>
-          <p style="margin: 4px 0;">
-            <strong>gameSocket:</strong>
-            <span style="color: ${gameSocket ? (gameSocket.readyState === 1 ? '#6f6' : '#f90') : '#f66'};">
-              ${gameSocket ? (gameSocket.readyState === 1 ? '🟢 OPEN' : `🟠 State ${gameSocket.readyState}`) : '🔴 NULL'}
-            </span>
-          </p>
-          <p style="margin: 4px 0;">
-            <strong>currentClientID:</strong>
-            <span style="color: ${currentClientID ? '#6f6' : '#f66'};">
-              ${currentClientID || '🔴 NOT SET'}
-            </span>
-          </p>
-          <p style="margin: 4px 0;">
-            <strong>Gold Tick Interval:</strong>
-            <span style="color: ${asGoldTimer ? '#6f6' : '#f66'};">
-              ${asGoldTimer ? '🟢 Active' : '🔴 Not Running'}
-            </span>
-          </p>
-          <p style="margin: 4px 0;">
-            <strong>Troops Tick Interval:</strong>
-            <span style="color: ${asTroopsTimer ? '#6f6' : '#f66'};">
-              ${asTroopsTimer ? '🟢 Active' : '🔴 Not Running'}
-            </span>
-          </p>
-        </div>
+    html += '<div class="box">'
+    html += '<div style="text-align:center;padding:16px">'
+    html += '<div style="font-size:22px;font-weight:bold;color:#ffcf5d">Hammer Control Panel</div>'
+    html += '<div style="font-size:14px;color:#9bb0c8;margin-top:4px">v10.4</div>'
+    html += '</div>'
+    html += '</div>'
 
-        <div style="margin-top: 10px; padding: 8px; background: #1a3a1a; border-radius: 4px; font-size: 10px;">
-          <p style="margin: 0;"><strong>How it works:</strong></p>
-          <p style="margin: 5px 0 0 0; color: #aaa;">
-            ${eventBus
-              ? '✅ Using EventBus: Emitting the same events the game UI emits. This is the most reliable method!'
-              : '⚠️ Using WebSocket fallback: Sending intents directly. If this doesn\'t work, the game might need EventBus.'}
-          </p>
-        </div>
+    html += '<div class="box">'
+    html += '<div class="title" style="margin-top:0">What is Hammer?</div>'
+    html += '<div class="help" style="font-size:12px;line-height:1.6">'
+    html += 'Hammer is a companion tool for <b>OpenFront.io</b> that tracks donations, '
+    html += 'automates troop and gold sending, and provides real-time game analytics. '
+    html += 'Built for alliance coordination and strategic resource management.'
+    html += '</div>'
+    html += '</div>'
 
-        <div style="margin-top: 10px; padding: 8px; background: #1a3a1a; border-radius: 4px; font-size: 10px;">
-          <p style="margin: 0;"><strong>Debug Logging:</strong> Check console for [AUTO-SEND] messages</p>
-          <p style="margin: 5px 0 0 0; color: #aaa;">Open Chrome DevTools (F12) and look for green [AUTO-SEND] logs to see detailed execution flow</p>
-        </div>
+    html += '<div class="box">'
+    html += '<div class="title" style="margin-top:0">Features</div>'
+    html += '<div style="font-size:11px;line-height:1.8">'
+    html += '<div>📊 <b>Summary</b> - Session overview with donation tracking</div>'
+    html += '<div>📈 <b>Stats</b> - War report, leaderboards, fun metrics</div>'
+    html += '<div>🏪 <b>Ports</b> - Port trade tracking and efficiency</div>'
+    html += '<div>📋 <b>Feed</b> - Live donation feed</div>'
+    html += '<div>💹 <b>Gold Rate</b> - Gold income over time windows</div>'
+    html += '<div>🤝 <b>Alliances</b> - Alliance and team overview</div>'
+    html += '<div>🪖 <b>Auto-Troops</b> - Automated troop donations</div>'
+    html += '<div>💰 <b>Auto-Gold</b> - Automated gold donations</div>'
+    html += '<div>🔄 <b>Reciprocate</b> - Quick payback for incoming donations</div>'
+    html += '<div>📡 <b>Comms</b> - Send emojis and quick chat messages</div>'
+    html += '<div>⌨️ <b>Hotkeys</b> - Keyboard shortcuts</div>'
+    html += '</div>'
+    html += '</div>'
 
-        <h3 style="margin: 15px 0 10px 0; color: #fff;">Recent Events (Last 10)</h3>
-        <div id="diag-events" style="max-height: 200px; overflow-y: auto; background: #1a1a1a; padding: 5px; border-radius: 4px; font-family: 'Courier New', monospace; font-size: 10px;">
-          <div style="color: #888;">No events yet. Send a donation to see activity.</div>
-        </div>
+    html += '<div class="box">'
+    html += '<div class="title" style="margin-top:0">Credits</div>'
+    html += '<div style="font-size:11px;line-height:1.6">'
+    html += '<div class="row"><div>Author</div><div class="mono">Stanley</div></div>'
+    html += '<div class="row"><div>Version</div><div class="mono">10.4</div></div>'
+    html += '<div class="row"><div>Game</div><div class="mono">OpenFront.io</div></div>'
+    html += '<div class="row"><div>License</div><div class="mono">Free to use</div></div>'
+    html += '</div>'
+    html += '</div>'
 
-        <div style="margin-top: 15px;">
-          <button onclick="window.__HAMMER__.exportDiagnostics()" style="
-            background: #4a90e2;
-            color: white;
-            border: none;
-            padding: 10px 20px;
-            border-radius: 4px;
-            cursor: pointer;
-            font-size: 12px;
-            margin-right: 10px;
-          ">
-            📥 Download Diagnostic Report
-          </button>
+    html += '<div class="box">'
+    html += '<div class="title" style="margin-top:0">System Status</div>'
+    html += '<div style="font-size:11px">'
+    html += '<div class="row"><div>GameView Hook</div><div class="mono" style="color:' + (gameViewHooked ? '#7ff2a3' : '#ff8b94') + '">' + (gameViewHooked ? 'Hooked' : 'Not Hooked') + '</div></div>'
+    html += '<div class="row"><div>DisplayEvents</div><div class="mono">' + displayEventsReceived + '</div></div>'
+    html += '<div class="row"><div>Donations Tracked</div><div class="mono">' + donationsTracked + '</div></div>'
+    html += '<div class="row"><div>Player Data</div><div class="mono" style="color:' + (playerDataReady ? '#7ff2a3' : '#ffcf5d') + '">' + (playerDataReady ? 'Ready' : 'Loading') + '</div></div>'
+    html += '<div class="row"><div>EventBus</div><div class="mono" style="color:' + (eventBus ? '#7ff2a3' : '#ff8b94') + '">' + (eventBus ? 'Found' : 'Not Found') + '</div></div>'
+    html += '<div class="row"><div>WebSocket</div><div class="mono" style="color:' + (gameSocket && gameSocket.readyState === 1 ? '#7ff2a3' : '#ff8b94') + '">' + (gameSocket && gameSocket.readyState === 1 ? 'Connected' : 'Disconnected') + '</div></div>'
+    html += '</div>'
+    html += '</div>'
 
-          <button onclick="window.__HAMMER__.clearDiagnostics()" style="
-            background: #666;
-            color: white;
-            border: none;
-            padding: 10px 20px;
-            border-radius: 4px;
-            cursor: pointer;
-            font-size: 12px;
-          ">
-            🗑️ Clear Events
-          </button>
-        </div>
+    html += '<div class="box">'
+    html += '<div class="title" style="margin-top:0">Quick Reference</div>'
+    html += '<div style="font-size:11px">'
+    html += '<div class="row"><div>ALT+M</div><div class="muted">Capture target under mouse</div></div>'
+    html += '<div class="row"><div>ALT+F</div><div class="muted">Toggle auto-troops</div></div>'
+    html += '</div>'
+    html += '</div>'
 
-        <div style="margin-top: 15px; padding: 10px; background: #1a3a1a; border-radius: 4px; font-size: 10px;">
-          <p style="margin: 0;"><strong>How to use:</strong></p>
-          <ol style="margin: 5px 0 0 20px; padding: 0;">
-            <li>Check that GameView Hook shows ✅ Hooked</li>
-            <li>Form an alliance with another player</li>
-            <li>Send gold or troops to them</li>
-            <li>Watch the counters above increase</li>
-            <li>If something fails, download the diagnostic report</li>
-          </ol>
-        </div>
-      </div>
-    `
+    html += '<div style="text-align:center;margin-top:16px;color:#9bb0c8;font-size:10px">'
+    html += 'Made for the OpenFront.io community'
+    html += '</div>'
+
+    return html
   }
+
 
   function render() {
     const content = ui.querySelector('#hm-content')
@@ -3658,84 +3835,49 @@
     const views = {
       summary: summaryView,
       stats: statsView,
-      aiinsights: aiInsightsView,
       ports: portsView,
       feed: feedView,
-      goldrate: goldRateView,
       alliances: alliancesView,
       autotroops: autoDonateTroopsView,
       autogold: autoDonateGoldView,
       reciprocate: reciprocateView,
-      diag: diagnosticsView,
-      hotkeys: hotkeysView
+      comms: commsView,
+      hotkeys: hotkeysView,
+      about: aboutView
     }
 
     const fn = views[S.view]
     if (fn) content.innerHTML = fn()
-
-    // Update diagnostic UI if diagnostic tab is active
-    if (S.view === 'diag') {
-      setTimeout(updateDiagnosticUI, 10)
-    }
 
     ui.querySelectorAll('.tab').forEach(b => {
       b.classList.toggle('active', b.getAttribute('data-v') === S.view)
     })
 
     // Auto-troops handlers
-    const atRatioMinus = ui.querySelector('#at-ratio-minus')
-    const atRatioPlus = ui.querySelector('#at-ratio-plus')
+    ui.querySelectorAll('.at-ratio-btn').forEach(btn => {
+      btn.onclick = () => { S.asTroopsRatio = parseInt(btn.getAttribute('data-pct')) }
+    })
     const atRatioInput = ui.querySelector('#at-ratio-input')
-    const atThresholdMinus = ui.querySelector('#at-threshold-minus')
-    const atThresholdPlus = ui.querySelector('#at-threshold-plus')
-    const atThresholdInput = ui.querySelector('#at-threshold-input')
+    if (atRatioInput) {
+      atRatioInput.onchange = () => { S.asTroopsRatio = Math.max(1, Math.min(100, num(atRatioInput.value))) }
+    }
+    ui.querySelectorAll('.at-threshold-btn').forEach(btn => {
+      btn.onclick = () => { S.asTroopsThreshold = parseInt(btn.getAttribute('data-pct')) }
+    })
     const atCooldown = ui.querySelector('#at-cooldown')
     const atAllTeamToggle = ui.querySelector('#at-allteam-toggle')
     const atStart = ui.querySelector('#at-start')
     const atClear = ui.querySelector('#at-clear')
 
-    if (atRatioMinus) {
-      atRatioMinus.onclick = () => {
-        S.asTroopsRatio = Math.max(1, S.asTroopsRatio - 5)
-      }
-    }
-    if (atRatioPlus) {
-      atRatioPlus.onclick = () => {
-        S.asTroopsRatio = Math.min(100, S.asTroopsRatio + 5)
-      }
-    }
-    if (atRatioInput) {
-      atRatioInput.onchange = () => {
-        S.asTroopsRatio = Math.max(1, Math.min(100, num(atRatioInput.value)))
-      }
-    }
-    if (atThresholdMinus) {
-      atThresholdMinus.onclick = () => {
-        S.asTroopsThreshold = Math.max(0, S.asTroopsThreshold - 5)
-      }
-    }
-    if (atThresholdPlus) {
-      atThresholdPlus.onclick = () => {
-        S.asTroopsThreshold = Math.min(100, S.asTroopsThreshold + 5)
-      }
-    }
-    if (atThresholdInput) {
-      atThresholdInput.onchange = () => {
-        S.asTroopsThreshold = Math.max(0, Math.min(100, num(atThresholdInput.value)))
-      }
-    }
     if (atCooldown) {
-      atCooldown.onchange = () => {
-        S.asTroopsCooldownSec = Math.max(10, num(atCooldown.value))
-      }
+      atCooldown.onchange = () => { S.asTroopsCooldownSec = Math.max(10, num(atCooldown.value)) }
     }
     if (atAllTeamToggle) {
-      atAllTeamToggle.onclick = () => {
-        S.asTroopsAllTeamMode = !S.asTroopsAllTeamMode
-      }
+      atAllTeamToggle.onclick = () => { S.asTroopsAllTeamMode = !S.asTroopsAllTeamMode }
     }
     if (atStart) {
       atStart.onclick = () => {
+        if (Date.now() - asTroopsLastToggle < 600) return  // Debounce during render cycle
         if (S.asTroopsRunning) asTroopsStop()
         else asTroopsStart()
       }
@@ -3770,17 +3912,6 @@
       }
     }
 
-    // Intelligent recommendation click handlers
-    ui.querySelectorAll('[data-apply-ratio]').forEach(div => {
-      div.onclick = () => {
-        const ratio = num(div.getAttribute('data-apply-ratio'))
-        const threshold = num(div.getAttribute('data-apply-threshold'))
-        S.asTroopsRatio = ratio
-        S.asTroopsThreshold = threshold
-        showStatus(`✅ Applied: ${ratio}% ratio, ${threshold}% threshold`)
-      }
-    })
-
     ui.querySelectorAll('[data-toggle-troop-target]').forEach(btn => {
       btn.onclick = () => {
         const target = btn.getAttribute('data-toggle-troop-target')
@@ -3803,55 +3934,37 @@
     })
 
     // Auto-gold handlers
-    const agRatioMinus = ui.querySelector('#ag-ratio-minus')
-    const agRatioPlus = ui.querySelector('#ag-ratio-plus')
+    ui.querySelectorAll('.ag-ratio-btn').forEach(btn => {
+      btn.onclick = () => { S.asGoldRatio = parseInt(btn.getAttribute('data-pct')) }
+    })
     const agRatioInput = ui.querySelector('#ag-ratio-input')
+    if (agRatioInput) {
+      agRatioInput.onchange = () => { S.asGoldRatio = Math.max(1, Math.min(100, num(agRatioInput.value))) }
+    }
     const agThreshold = ui.querySelector('#ag-threshold')
     const agCooldown = ui.querySelector('#ag-cooldown')
     const agAllTeamToggle = ui.querySelector('#ag-allteam-toggle')
     const agStart = ui.querySelector('#ag-start')
     const agClear = ui.querySelector('#ag-clear')
 
-    if (agRatioMinus) {
-      agRatioMinus.onclick = () => {
-        S.asGoldRatio = Math.max(1, S.asGoldRatio - 5)
-      }
-    }
-    if (agRatioPlus) {
-      agRatioPlus.onclick = () => {
-        S.asGoldRatio = Math.min(100, S.asGoldRatio + 5)
-      }
-    }
-    if (agRatioInput) {
-      agRatioInput.onchange = () => {
-        S.asGoldRatio = Math.max(1, Math.min(100, num(agRatioInput.value)))
-      }
-    }
     if (agThreshold) {
-      agThreshold.onchange = () => {
-        S.asGoldThreshold = Math.max(0, num(agThreshold.value))
-      }
+      agThreshold.onchange = () => { S.asGoldThreshold = Math.max(0, num(agThreshold.value)) }
     }
     if (agCooldown) {
-      agCooldown.onchange = () => {
-        S.asGoldCooldownSec = Math.max(10, num(agCooldown.value))
-      }
+      agCooldown.onchange = () => { S.asGoldCooldownSec = Math.max(10, num(agCooldown.value)) }
     }
     if (agAllTeamToggle) {
-      agAllTeamToggle.onclick = () => {
-        S.asGoldAllTeamMode = !S.asGoldAllTeamMode
-      }
+      agAllTeamToggle.onclick = () => { S.asGoldAllTeamMode = !S.asGoldAllTeamMode }
     }
     if (agStart) {
       agStart.onclick = () => {
+        if (Date.now() - asGoldLastToggle < 600) return  // Debounce during render cycle
         if (S.asGoldRunning) asGoldStop()
         else asGoldStart()
       }
     }
     if (agClear) {
-      agClear.onclick = () => {
-        S.asGoldLog = []
-      }
+      agClear.onclick = () => { S.asGoldLog = [] }
     }
 
     const agTestSend = ui.querySelector('#ag-test-send')
@@ -3868,7 +3981,7 @@
           return
         }
         const target = targets[0]
-        const toSend = Math.floor(me.gold * (S.asGoldRatio / 100))
+        const toSend = Math.floor(Number(me.gold || 0n) * (S.asGoldRatio / 100))
         if (asSendGold(target.id, toSend)) {
           showStatus(`✅ Test: Sent ${short(toSend)} gold to ${target.name}`)
           S.asGoldLog.push(`[${fmtTime(nowDate())}] TEST: Sent ${short(toSend)} gold to ${target.name}`)
@@ -3898,6 +4011,171 @@
         if (idx >= 0) S.asGoldTargets.splice(idx, 1)
       }
     })
+
+    // Alliance tab handlers - comms toggle
+    ui.querySelectorAll('.alliance-comms-toggle').forEach(btn => {
+      btn.onclick = () => {
+        const pid = btn.getAttribute('data-pid')
+        S.allianceCommsExpanded = S.allianceCommsExpanded === pid ? null : pid
+      }
+    })
+
+    // Alliance inline emoji buttons
+    ui.querySelectorAll('.alliance-emoji-btn').forEach(btn => {
+      btn.onclick = () => {
+        const pid = btn.getAttribute('data-pid')
+        const idx = parseInt(btn.getAttribute('data-eidx'))
+        if (sendEmoji(pid, idx)) {
+          showStatus(`✅ Sent ${EMOJI_TABLE[idx]} to ${playersById.get(pid)?.displayName || 'player'}`)
+        }
+      }
+    })
+
+    // Alliance inline quickchat buttons
+    ui.querySelectorAll('.alliance-qc-btn').forEach(btn => {
+      btn.onclick = () => {
+        const pid = btn.getAttribute('data-pid')
+        const key = btn.getAttribute('data-qc')
+        if (sendQuickChat(pid, key)) {
+          showStatus(`✅ Sent quick chat to ${playersById.get(pid)?.displayName || 'player'}`)
+        }
+      }
+    })
+
+    // Comms tab handlers - group buttons
+    const grpAll = ui.querySelector('#comms-grp-all')
+    if (grpAll) grpAll.onclick = () => {
+      S.commsGroupMode = S.commsGroupMode === 'all' ? null : 'all'
+    }
+    const grpTeam = ui.querySelector('#comms-grp-team')
+    if (grpTeam) grpTeam.onclick = () => {
+      S.commsGroupMode = S.commsGroupMode === 'all-team' ? null : 'all-team'
+    }
+    const grpNonTeam = ui.querySelector('#comms-grp-nonteam')
+    if (grpNonTeam) grpNonTeam.onclick = () => {
+      S.commsGroupMode = S.commsGroupMode === 'all-non-team' ? null : 'all-non-team'
+    }
+    const grpClear = ui.querySelector('#comms-grp-clear')
+    if (grpClear) grpClear.onclick = () => {
+      S.commsGroupMode = null
+      S.commsTargets.clear()
+    }
+
+    // Others collapsible toggle
+    const othersToggle = ui.querySelector('#comms-others-toggle')
+    if (othersToggle) othersToggle.onclick = () => {
+      S.commsOthersExpanded = !S.commsOthersExpanded
+    }
+
+    // Individual player toggle buttons (multi-select)
+    ui.querySelectorAll('.comms-target-btn').forEach(btn => {
+      btn.onclick = () => {
+        const id = btn.getAttribute('data-comms-target')
+        if (S.commsTargets.has(id)) {
+          S.commsTargets.delete(id)
+        } else {
+          S.commsTargets.add(id)
+        }
+      }
+    })
+
+    // Send emoji to all resolved targets
+    ui.querySelectorAll('.comms-emoji-btn').forEach(btn => {
+      btn.onclick = () => {
+        const idx = parseInt(btn.getAttribute('data-emoji-idx'))
+        const targets = resolveCommsTargets()
+        if (targets.length === 0) {
+          showStatus('❌ No targets selected')
+          return
+        }
+        let sentCount = 0
+        const names = []
+        for (const t of targets) {
+          if (sendEmoji(t.id, idx)) {
+            sentCount++
+            names.push(t.name)
+          }
+        }
+        if (sentCount > 0) {
+          const targetLabel = sentCount > 3 ? `${sentCount} players` : names.join(', ')
+          logCommsSent('emoji', EMOJI_TABLE[idx] || '?', targetLabel)
+          showStatus(`📡 Sent ${EMOJI_TABLE[idx] || '?'} to ${targetLabel}`)
+        } else {
+          showStatus('❌ Failed to send emoji')
+        }
+      }
+    })
+
+    // Send quickchat to all resolved targets
+    ui.querySelectorAll('.comms-qc-btn').forEach(btn => {
+      btn.onclick = () => {
+        const key = btn.getAttribute('data-qc-key')
+        if (QC_NEEDS_TARGET.has(key)) {
+          S.commsPendingQC = key
+          return
+        }
+        const targets = resolveCommsTargets()
+        if (targets.length === 0) {
+          showStatus('❌ No targets selected')
+          return
+        }
+        let sentCount = 0
+        const names = []
+        for (const t of targets) {
+          if (sendQuickChat(t.id, key)) {
+            sentCount++
+            names.push(t.name)
+          }
+        }
+        if (sentCount > 0) {
+          const display = key.split('.').pop().replace(/_/g, ' ')
+          const targetLabel = sentCount > 3 ? `${sentCount} players` : names.join(', ')
+          logCommsSent('quickchat', display, targetLabel)
+          showStatus(`📡 Sent "${display}" to ${targetLabel}`)
+        } else {
+          showStatus('❌ Failed to send message')
+        }
+      }
+    })
+
+    // QuickChat target picker handlers (when a message needs a target player)
+    ui.querySelectorAll('.comms-qc-target-btn').forEach(btn => {
+      btn.onclick = () => {
+        const targetPlayerId = btn.getAttribute('data-qc-target-id')
+        const key = S.commsPendingQC
+        if (!key) return
+        const targets = resolveCommsTargets()
+        if (targets.length === 0) {
+          showStatus('❌ No recipients selected')
+          S.commsPendingQC = null
+          return
+        }
+        let targetPlayer = playersById.get(targetPlayerId) || playersById.get(Number(targetPlayerId))
+        const targetName = targetPlayer ? (targetPlayer.displayName || targetPlayer.name || '?') : '?'
+        let sentCount = 0
+        const names = []
+        for (const t of targets) {
+          if (sendQuickChat(t.id, key, targetPlayerId)) {
+            sentCount++
+            names.push(t.name)
+          }
+        }
+        if (sentCount > 0) {
+          const display = key.split('.').pop().replace(/_/g, ' ')
+          const targetLabel = sentCount > 3 ? `${sentCount} players` : names.join(', ')
+          logCommsSent('quickchat', `${display} [${targetName}]`, targetLabel)
+          showStatus(`📡 Sent "${display} ${targetName}" to ${targetLabel}`)
+        } else {
+          showStatus('❌ Failed to send message')
+        }
+        S.commsPendingQC = null
+      }
+    })
+
+    const qcCancel = ui.querySelector('#comms-qc-cancel')
+    if (qcCancel) {
+      qcCancel.onclick = () => { S.commsPendingQC = null }
+    }
 
     // Reciprocate tab handlers
     const recipToggle = ui.querySelector('#recip-toggle')
@@ -3933,10 +4211,21 @@
       }
     }
 
-    const recipTroopsOnly = ui.querySelector('#recip-troops-only')
-    if (recipTroopsOnly) {
-      recipTroopsOnly.onclick = () => {
-        S.reciprocateOnlyTroops = !S.reciprocateOnlyTroops
+    const recipOnTroops = ui.querySelector('#recip-on-troops')
+    if (recipOnTroops) {
+      recipOnTroops.onclick = () => { S.reciprocateOnTroops = !S.reciprocateOnTroops }
+    }
+
+    const recipOnGold = ui.querySelector('#recip-on-gold')
+    if (recipOnGold) {
+      recipOnGold.onclick = () => { S.reciprocateOnGold = !S.reciprocateOnGold }
+    }
+
+    const recipPopupsToggle = ui.querySelector('#recip-popups-toggle')
+    if (recipPopupsToggle) {
+      recipPopupsToggle.onclick = () => {
+        S.reciprocatePopupsEnabled = !S.reciprocatePopupsEnabled
+        if (!S.reciprocatePopupsEnabled) clearReciprocateNotifications()
       }
     }
 
@@ -3964,11 +4253,33 @@
       }
     })
 
+    // Clear individual donor buttons
+    ui.querySelectorAll('.recip-clear-donor').forEach(btn => {
+      btn.onclick = () => {
+        const donorId = btn.getAttribute('data-donor-id')
+        S.inbound.delete(donorId)
+      }
+    })
+
+    // Clear all donors button
+    const clearAllDonors = ui.querySelector('#recip-clear-all-donors')
+    if (clearAllDonors) {
+      clearAllDonors.onclick = () => { S.inbound.clear() }
+    }
+
   }
 
   const tickId = setInterval(() => {
     render()
   }, 500)
+  setInterval(() => S.seen.clear(), 60000)
+
+  // Start reciprocate queue processor
+  const reciprocateProcessorId = setInterval(() => {
+    if (S.reciprocateEnabled && S.reciprocateMode === 'auto') {
+      processReciprocateQueue()
+    }
+  }, 1000)  // Process every 1 second
 
   // ===== CLEANUP FUNCTION =====
   function cleanup() {
@@ -3976,11 +4287,9 @@
 
     // Clear intervals
     clearInterval(tickId)
+    clearInterval(reciprocateProcessorId)
     if (asTroopsTimer) clearInterval(asTroopsTimer)
     if (asGoldTimer) clearInterval(asGoldTimer)
-
-    // Remove status overlay
-    if (statusOverlay) statusOverlay.remove()
 
     // Clean up all event listeners
     eventCleanup.forEach(fn => {
@@ -4024,33 +4333,27 @@
   window.__HAMMER__ = {
     cleanup,
     ui: { root: ui },
-    version: '9.0.2-diagnostic',
+    version: '10.4',
     exportLogs: Logger.exportLogs,
-    exportDiagnostics,
-    clearDiagnostics,
-    // Exposed for testing
+    setDebug: Logger.setDebug,
+    isDebug: Logger.isDebug,
     asSendGold,
     asSendTroops,
     findPlayer,
-    verifyClientID,
-    // Debug helpers
     getState: () => ({
       mySmallID,
       currentClientID,
       playerDataReady,
       pendingMessagesCount: pendingMessages.length,
       playersCount: playersById.size,
-      playerNamesCount: playersByName.size,
       myAllies,
       myTeam,
       playersById,
       playersBySmallId,
-      playersByName,
       eventBus: !!eventBus,
       eventBusMethod: eventBus ? 'EventBus' : 'WebSocket',
       gameSocket: !!gameSocket,
       gameSocketReady: gameSocket?.readyState,
-      gameSocketReadyStateText: gameSocket?.readyState === 1 ? 'OPEN' : gameSocket?.readyState === 0 ? 'CONNECTING' : gameSocket?.readyState === 2 ? 'CLOSING' : gameSocket?.readyState === 3 ? 'CLOSED' : 'UNKNOWN',
       gameViewHooked,
       displayEventsReceived,
       donationsTracked,
@@ -4059,157 +4362,9 @@
       feedInCount: S.feedIn.length,
       feedOutCount: S.feedOut.length,
       autoSendReady: !!(eventBus || (gameSocket && gameSocket.readyState === 1 && currentClientID)),
-      autoSendMethod: eventBus ? 'EventBus (preferred)' : 'WebSocket (fallback)',
-      autoSendBlockers: [
-        !eventBus && !gameSocket ? 'Neither EventBus nor gameSocket available' : null,
-        !eventBus && gameSocket && gameSocket.readyState !== 1 ? `gameSocket not OPEN (state: ${gameSocket.readyState})` : null,
-        !eventBus && !currentClientID ? 'currentClientID not set (needed for WebSocket fallback)' : null
-      ].filter(x => x)
+      autoSendMethod: eventBus ? 'EventBus (preferred)' : 'WebSocket (fallback)'
     }),
-    testAutoSend: () => {
-      console.log('[HAMMER] Auto-send test:')
-      console.log('  gameSocket:', !!gameSocket)
-      console.log('  gameSocket.readyState:', gameSocket?.readyState, gameSocket?.readyState === 1 ? '(OPEN)' : '(NOT OPEN)')
-      console.log('  currentClientID:', currentClientID || '(NOT SET)')
-      console.log('  playersByName.size:', playersByName.size)
-      console.log('  Teammates:', getTeammates().map(p => p.displayName || p.name))
-
-      if (!gameSocket) {
-        console.error('[HAMMER] ❌ gameSocket not captured - WebSocket interception failed')
-        return false
-      }
-      if (gameSocket.readyState !== 1) {
-        console.error('[HAMMER] ❌ gameSocket not OPEN - state:', gameSocket.readyState)
-        return false
-      }
-      if (!currentClientID) {
-        console.error('[HAMMER] ❌ currentClientID not set - client ID not captured')
-        return false
-      }
-
-      console.log('[HAMMER] ✅ Auto-send prerequisites met!')
-      return true
-    },
-    clearCooldowns: () => {
-      S.asGoldLastSend = {}
-      S.asTroopsLastSend = {}
-      console.log('[HAMMER] ✅ All cooldowns cleared!')
-    },
-    discoverEvents: () => {
-      console.log('[HAMMER] 🔍 Discovering donation event classes...')
-      if (!eventBus) {
-        console.error('[HAMMER] ❌ EventBus not available')
-        return false
-      }
-      const result = discoverDonationEventClasses()
-      if (result) {
-        console.log('[HAMMER] ✅ Discovery successful!')
-        console.log('[HAMMER] Gold event class:', donateGoldEventClass?.name)
-        console.log('[HAMMER] Troops event class:', donateTroopsEventClass?.name)
-      } else {
-        console.log('[HAMMER] ⚠️ Could not auto-discover - will need manual identification')
-        console.log('[HAMMER] Available event classes:')
-        for (const [eventClass, handlers] of eventBus.listeners.entries()) {
-          console.log(`  - ${eventClass.name} (${handlers.length} listeners)`)
-        }
-      }
-      return result
-    },
-    listEventClasses: () => {
-      if (!eventBus) {
-        console.error('[HAMMER] ❌ EventBus not available')
-        return []
-      }
-      const classes = []
-      for (const [eventClass, handlers] of eventBus.listeners.entries()) {
-        classes.push({ name: eventClass.name, class: eventClass, handlerCount: handlers.length })
-      }
-      console.log('[HAMMER] Found', classes.length, 'event classes:')
-      classes.forEach(c => console.log(`  - ${c.name} (${c.handlerCount} listeners)`))
-      return classes
-    },
-    testEventClass: (className, playerName, goldAmount = 1000) => {
-      console.log(`[HAMMER] 🧪 Testing event class "${className}" for donation...`)
-
-      if (!eventBus) {
-        console.error('[HAMMER] ❌ EventBus not available')
-        return false
-      }
-
-      // Find the event class by name
-      let EventClass = null
-      for (const [eventClass, handlers] of eventBus.listeners.entries()) {
-        if (eventClass.name === className) {
-          EventClass = eventClass
-          console.log('[HAMMER] ✅ Found event class:', className, 'with', handlers.length, 'listeners')
-          break
-        }
-      }
-
-      if (!EventClass) {
-        console.error(`[HAMMER] ❌ Event class "${className}" not found`)
-        console.log('[HAMMER] Use window.__HAMMER__.listEventClasses() to see available classes')
-        return false
-      }
-
-      // Find the player
-      const player = findPlayer(playerName)
-      if (!player) {
-        console.error(`[HAMMER] ❌ Player "${playerName}" not found`)
-        return false
-      }
-
-      // Get PlayerView
-      const playerView = getPlayerView(player.id)
-      if (!playerView) {
-        console.error('[HAMMER] ❌ PlayerView not found for ID:', player.id)
-        return false
-      }
-
-      console.log('[HAMMER] ✅ Player found:', player.displayName || player.name)
-      console.log('[HAMMER] ✅ PlayerView obtained')
-
-      try {
-        // Gold (Rp) needs BigInt, Troops (Op) needs regular number
-        const amount = className === 'Rp' ? BigInt(goldAmount) : goldAmount
-        const event = new EventClass(playerView, amount)
-        console.log('[HAMMER] ✅ Event created:', event)
-        console.log('[HAMMER] Event properties:', Object.keys(event))
-
-        // Emit it
-        eventBus.emit(event)
-        console.log('[HAMMER] ✅ Event emitted!')
-        console.log('[HAMMER] 📋 Check game UI - did the donation appear?')
-        return true
-      } catch (err) {
-        console.error('[HAMMER] ❌ Failed to create/emit event:', err)
-        return false
-      }
-    },
-    testManualSend: (playerName, goldAmount = 1000) => {
-      console.log(`[HAMMER] 🧪 Testing manual send to "${playerName}" for ${goldAmount} gold...`)
-
-      const player = findPlayer(playerName)
-      if (!player) {
-        console.error(`[HAMMER] ❌ Player "${playerName}" not found`)
-        console.log('[HAMMER] Available players:', Array.from(playersByName.keys()).slice(0, 20))
-        return false
-      }
-
-      console.log('[HAMMER] ✅ Player found:', player.displayName || player.name, 'ID:', player.id)
-      console.log('[HAMMER] EventBus available:', !!eventBus)
-      console.log('[HAMMER] Discovered gold class:', donateGoldEventClass?.name || 'not discovered yet')
-
-      const result = asSendGold(player.id, goldAmount)
-      if (result) {
-        console.log('[HAMMER] ✅ Send function returned TRUE')
-        console.log('[HAMMER] 📋 Check game UI to see if donation appeared!')
-      } else {
-        console.log('[HAMMER] ❌ Send function returned FALSE - check [AUTO-SEND] error logs above')
-      }
-      return result
-    },
-    state: S  // Expose state for debugging
+    state: S
   }
 
   render()
@@ -4223,9 +4378,7 @@
   if (targetCanvas) initMessages.push('✅ Canvas')
   else initMessages.push('⏳ Canvas (detecting...)')
 
-  console.log('%c[HAMMER]%c v8.8 FINAL ready! 🔨', 'color:#deb887;font-weight:bold', 'color:inherit')
+  console.log('%c[HAMMER]%c v10.4 Control Panel ready! 🔨', 'color:#deb887;font-weight:bold', 'color:inherit')
   console.log('[HAMMER] Status:', initMessages.join(' | '))
-  console.log('[HAMMER] ✅ Hotkeys FIXED with stopImmediatePropagation!')
-  console.log('[HAMMER] 📜 Vertical scroll layout - no nested scroll containers!')
-  console.log('[HAMMER] 🔄 Now supports mid-game reruns!')
+  console.log('[HAMMER] Debug logging OFF by default. Toggle via UI button or __HAMMER__.setDebug(true)')
 })()
