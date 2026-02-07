@@ -1,5 +1,5 @@
 // =====================================================================
-// HAMMER v10.4 "CONTROL PANEL"
+// HAMMER v10.9 "CONTROL PANEL"
 //
 // Core automation tool for OpenFront.io focused on essential features:
 // - Stats tracking (gold/troops sent/received with logs)
@@ -48,6 +48,54 @@
 // =====================================================================
 // CHANGELOG
 // =====================================================================
+// v10.9 - Buttery Smooth (Feb 2026)
+//   - Fixed persistent blinking in Comms/Allies/Auto-Troops/Auto-Gold tabs:
+//     changed playersById/playersBySmallId from const to let, enabling true atomic
+//     reference swaps (single assignment) instead of clear-then-copy pattern
+//   - Fixed "works then stops" bug: removed unsafe fallback that picked a random
+//     alive player when clientID wasn't found in Worker updates, corrupting
+//     mySmallID/myTeam/myAllies and breaking all PID matching + ally detection
+//   - Fixed PID mismatch flood: now looks up our player by known smallID when
+//     clientID isn't available, instead of falling back to any alive player
+//   - Render cache: only rebuilds DOM when HTML content actually changes,
+//     eliminating unnecessary 500ms DOM thrashing and preserving UI state
+//
+// v10.8 - Stability & Reconnect (Feb 2026)
+//   - Fixed Comms/Alliances tab blinking: atomic swap pattern for player data maps
+//     prevents render() from seeing empty maps during clear-and-rebuild cycles
+//   - Fixed intermittent data loss: bootstrap now extracts allies/tilesOwned data,
+//     playerDataReady only set when mySmallID is confirmed (was silently dropping events)
+//   - Added Reconnect button in About tab: re-discovers Worker, WebSocket, EventBus,
+//     GameView hook, and player data on demand with per-system status feedback
+//   - Escalating retry delays for Worker/WebSocket/bootstrap discovery (200ms-4s)
+//     instead of single 500ms retry, catches slow-loading games
+//   - System health score (N/6) shown in About tab with color-coded status
+//   - refreshPlayerData() now logs errors instead of swallowing silently
+//
+// v10.7 - Donation Tracking Fix & Player Refresh (Feb 2026)
+//   - Fixed donation tracking showing no data (Summary/Stats/Ports/Feed all empty)
+//   - Root cause: bootstrap set playerDataReady=true but never drained buffered messages
+//   - Added drainPendingMessages() called from bootstrap AND Worker message paths
+//   - Added periodic player data refresh (every 3s) from game objects
+//     Keeps playersById/lastPlayers current even when Worker hook fails (singleplayer)
+//   - Added diagnostic counters in About tab: filtered events, PID mismatches, etc.
+//   - findPlayer() now returns null-safe with diagnostic logging
+//
+// v10.6 - Comms Fix & Alliance Requests (Feb 2026)
+//   - Fixed Comms tab not showing Teammates/Allies (all appeared as "Others")
+//   - Fixed "No targets selected" error when sending alliance requests
+//   - readMyPlayer() now falls back to playersById for singleplayer/bootstrap scenarios
+//   - Alliance Request button now uses EventBus discovery (like emoji/quickchat)
+//   - Alliance requests sent one by one with delay to avoid rate limiting
+//   - Auto-Troops target selection now shows troops 🪖 with %, and gold 💰 side by side
+//   - Fixed 10x troop display bug: game internally stores troops at 10x display value
+//     (renderTroops divides by 10); all troop displays now use dTroops() to match game UI
+//
+// v10.5 - Full Numbers, Port Fix & Alliance Comms (Feb 2026)
+//   - Fixed port gold income incorrectly appearing in Reciprocate donor list
+//   - Full number display with commas in previews and donor stats (e.g. 1,280,000 (1.3M))
+//   - Alliance Request button in Comms tab for quick alliance quickchat
+//
 // v10.4 - Singleplayer/Team Mode & Mid-Match Fixes (Feb 2026)
 //   - Fixed singleplayer/team mode: uses events-display.game path when game-view is null
 //   - Bootstrap now finds _myClientID, _players, _myPlayer correctly
@@ -138,7 +186,7 @@
 
       logs = logs.slice(-limit)
       return JSON.stringify({
-        version: '10.4',
+        version: '10.9',
         timestamp: new Date().toISOString(),
         totalLogs: logBuffer.length,
         exportedLogs: logs.length,
@@ -203,8 +251,8 @@
   } catch {}
 
   let mySmallID = null, myTeam = null, myAllies = new Set()
-  const playersById = new Map()
-  const playersBySmallId = new Map()
+  let playersById = new Map()
+  let playersBySmallId = new Map()
   let lastPlayers = []
 
   // Message buffering for timing fix
@@ -218,6 +266,26 @@
   let gameViewHooked = false
   let displayEventsReceived = 0
   let donationsTracked = 0
+
+  // Diagnostic counters for processDisplayMessage filtering
+  let diagFilteredNoType = 0
+  let diagFilteredPaused = 0
+  let diagFilteredBuffered = 0
+  let diagFilteredPidMismatch = 0
+  let diagFilteredNoPlayer = 0
+  let diagProcessed = 0
+  let diagLastEvents = []  // Last 5 raw DisplayEvent structures
+
+  // Drain pending messages buffer (called when playerDataReady becomes true)
+  function drainPendingMessages() {
+    if (pendingMessages.length === 0) return
+    log('[DEBUG] Draining', pendingMessages.length, 'buffered messages')
+    for (const bufferedMsg of pendingMessages) {
+      try { processDisplayMessage(bufferedMsg) }
+      catch (err) { log('Buffered message error:', err) }
+    }
+    pendingMessages.length = 0
+  }
 
   // Session tracking
   const sessionStartTime = Date.now()
@@ -246,6 +314,9 @@
   let gameSocket = null
 
   // ===== UTILS =====
+  // Game internal troops are 10x the display value (game uses renderTroops = renderNumber(troops/10))
+  const TROOP_DISPLAY_DIV = 10
+  const dTroops = v => Number(v || 0) / TROOP_DISPLAY_DIV
   const num = v => Number(v) || 0
   const nowDate = () => new Date()
   const fmtTime = d => d.toLocaleTimeString()
@@ -255,6 +326,12 @@
     if (v >= 1e6) return Math.round(v / 1e5) / 10 + 'M'
     if (v >= 1e3) return Math.round(v / 1e3) + 'k'
     return String(Math.round(v))
+  }
+  const comma = v => Math.round(Math.abs(num(v))).toLocaleString()
+  const fullNum = v => {
+    v = Math.abs(num(v))
+    const c = comma(v)
+    return v >= 1e3 ? `${c} (${short(v)})` : c
   }
   const fmtSec = sec => {
     sec = Math.max(0, Math.floor(sec))
@@ -289,7 +366,7 @@
   let reciprocateNotifications = []
 
   function showReciprocateNotification(donor) {
-    console.log('[HAMMER][RECIPROCATE] showReciprocateNotification called for', donor.name, '| troops:', donor.troops, '| gold:', donor.gold)
+    log('[RECIPROCATE] Notification for', donor.name, '| troops:', donor.troops, '| gold:', donor.gold)
     // Merge with existing notification from same donor if not dismissed
     const existing = reciprocateNotifications.find(n => n.donorId === donor.id && !n.dismissed)
     if (existing) {
@@ -482,7 +559,7 @@
   }
 
   function handleAutoReciprocate(donorId, donorName, troopsReceived) {
-    console.log('[HAMMER][RECIPROCATE] handleAutoReciprocate called for', donorName, '| troops:', troopsReceived)
+    log('[RECIPROCATE] Auto-reciprocate for', donorName, '| troops:', troopsReceived)
     // Check cooldown first
     const lastSent = reciprocateCooldowns.get(donorId)
     if (lastSent && (Date.now() - lastSent) < RECIPROCATE_COOLDOWN_MS) {
@@ -724,6 +801,19 @@
     let me = null
     if (currentClientID) me = lastPlayers.find(p => p.clientID === currentClientID)
     if (!me && mySmallID != null) me = lastPlayers.find(p => p.smallID === mySmallID)
+    // Fallback: search playersById when lastPlayers is empty (bootstrap-only / singleplayer)
+    if (!me && playersById.size > 0) {
+      if (currentClientID) {
+        for (const p of playersById.values()) {
+          if (p.clientID === currentClientID) { me = p; break }
+        }
+      }
+      if (!me && mySmallID != null) {
+        for (const p of playersById.values()) {
+          if (p.smallID === mySmallID) { me = p; break }
+        }
+      }
+    }
     return me || null
   }
 
@@ -777,22 +867,28 @@
       // Player updates
       const players = updates?.[GameUpdateType.Player]
       if (players?.length) {
-        lastPlayers = players.slice()
-        playersById.clear()
-        playersBySmallId.clear()
+        // True atomic swap: build new maps, then swap references in single assignment
+        const newById = new Map()
+        const newBySmallId = new Map()
         for (const p of players) {
           if (!p) continue
-          playersById.set(p.id, p)
-          if (p.smallID != null) playersBySmallId.set(p.smallID, p)
+          newById.set(p.id, p)
+          if (p.smallID != null) newBySmallId.set(p.smallID, p)
         }
+        lastPlayers = players.slice()
+        playersById = newById
+        playersBySmallId = newBySmallId
 
         let my = null
         if (currentClientID) my = players.find(p => p.clientID === currentClientID)
-        if (!my) my = players.find(p => p.isAlive)
+        // Fallback: only use isAlive heuristic if we haven't identified our player yet
+        if (!my && mySmallID === null) my = players.find(p => p.isAlive)
+        // If we already know our smallID, find ourselves by that
+        if (!my && mySmallID !== null) my = players.find(p => p.smallID === mySmallID)
         if (my) {
-          mySmallID = my.smallID ?? null
-          myTeam = my.team ?? null
-          myAllies = new Set(Array.isArray(my.allies) ? my.allies : [])
+          mySmallID = my.smallID ?? mySmallID
+          myTeam = my.team ?? myTeam
+          if (Array.isArray(my.allies)) myAllies = new Set(my.allies)
           if (S.goldRateEnabled) updateGoldRate(my)
 
           // Track resource changes for alternative donation detection
@@ -824,12 +920,7 @@
         // Process buffered messages now that player data is ready
         if (!playerDataReady && mySmallID !== null) {
           playerDataReady = true
-          log('[DEBUG] Player data ready, processing buffered messages:', pendingMessages.length)
-          for (const bufferedMsg of pendingMessages) {
-            try { processDisplayMessage(bufferedMsg) }
-            catch (err) { log('Buffered message error:', err) }
-          }
-          pendingMessages.length = 0
+          drainPendingMessages()
         }
       }
 
@@ -867,15 +958,16 @@
   }
 
   function processDisplayMessage(msg) {
-    if (!msg || typeof msg.messageType !== 'number') return
+    if (!msg || typeof msg.messageType !== 'number') { diagFilteredNoType++; return }
 
     S.rawMessages.push(msg)
     if (S.rawMessages.length > 100) S.rawMessages.shift()
 
-    if (S.paused) return
+    if (S.paused) { diagFilteredPaused++; return }
 
     // Buffer messages until player data is ready (timing fix)
     if (!playerDataReady) {
+      diagFilteredBuffered++
       log('[DEBUG] Buffering message until players ready:', msg.message)
       pendingMessages.push(msg)
       return
@@ -886,12 +978,18 @@
     const params = msg.params || {}
     const text = msg.message || ''
 
-    // Log all incoming display messages for diagnostics
-    console.log('[HAMMER] DisplayMessage:', { type: mt, pid, mySmallID, params: JSON.stringify(params).slice(0, 200) })
+    // Store last events for diagnostics
+    diagLastEvents.push({ ts: Date.now(), mt, pid, mySmallID, params: JSON.stringify(params).slice(0, 200) })
+    if (diagLastEvents.length > 5) diagLastEvents.shift()
+
+    log('[DisplayMessage]', { type: mt, pid, mySmallID, params: JSON.stringify(params).slice(0, 200) })
 
     if (pid !== mySmallID) {
+      diagFilteredPidMismatch++
       return
     }
+
+    diagProcessed++
 
     // Improved deduplication with timestamp
     const timestamp = Math.floor(Date.now() / 1000)  // 1-second granularity
@@ -918,8 +1016,8 @@
           r.troops += amt; r.count++; r.troopsSends++; r.last = nowDate()
           r.lastDonorTroops = donorTroopSnapshot
           S.feedIn.push({ ts: nowDate(), type: 'troops', name, amount: amt, isPort: false, donorTroops: donorTroopSnapshot })
-          console.log('[HAMMER] Received troops from', name, ':', amt, '| Reciprocate enabled:', S.reciprocateEnabled, '| OnTroops:', S.reciprocateOnTroops, '| Mode:', S.reciprocateMode)
-          if (S.feedIn.length > 500) S.feedIn.shift()
+          log('[RECEIVED] Troops from', name, ':', amt)
+          if (S.feedIn.length > 5000) S.feedIn.shift()
           donationsTracked++
 
           // Trigger reciprocation (manual or auto)
@@ -935,7 +1033,7 @@
               })
             }
           }
-        }
+        } else { diagFilteredNoPlayer++; log('[DEBUG] findPlayer null for RECEIVED_TROOPS:', name) }
       } else {
         log('[DEBUG] No params for RECEIVED_TROOPS:', { params, text })
       }
@@ -949,9 +1047,9 @@
           const r = bump(S.outbound, to.id)
           r.troops += amt; r.count++; r.troopsSends++; r.last = nowDate()
           S.feedOut.push({ ts: nowDate(), type: 'troops', name, amount: amt, isPort: false })
-          if (S.feedOut.length > 500) S.feedOut.shift()
+          if (S.feedOut.length > 5000) S.feedOut.shift()
           donationsTracked++
-        }
+        } else { diagFilteredNoPlayer++; log('[DEBUG] findPlayer null for SENT_TROOPS:', name) }
       } else {
         log('[DEBUG] No params for SENT_TROOPS:', { params, text })
       }
@@ -964,14 +1062,11 @@
         if (from) {
           const donorPlayer = playersById.get(from.id)
           const donorTroopSnapshot = donorPlayer ? (donorPlayer.troops || 0) : 0
-          const r = bump(S.inbound, from.id)
-          r.gold += amt; r.count++; r.goldSends++; r.last = nowDate()
-          r.lastDonorTroops = donorTroopSnapshot
           S.feedIn.push({ ts: nowDate(), type: 'gold', name, amount: amt, isPort: true, donorTroops: donorTroopSnapshot })
-          if (S.feedIn.length > 500) S.feedIn.shift()
+          if (S.feedIn.length > 5000) S.feedIn.shift()
           bumpPorts(from.id, amt, now)
           donationsTracked++
-        }
+        } else { diagFilteredNoPlayer++; log('[DEBUG] findPlayer null for RECEIVED_GOLD_TRADE:', name) }
       } else {
         log('[DEBUG] No params for RECEIVED_GOLD_TRADE:', { params, text })
       }
@@ -988,8 +1083,8 @@
           r.gold += amt; r.count++; r.goldSends++; r.last = nowDate()
           r.lastDonorTroops = donorTroopSnapshot
           S.feedIn.push({ ts: nowDate(), type: 'gold', name, amount: amt, isPort: false, donorTroops: donorTroopSnapshot })
-          console.log('[HAMMER] Received gold from', name, ':', amt, '| Reciprocate enabled:', S.reciprocateEnabled, '| OnGold:', S.reciprocateOnGold)
-          if (S.feedIn.length > 500) S.feedIn.shift()
+          log('[RECEIVED] Gold from', name, ':', amt)
+          if (S.feedIn.length > 5000) S.feedIn.shift()
           donationsTracked++
 
           // Trigger reciprocation on gold received
@@ -1005,7 +1100,7 @@
               })
             }
           }
-        }
+        } else { diagFilteredNoPlayer++; log('[DEBUG] findPlayer null for RECEIVED_GOLD:', name) }
       } else {
         log('[DEBUG] No params for RECEIVED_GOLD:', { params, text })
       }
@@ -1019,9 +1114,9 @@
           const r = bump(S.outbound, to.id)
           r.gold += amt; r.count++; r.goldSends++; r.last = nowDate()
           S.feedOut.push({ ts: nowDate(), type: 'gold', name, amount: amt, isPort: false })
-          if (S.feedOut.length > 500) S.feedOut.shift()
+          if (S.feedOut.length > 5000) S.feedOut.shift()
           donationsTracked++
-        }
+        } else { diagFilteredNoPlayer++; log('[DEBUG] findPlayer null for SENT_GOLD:', name) }
       } else {
         log('[DEBUG] No params for SENT_GOLD:', { params, text })
       }
@@ -1083,9 +1178,9 @@
     w.postMessage = function(data, ...rest) {
       try {
         if (data?.type === 'init' && data.clientID) {
-          console.log('[CLIENTID] Worker init message, clientID:', data.clientID)
+          log('[CLIENTID] Worker init, clientID:', data.clientID)
           if (currentClientID && currentClientID !== data.clientID) {
-            console.warn('[CLIENTID] ⚠️ MISMATCH! Previous:', currentClientID, 'New:', data.clientID)
+            Logger.warn('[CLIENTID] Changed:', currentClientID, '->', data.clientID)
           }
           currentClientID = data.clientID
         }
@@ -1185,13 +1280,16 @@
 
   if (!foundWorker) {
     console.log('[HAMMER] ⚠️ No existing Worker found - will intercept when created')
-    // Retry deep search after a delay (game might still be initializing)
-    setTimeout(() => {
-      if (!foundWorker) {
-        console.log('[HAMMER] 🔄 Retrying Worker discovery...')
-        deepFindWorker()
-      }
-    }, 500)
+    // Retry deep search with escalating delays (game might still be initializing)
+    const workerRetryDelays = [200, 500, 1000, 2000, 4000]
+    for (const delay of workerRetryDelays) {
+      setTimeout(() => {
+        if (!foundWorker) {
+          log('[HAMMER] 🔄 Retrying Worker discovery... (' + delay + 'ms)')
+          deepFindWorker()
+        }
+      }, delay)
+    }
   }
 
   // ===== WEBSOCKET WRAPPER =====
@@ -1207,20 +1305,12 @@
         if (typeof data === 'string') {
           const obj = JSON.parse(data)
 
-          // Log ALL intent messages for debugging
           if (obj?.type === 'intent') {
-            console.log('[WEBSOCKET] 📤 OUTGOING INTENT:', JSON.stringify(obj, null, 2))
+            log('[WEBSOCKET] Outgoing intent:', obj.intent?.type)
 
-            // Highlight donation intents specifically
             if (obj.intent?.type === 'donate_gold' || obj.intent?.type === 'donate_troops') {
-              console.log('[WEBSOCKET] 💰 DONATION INTENT DETECTED:', obj.intent)
-              console.log('[CLIENTID] 💰 DONATION USES clientID:', obj.intent.clientID)
               if (obj.intent.clientID !== currentClientID) {
-                console.error('[CLIENTID] ❌ CRITICAL: Donation clientID differs from hammer clientID!')
-                console.error('[CLIENTID]    Donation uses:', obj.intent.clientID)
-                console.error('[CLIENTID]    Hammer uses:', currentClientID)
-              } else {
-                console.log('[CLIENTID] ✅ Donation clientID matches hammer clientID')
+                Logger.error('[CLIENTID] Donation clientID mismatch! Intent:', obj.intent.clientID, 'Hammer:', currentClientID)
               }
             }
 
@@ -1228,13 +1318,11 @@
           }
 
           if (obj?.type === 'join' && obj.clientID) {
-            console.log('[CLIENTID] WebSocket join message, clientID:', obj.clientID)
             if (currentClientID && currentClientID !== obj.clientID) {
-              console.warn('[CLIENTID] ⚠️ MISMATCH! Previous:', currentClientID, 'New:', obj.clientID)
+              Logger.warn('[CLIENTID] Changed:', currentClientID, '->', obj.clientID)
             }
             currentClientID = obj.clientID
             gameSocket = this
-            console.log('[WEBSOCKET] 🎮 Client joined, ID:', obj.clientID)
           }
         }
       } catch {}
@@ -1251,9 +1339,8 @@
           gameSocket = ws
         }
 
-        // Log any donation-related server responses
         if (obj?.type === 'error' || obj?.error) {
-          console.log('[WEBSOCKET] ❌ SERVER ERROR:', obj)
+          Logger.error('[WEBSOCKET] Server error:', obj)
         }
       } catch {}
     })
@@ -1359,13 +1446,16 @@
 
   if (!foundWebSocket) {
     console.log('[HAMMER] ⚠️ No existing WebSocket found - will intercept when created')
-    // Retry deep search
-    setTimeout(() => {
-      if (!foundWebSocket) {
-        console.log('[HAMMER] 🔄 Retrying WebSocket discovery...')
-        deepFindWebSocket()
-      }
-    }, 500)
+    // Retry deep search with escalating delays
+    const wsRetryDelays = [200, 500, 1000, 2000, 4000]
+    for (const delay of wsRetryDelays) {
+      setTimeout(() => {
+        if (!foundWebSocket) {
+          log('[HAMMER] 🔄 Retrying WebSocket discovery... (' + delay + 'ms)')
+          deepFindWebSocket()
+        }
+      }, delay)
+    }
   }
 
   // ===== BOOTSTRAP PLAYER DATA FROM GAME (for mid-match injection) =====
@@ -1430,6 +1520,7 @@
             mySmallID = smallID
             myTeam = typeof p.team === 'function' ? p.team() : p.team
             playerDataReady = true
+            drainPendingMessages()
             console.log('[HAMMER] 🎮 Bootstrapped myPlayer from events-display - mySmallID:', mySmallID)
             return true
           }
@@ -1444,6 +1535,9 @@
 
   // Helper to bootstrap players from a list
   function bootstrapPlayersFromList(playerList, source) {
+    let foundMyPlayer = false
+    const newById = new Map()
+    const newBySmallId = new Map()
     for (const p of playerList) {
       if (!p) continue
       // Players might be PlayerView objects with methods
@@ -1455,32 +1549,132 @@
       const team = typeof p.team === 'function' ? p.team() : p.team
       const troops = typeof p.troops === 'function' ? p.troops() : p.troops
       const gold = typeof p.gold === 'function' ? p.gold() : p.gold
+      const tilesOwned = typeof p.numTilesOwned === 'function' ? p.numTilesOwned() : (p.tilesOwned || p.numTilesOwned)
+      const allies = typeof p.allies === 'function' ? p.allies() : p.allies
 
-      const playerData = { id, smallID, clientID, name, displayName: name, isAlive, team, troops, gold }
-      playersById.set(id, playerData)
-      if (smallID != null) playersBySmallId.set(smallID, playerData)
+      const playerData = { id, smallID, clientID, name, displayName: name, isAlive, team, troops, gold, tilesOwned, allies }
+      newById.set(id, playerData)
+      if (smallID != null) newBySmallId.set(smallID, playerData)
 
       // Find our player
       if (clientID === currentClientID) {
         mySmallID = smallID
         myTeam = team
-        playerDataReady = true
+        if (Array.isArray(allies)) myAllies = new Set(allies)
+        foundMyPlayer = true
         console.log('[HAMMER] 🎮 Bootstrapped player data from', source, '- mySmallID:', mySmallID)
       }
     }
 
+    // Atomic swap: replace map references in single assignment
+    if (newById.size > 0) {
+      playersById = newById
+      playersBySmallId = newBySmallId
+    }
+
     if (playersById.size > 0) {
       console.log('[HAMMER] 📊 Bootstrapped', playersById.size, 'players from', source)
-      playerDataReady = true
+      // Only mark ready if we identified our player (mySmallID known)
+      if (foundMyPlayer && mySmallID !== null) {
+        playerDataReady = true
+        drainPendingMessages()
+      } else {
+        log('[DEBUG] Bootstrap loaded players but our player not identified yet (clientID:', currentClientID, ')')
+      }
       return true
     }
     return false
   }
 
-  // Try to bootstrap immediately and after delays
+  // Try to bootstrap immediately and after delays (escalating for slow-loading games)
   setTimeout(bootstrapPlayerData, 100)
   setTimeout(bootstrapPlayerData, 500)
   setTimeout(bootstrapPlayerData, 1000)
+  setTimeout(bootstrapPlayerData, 2000)
+  setTimeout(bootstrapPlayerData, 4000)
+
+  // ===== PERIODIC PLAYER DATA REFRESH =====
+  // Keeps playersById/lastPlayers current even when Worker hook fails (singleplayer mode)
+  let playerRefreshInterval = null
+
+  function updatePlayersFromList(playerList) {
+    const newPlayersById = new Map()
+    const newPlayersBySmallId = new Map()
+    const newLastPlayers = []
+
+    for (const p of playerList) {
+      if (!p) continue
+      const id = typeof p.id === 'function' ? p.id() : p.id
+      const smallID = typeof p.smallID === 'function' ? p.smallID() : p.smallID
+      const clientID = typeof p.clientID === 'function' ? p.clientID() : p.clientID
+      const name = typeof p.name === 'function' ? p.name() : (p.displayName || p.name)
+      const isAlive = typeof p.isAlive === 'function' ? p.isAlive() : p.isAlive
+      const team = typeof p.team === 'function' ? p.team() : p.team
+      const troops = typeof p.troops === 'function' ? p.troops() : p.troops
+      const gold = typeof p.gold === 'function' ? p.gold() : p.gold
+      const tilesOwned = typeof p.numTilesOwned === 'function' ? p.numTilesOwned() : (p.tilesOwned || p.numTilesOwned)
+      const allies = typeof p.allies === 'function' ? p.allies() : p.allies
+
+      const playerData = { id, smallID, clientID, name, displayName: name, isAlive, team, troops, gold, tilesOwned, allies }
+      newPlayersById.set(id, playerData)
+      if (smallID != null) newPlayersBySmallId.set(smallID, playerData)
+      newLastPlayers.push(playerData)
+
+      // Update our player's data
+      if (clientID === currentClientID) {
+        mySmallID = smallID
+        myTeam = team
+        if (Array.isArray(allies)) myAllies = new Set(allies)
+        if (!playerDataReady) {
+          playerDataReady = true
+          drainPendingMessages()
+        }
+        if (S.goldRateEnabled) updateGoldRate(playerData)
+      }
+    }
+
+    // True atomic swap: single reference assignment, no clear() gap
+    if (newPlayersById.size > 0) {
+      playersById = newPlayersById
+      playersBySmallId = newPlayersBySmallId
+      lastPlayers = newLastPlayers
+    }
+  }
+
+  function refreshPlayerData() {
+    // Try events-display.game._players (singleplayer/team mode)
+    try {
+      const eventsDisplay = document.querySelector('events-display')
+      if (eventsDisplay?.game?._players) {
+        const playersMap = eventsDisplay.game._players
+        const playerList = playersMap instanceof Map ? [...playersMap.values()] :
+                          Array.isArray(playersMap) ? playersMap : Object.values(playersMap)
+        if (playerList.length > 0) {
+          updatePlayersFromList(playerList)
+          return
+        }
+      }
+    } catch (e) { log('[DEBUG] refreshPlayerData events-display error:', e) }
+
+    // Try game-view path (multiplayer)
+    try {
+      const gameView = document.querySelector('game-view')
+      if (gameView?.clientGameRunner?.gameView?.players) {
+        const playersFunc = typeof gameView.clientGameRunner.gameView.players === 'function'
+          ? gameView.clientGameRunner.gameView.players()
+          : gameView.clientGameRunner.gameView.players
+        const playerList = playersFunc instanceof Map ? [...playersFunc.values()] :
+                          Array.isArray(playersFunc) ? playersFunc : []
+        if (playerList.length > 0) {
+          updatePlayersFromList(playerList)
+          return
+        }
+      }
+    } catch (e) { log('[DEBUG] refreshPlayerData game-view error:', e) }
+  }
+
+  playerRefreshInterval = setInterval(refreshPlayerData, 3000)
+  eventCleanup.push(() => { if (playerRefreshInterval) clearInterval(playerRefreshInterval) })
 
   // Legacy compatibility - keep old code path but it won't match anymore
   // (the deepFindWebSocket above handles everything now)
@@ -1520,7 +1714,7 @@
     if (eventBus) return true
 
     eventBusAttempts++
-    console.log(`[HAMMER] EventBus search attempt ${eventBusAttempts}/${maxEventBusAttempts}`)
+    log(`[EventBus] Search attempt ${eventBusAttempts}/${maxEventBusAttempts}`)
 
     // Try to find EventBus via events-display element
     try {
@@ -1923,6 +2117,7 @@
   let donateTroopsEventClass = null
   let emojiEventClass = null
   let quickChatEventClass = null
+  let allianceRequestEventClass = null
   let discoveryMethod = { troops: null, gold: null } // 'property', 'prototype', 'cached', 'hardcoded'
   let lastScanResults = [] // stores probe results for diagnostics UI
 
@@ -1995,6 +2190,9 @@
       result.donationType = 'emoji'
     } else if (result.hasRecipient && result.hasQuickChatKey) {
       result.donationType = 'quick_chat'
+    } else if (result.hasRecipient && !result.hasTroops && !result.hasGold && !result.hasEmoji && !result.hasQuickChatKey) {
+      // Recipient-only event: likely alliance request or target player
+      result.donationType = 'recipient_only'
     }
 
     return result
@@ -2026,6 +2224,7 @@
     donateTroopsEventClass = null
     emojiEventClass = null
     quickChatEventClass = null
+    allianceRequestEventClass = null
     discoveryMethod = { troops: null, gold: null }
 
     // Scan all classes
@@ -2055,6 +2254,11 @@
       if (probe.donationType === 'quick_chat' && !quickChatEventClass) {
         quickChatEventClass = probe.class
         log('[EVENT-DISCOVERY] QuickChat class:', probe.name)
+      }
+      if (probe.donationType === 'recipient_only' && !allianceRequestEventClass) {
+        allianceRequestEventClass = probe.class
+        log('[EVENT-DISCOVERY] Alliance/recipient-only class:', probe.name,
+          '(properties:', probe.properties.join(', '), ')')
       }
     }
 
@@ -2166,7 +2370,7 @@
         if (asSendTroops(target.id, toSend)) {
           S.asTroopsLastSend[target.id] = now
           S.asTroopsNextSend[target.id] = now + cooldownMs
-          S.asTroopsLog.push(`[${fmtTime(nowDate())}] Sent ${short(toSend)} troops to ${target.name}`)
+          S.asTroopsLog.push(`[${fmtTime(nowDate())}] Sent ${short(dTroops(toSend))} troops to ${target.name}`)
           if (S.asTroopsLog.length > 100) S.asTroopsLog.shift()
         } else {
           log(`[AUTO-TROOPS] Send failed to ${target.name}`)
@@ -2218,7 +2422,7 @@
       results.match = results.hammerClientID === results.gameViewClientID ||
                      results.hammerClientID === results.transportClientID
 
-      console.log('[CLIENTID-CHECK]', results)
+      log('[CLIENTID-CHECK]', results)
       return results
     } catch (err) {
       console.error('[CLIENTID-CHECK] Error:', err)
@@ -2308,6 +2512,29 @@
       log('[COMMS] QuickChat sent via WebSocket:', intent)
       return true
     } catch (err) { log('[COMMS] WebSocket quickchat failed:', err); return false }
+  }
+
+  function sendAllianceRequest(recipientId) {
+    // Try EventBus with discovered alliance request event class
+    if (eventBus && allianceRequestEventClass && recipientId !== 'AllPlayers') {
+      const playerView = getPlayerView(recipientId)
+      if (playerView) {
+        try {
+          const event = new allianceRequestEventClass(playerView)
+          eventBus.emit(event)
+          log('[COMMS] Alliance request sent via EventBus to', recipientId)
+          return true
+        } catch (err) { log('[COMMS] EventBus alliance failed, trying WebSocket:', err) }
+      }
+    }
+    // WebSocket fallback
+    if (!gameSocket || gameSocket.readyState !== 1 || !currentClientID) return false
+    try {
+      const msg = { type: 'intent', intent: { type: 'send_alliance_request', clientID: currentClientID, recipient: recipientId } }
+      gameSocket.send(JSON.stringify(msg))
+      log('[COMMS] Alliance request sent via WebSocket:', msg.intent)
+      return true
+    } catch (err) { log('[COMMS] WebSocket alliance failed:', err); return false }
   }
 
   function logCommsSent(type, label, targetName) {
@@ -2407,7 +2634,7 @@
   const tabs = ['summary', 'stats', 'ports', 'feed', 'alliances', 'autotroops', 'autogold', 'reciprocate', 'comms', 'hotkeys', 'about']
   ui.innerHTML = `
     <div id="hm-head" style="display:flex;align-items:center;justify-content:space-between;padding:8px 10px;background:#151f33;border-bottom:1px solid #86531f;cursor:move;flex-shrink:0">
-      <div><b>Hammer Control Panel</b> <span style="opacity:.85">v10.4</span></div>
+      <div><b>Hammer Control Panel</b> <span style="opacity:.85">v10.9</span></div>
       <div class="btns" style="display:flex;gap:6px;flex-wrap:wrap">
         <div id="hm-tabs" style="display:flex;gap:4px;flex-wrap:wrap">
           ${tabs.map(v => `<button class="tab" data-v="${v}">${v[0].toUpperCase() + v.slice(1)}</button>`).join('')}
@@ -2562,7 +2789,7 @@
     }
     const a = document.createElement('a')
     a.href = URL.createObjectURL(new Blob([JSON.stringify(obj, null, 2)], { type: 'application/json' }))
-    a.download = `hammer_v10.4_${new Date().toISOString().replace(/[:.]/g, '-')}.json`
+    a.download = `hammer_v10.9_${new Date().toISOString().replace(/[:.]/g, '-')}.json`
     a.click()
     setTimeout(() => URL.revokeObjectURL(a.href), 800)
   }
@@ -2751,7 +2978,7 @@
       const maxT = estimateMaxTroops(me.tilesOwned, me.smallID)
       const troopPct = maxT > 0 ? Math.round((me.troops / maxT) * 100) : 0
       html += `<div class="row"><div>Player</div><div class="mono">${esc(me.displayName || me.name || 'Unknown')}</div></div>`
-      html += `<div class="row"><div>Troops</div><div class="mono">${short(me.troops)} / ${short(maxT)} (${troopPct}%)</div></div>`
+      html += `<div class="row"><div>Troops</div><div class="mono">${short(dTroops(me.troops))} / ${short(dTroops(maxT))} (${troopPct}%)</div></div>`
       html += `<div class="row"><div>Gold</div><div class="mono">${short(me.gold)}</div></div>`
       html += `<div class="row"><div>Tiles</div><div class="mono">${me.tilesOwned || 0}</div></div>`
     } else {
@@ -2824,12 +3051,30 @@
     html += `<div class="row"><div>Unique Donors</div><div class="mono">${uniqueDonors}</div></div>`
     html += `<div class="row"><div>Unique Recipients</div><div class="mono">${uniqueRecipients}</div></div>`
 
-    let biggestIn = 0, biggestInName = ''
+    let biggestGoldIn = 0, biggestGoldInName = ''
+    let biggestTroopsIn = 0, biggestTroopsInName = ''
+    let biggestGoldOut = 0, biggestGoldOutName = ''
+    let biggestTroopsOut = 0, biggestTroopsOutName = ''
     for (const item of S.feedIn) {
-      if (item.amount > biggestIn && !item.isPort) { biggestIn = item.amount; biggestInName = item.name }
+      if (item.isPort) continue
+      if (item.type === 'gold' && item.amount > biggestGoldIn) { biggestGoldIn = item.amount; biggestGoldInName = item.name }
+      if (item.type === 'troops' && item.amount > biggestTroopsIn) { biggestTroopsIn = item.amount; biggestTroopsInName = item.name }
     }
-    if (biggestIn > 0) {
-      html += `<div class="row"><div>Biggest Donation</div><div class="mono">${short(biggestIn)} from ${esc(biggestInName)}</div></div>`
+    for (const item of S.feedOut) {
+      if (item.type === 'gold' && item.amount > biggestGoldOut) { biggestGoldOut = item.amount; biggestGoldOutName = item.name }
+      if (item.type === 'troops' && item.amount > biggestTroopsOut) { biggestTroopsOut = item.amount; biggestTroopsOutName = item.name }
+    }
+    if (biggestGoldIn > 0) {
+      html += `<div class="row"><div>Biggest Gold Received</div><div class="mono" style="color:#7ff2a3">${short(biggestGoldIn)} 💰 from ${esc(biggestGoldInName)}</div></div>`
+    }
+    if (biggestTroopsIn > 0) {
+      html += `<div class="row"><div>Biggest Troops Received</div><div class="mono" style="color:#7ff2a3">${short(biggestTroopsIn)} 🪖 from ${esc(biggestTroopsInName)}</div></div>`
+    }
+    if (biggestGoldOut > 0) {
+      html += `<div class="row"><div>Biggest Gold Sent</div><div class="mono" style="color:#ffcf5d">${short(biggestGoldOut)} 💰 to ${esc(biggestGoldOutName)}</div></div>`
+    }
+    if (biggestTroopsOut > 0) {
+      html += `<div class="row"><div>Biggest Troops Sent</div><div class="mono" style="color:#ffcf5d">${short(biggestTroopsOut)} 🪖 to ${esc(biggestTroopsOutName)}</div></div>`
     }
 
     const networkType = inKeys.length > outKeys.length * 2 ? 'Receiver Hub' :
@@ -2907,7 +3152,7 @@
 
     const all = [...S.feedIn.map(x => ({ ...x, dir: 'in' })), ...S.feedOut.map(x => ({ ...x, dir: 'out' }))]
       .sort((a, b) => b.ts - a.ts)
-      .slice(0, 50)
+      .slice(0, 200)
 
     if (!all.length) {
       return html + '<div class="muted">No donations yet</div>'
@@ -2917,6 +3162,7 @@
     html += '<div style="display:flex;gap:12px;margin-bottom:8px;font-size:10px">'
     html += '<div style="display:flex;align-items:center;gap:4px"><span style="display:inline-block;width:10px;height:10px;background:#1a3a2a;border:1px solid #7ff2a3;border-radius:2px"></span> Incoming</div>'
     html += '<div style="display:flex;align-items:center;gap:4px"><span style="display:inline-block;width:10px;height:10px;background:#3a2a1a;border:1px solid #ffcf5d;border-radius:2px"></span> Outgoing</div>'
+    html += '<div style="display:flex;align-items:center;gap:4px">🏪 Port Trade</div>'
     html += '</div>'
 
     html += '<div style="font-size:12px">'
@@ -2949,7 +3195,7 @@
     let html = `<div class="box" style="margin:4px 0">`
     html += `<div class="row"><div style="font-weight:700">${esc(p.displayName || p.name || 'Unknown')}</div><div style="display:flex;align-items:center;gap:6px"><span class="mono">${troopPct}%</span><button class="alliance-comms-toggle" data-pid="${p.id}" style="padding:2px 6px;background:${isExpanded ? '#2a5a4a' : '#1a2a3a'};border:1px solid ${isExpanded ? '#7ff2a3' : '#3a5a7a'};border-radius:3px;cursor:pointer;font-size:10px">${isExpanded ? '▲ Comms' : '▼ Comms'}</button></div></div>`
     html += `<div style="display:grid;grid-template-columns:1fr 1fr;gap:4px;margin-top:4px;font-size:10px">`
-    html += `<div class="muted">Troops: <span class="mono" style="color:#7ff2a3">${short(p.troops)} / ${short(maxT)}</span></div>`
+    html += `<div class="muted">Troops: <span class="mono" style="color:#7ff2a3">${short(dTroops(p.troops))} / ${short(dTroops(maxT))}</span></div>`
     html += `<div class="muted">Tiles: <span class="mono" style="color:#7bb8ff">${tiles}</span></div>`
     html += `</div>`
     // Inline comms panel
@@ -2981,6 +3227,9 @@
         html += `<button class="alliance-qc-btn" data-pid="${p.id}" data-qc="${qa.key}" style="padding:3px 6px;font-size:9px;background:#0d1520;border:1px solid #1a2a3a;border-radius:3px;cursor:pointer;color:#c8d8e8">${qa.label}</button>`
       }
       html += `</div>`
+      html += `<div style="margin-top:8px">`
+      html += `<button class="alliance-open-comms" data-pid="${p.id}" style="width:100%;padding:6px;background:#1a2a3a;border:1px solid #7bb8ff;border-radius:4px;cursor:pointer;font-size:10px;color:#7bb8ff">📡 Open Full Comms with ${esc(p.displayName || p.name || 'player')}</button>`
+      html += `</div>`
       html += `</div>`
     }
     html += '</div>'
@@ -2991,7 +3240,7 @@
     const me = readMyPlayer()
 
     let html = '<div class="title">🤝 Alliances & Teams</div>'
-    html += '<div class="help">View teammates, allies, and tag mates. Click Comms to send emoji/quickchat.</div>'
+    html += '<div class="help">View teammates, allies, and tag mates. Click <b>Comms</b> on a player card for quick actions, or use the <b>Comms tab</b> for full communication features (all emojis, categorized quick chat, alliance requests).</div>'
 
     if (!me) {
       return html + '<div class="muted">Player data not available</div>'
@@ -3047,18 +3296,18 @@
 
       html += '<div class="preview-calc">'
       html += `<div style="font-size:16px;margin-bottom:8px"><b>LIVE PREVIEW</b></div>`
-      html += `<div>You have: <b>${short(me.troops)}</b> / <b>${short(maxT)}</b> troops (<b>${troopPct}%</b>)</div>`
+      html += `<div>You have: <b>${fullNum(dTroops(me.troops))}</b> / <b>${fullNum(dTroops(maxT))}</b> troops (<b>${troopPct}%</b>)</div>`
       if (willSend) {
-        html += `<div style="color:#7ff2a3;font-size:15px;margin-top:8px">✅ Will send: <b>${short(sendAmount)}</b> troops (${S.asTroopsRatio}% of ${short(me.troops)})</div>`
+        html += `<div style="color:#7ff2a3;font-size:15px;margin-top:8px">✅ Will send: <b>${fullNum(dTroops(sendAmount))}</b> troops (${S.asTroopsRatio}% of ${fullNum(dTroops(me.troops))})</div>`
         if (targetCount > 1) {
           const perTarget = Math.floor(sendAmount / targetCount)
-          html += `<div style="color:#7bb8ff">Across <b>${targetCount}</b> targets = <b>${short(perTarget)}</b> each</div>`
+          html += `<div style="color:#7bb8ff">Across <b>${targetCount}</b> targets = <b>${fullNum(dTroops(perTarget))}</b> each</div>`
         } else if (targetCount === 0) {
           html += `<div style="color:#ffcf5d">⚠️ No targets configured</div>`
         }
         const remaining = me.troops - sendAmount
         const remainPct = maxT > 0 ? Math.round((remaining / maxT) * 100) : 0
-        html += `<div>You keep: <b>${short(remaining)}</b> troops (${remainPct}% capacity)</div>`
+        html += `<div>You keep: <b>${fullNum(dTroops(remaining))}</b> troops (${remainPct}% capacity)</div>`
       } else {
         html += `<div style="color:#ff8b94;margin-top:8px">❌ Below threshold (need ${S.asTroopsThreshold}%, have ${troopPct}%)</div>`
       }
@@ -3113,10 +3362,14 @@
         for (const p of allTargets) {
           const name = p.displayName || p.name || 'Unknown'
           const isSelected = S.asTroopsTargets.includes(name)
+          const maxT = estimateMaxTroops(p.tilesOwned, p.smallID)
+          const troopVal = Number(p.troops || 0)
+          const goldVal = Number(p.gold || 0)
+          const troopPct = maxT > 0 ? Math.round((troopVal / maxT) * 100) : 0
           html += '<div class="box" style="margin:4px 0;cursor:pointer" data-toggle-troop-target="' + esc(name) + '">'
           html += '<div class="row">'
           html += `<div style="font-weight:${isSelected ? '700' : '400'};color:${isSelected ? '#7ff2a3' : 'inherit'}">${isSelected ? '✓ ' : ''}${esc(name)}</div>`
-          html += `<div class="mono" style="color:#7bb8ff">${short(p.troops)}</div>`
+          html += `<div class="mono" style="font-size:10px;text-align:right"><span style="color:#7ff2a3">${short(dTroops(troopVal))} 🪖 ${troopPct}%</span> <span style="color:#ffcf5d">${short(goldVal)} 💰</span></div>`
           html += '</div>'
           html += '</div>'
         }
@@ -3204,18 +3457,18 @@
 
       html += '<div class="preview-calc">'
       html += `<div style="font-size:16px;margin-bottom:8px"><b>LIVE PREVIEW</b></div>`
-      html += `<div>You have: <b>${short(myGold)}</b> gold</div>`
+      html += `<div>You have: <b>${fullNum(myGold)}</b> gold</div>`
       if (willSend) {
-        html += `<div style="color:#7ff2a3;font-size:15px;margin-top:8px">✅ Will send: <b>${short(sendAmount)}</b> gold (${S.asGoldRatio}% of ${short(myGold)})</div>`
+        html += `<div style="color:#7ff2a3;font-size:15px;margin-top:8px">✅ Will send: <b>${fullNum(sendAmount)}</b> gold (${S.asGoldRatio}% of ${fullNum(myGold)})</div>`
         if (targetCount > 1) {
           const perTarget = Math.floor(sendAmount / targetCount)
-          html += `<div style="color:#7bb8ff">Across <b>${targetCount}</b> targets = <b>${short(perTarget)}</b> each</div>`
+          html += `<div style="color:#7bb8ff">Across <b>${targetCount}</b> targets = <b>${fullNum(perTarget)}</b> each</div>`
         } else if (targetCount === 0) {
           html += `<div style="color:#ffcf5d">⚠️ No targets configured</div>`
         }
-        html += `<div>You keep: <b>${short(myGold - sendAmount)}</b> gold</div>`
+        html += `<div>You keep: <b>${fullNum(myGold - sendAmount)}</b> gold</div>`
       } else {
-        html += `<div style="color:#ff8b94;margin-top:8px">❌ Below threshold (need ${short(S.asGoldThreshold)}, have ${short(myGold)})</div>`
+        html += `<div style="color:#ff8b94;margin-top:8px">❌ Below threshold (need ${fullNum(S.asGoldThreshold)}, have ${fullNum(myGold)})</div>`
       }
       html += '</div>'
     }
@@ -3395,7 +3648,7 @@
     html += '<div class="box">'
     html += `<div class="row" style="font-size:16px">`
     html += `<div><b>Your Current Gold:</b></div>`
-    html += `<div class="mono" style="color:#ffcf5d">${short(myGold)} 💰</div>`
+    html += `<div class="mono" style="color:#ffcf5d">${fullNum(myGold)} 💰</div>`
     html += `</div>`
     html += '</div>'
 
@@ -3443,9 +3696,9 @@
         html += '</div>'
         // Donor stats grid - 2x2 layout
         html += '<div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;margin-top:6px;font-size:10px">'
-        html += `<div><span class="muted">Troops recv:</span><br><span class="mono" style="color:#7ff2a3">${short(donor.totalTroops)} 🪖</span> <span class="muted">(${donor.troopsSends} sends)</span></div>`
-        html += `<div><span class="muted">Gold recv:</span><br><span class="mono" style="color:#ffcf5d">${short(donor.totalGold)} 💰</span> <span class="muted">(${donor.goldSends} sends)</span></div>`
-        html += `<div><span class="muted">Last send:</span><br><span class="mono" style="color:#7bb8ff">${short(donor.lastAmount)} ${donor.lastType === 'troops' ? '🪖' : '💰'}</span></div>`
+        html += `<div><span class="muted">Troops recv:</span><br><span class="mono" style="color:#7ff2a3">${fullNum(donor.totalTroops)} 🪖</span> <span class="muted">(${donor.troopsSends} sends)</span></div>`
+        html += `<div><span class="muted">Gold recv:</span><br><span class="mono" style="color:#ffcf5d">${fullNum(donor.totalGold)} 💰</span> <span class="muted">(${donor.goldSends} sends)</span></div>`
+        html += `<div><span class="muted">Last send:</span><br><span class="mono" style="color:#7bb8ff">${fullNum(donor.lastAmount)} ${donor.lastType === 'troops' ? '🪖' : '💰'}</span></div>`
         html += `<div><span class="muted">% of army:</span><br><span class="mono" style="color:#ffcf5d">${donor.pctOfArmy}%</span> <span class="muted">(at donation)</span></div>`
         html += '</div>'
         // Percentage send buttons
@@ -3454,7 +3707,7 @@
           const goldAmt = Math.floor(myGold * pct / 100)
           html += `<button class="recip-send-btn" data-donor-id="${donor.id}" data-donor-name="${esc(donor.name)}" data-pct="${pct}" style="flex:1;padding:6px;background:#2a4a6a;border:1px solid #7bb8ff;border-radius:4px;cursor:pointer;font-size:11px">`
           html += `<div style="font-weight:bold">${pct}%</div>`
-          html += `<div style="font-size:9px;color:#9bb0c8">${short(goldAmt)}</div>`
+          html += `<div style="font-size:9px;color:#9bb0c8">${fullNum(goldAmt)}</div>`
           html += `</button>`
         }
         html += '</div>'
@@ -3697,6 +3950,8 @@
 
     html += '</div>'
 
+    // (Alliance Request removed - not functional in-game)
+
     // Emoji grid
     html += '<div class="box"><div class="title" style="margin-top:0">😀 Emojis</div>'
     html += '<div class="help">Click to send. Note: you may not see your own emojis in-game.</div>'
@@ -3742,6 +3997,80 @@
   }
 
 
+  // ===== RECONNECT / RE-HOOK ALL =====
+  let lastReconnectTime = 0
+  let lastReconnectResult = null
+
+  function reconnectAll() {
+    const now = Date.now()
+    if (now - lastReconnectTime < 2000) {
+      showStatus('⏳ Please wait before retrying...')
+      return
+    }
+    lastReconnectTime = now
+
+    const results = []
+    console.log('[HAMMER] 🔄 Manual reconnect triggered...')
+
+    // 1. Re-discover Worker
+    if (!foundWorker) {
+      const found = deepFindWorker()
+      results.push(found ? '✅ Worker found' : '❌ Worker not found')
+    } else {
+      results.push('✅ Worker (already hooked)')
+    }
+
+    // 2. Re-discover WebSocket
+    if (!foundWebSocket || !gameSocket || gameSocket.readyState !== 1) {
+      const found = deepFindWebSocket()
+      results.push(found ? '✅ WebSocket found' : '❌ WebSocket not found')
+    } else {
+      results.push('✅ WebSocket (already connected)')
+    }
+
+    // 3. Re-discover EventBus
+    if (!eventBus) {
+      eventBusAttempts = 0  // Reset counter so findEventBus retries
+      const found = findEventBus()
+      results.push(found ? '✅ EventBus found' : '❌ EventBus not found (will keep trying)')
+    } else {
+      // Re-scan event classes even if EventBus already found
+      discoverDonationEventClasses()
+      results.push('✅ EventBus (re-scanned event classes)')
+    }
+
+    // 4. Re-hook GameView
+    if (!gameViewHooked) {
+      clearStaleHooks()
+      const hooked = hookGameView()
+      results.push(hooked ? '✅ GameView hooked' : '❌ GameView not available')
+    } else {
+      results.push('✅ GameView (already hooked)')
+    }
+
+    // 5. Re-bootstrap player data
+    if (!playerDataReady || mySmallID === null) {
+      const bootstrapped = bootstrapPlayerData()
+      results.push(bootstrapped ? '✅ Players bootstrapped' : '❌ Player data not available')
+    } else {
+      // Force refresh even if already ready
+      refreshPlayerData()
+      results.push('✅ Players refreshed (' + playersById.size + ')')
+    }
+
+    // 6. Drain any stuck messages
+    if (pendingMessages.length > 0 && playerDataReady) {
+      const count = pendingMessages.length
+      drainPendingMessages()
+      results.push('✅ Drained ' + count + ' buffered messages')
+    }
+
+    lastReconnectResult = results
+    const summary = results.join(' | ')
+    console.log('[HAMMER] Reconnect results:', summary)
+    showStatus('🔄 ' + results.filter(r => r.startsWith('✅')).length + '/' + results.length + ' systems connected', 3000)
+  }
+
   function hotkeysView() {
     let html = '<div class="title">⌨️ Keyboard Shortcuts</div>'
     html += '<div class="help">Available keyboard shortcuts</div>'
@@ -3760,7 +4089,7 @@
     html += '<div class="box">'
     html += '<div style="text-align:center;padding:16px">'
     html += '<div style="font-size:22px;font-weight:bold;color:#ffcf5d">Hammer Control Panel</div>'
-    html += '<div style="font-size:14px;color:#9bb0c8;margin-top:4px">v10.4</div>'
+    html += '<div style="font-size:14px;color:#9bb0c8;margin-top:4px">v10.9</div>'
     html += '</div>'
     html += '</div>'
 
@@ -3794,21 +4123,66 @@
     html += '<div class="title" style="margin-top:0">Credits</div>'
     html += '<div style="font-size:11px;line-height:1.6">'
     html += '<div class="row"><div>Author</div><div class="mono">Stanley</div></div>'
-    html += '<div class="row"><div>Version</div><div class="mono">10.4</div></div>'
+    html += '<div class="row"><div>Version</div><div class="mono">10.9</div></div>'
     html += '<div class="row"><div>Game</div><div class="mono">OpenFront.io</div></div>'
     html += '<div class="row"><div>License</div><div class="mono">Free to use</div></div>'
     html += '</div>'
     html += '</div>'
 
+    // System status with health score
+    const sysChecks = [gameViewHooked, playerDataReady, !!eventBus, gameSocket && gameSocket.readyState === 1, foundWorker, mySmallID !== null]
+    const sysOk = sysChecks.filter(Boolean).length
+    const sysTotal = sysChecks.length
+    const healthPct = Math.round((sysOk / sysTotal) * 100)
+    const healthColor = healthPct === 100 ? '#7ff2a3' : healthPct >= 67 ? '#ffcf5d' : '#ff8b94'
+
     html += '<div class="box">'
-    html += '<div class="title" style="margin-top:0">System Status</div>'
+    html += '<div class="row" style="margin-bottom:8px"><div class="title" style="margin-top:0">System Status</div>'
+    html += '<div style="display:flex;align-items:center;gap:8px">'
+    html += '<span class="mono" style="color:' + healthColor + ';font-size:14px;font-weight:bold">' + sysOk + '/' + sysTotal + '</span>'
+    html += '<button id="about-reconnect" style="padding:6px 14px;background:#1a3a4a;border:2px solid #7bb8ff;border-radius:6px;cursor:pointer;font-weight:bold;color:#7bb8ff;font-size:12px">🔄 Reconnect</button>'
+    html += '</div></div>'
     html += '<div style="font-size:11px">'
     html += '<div class="row"><div>GameView Hook</div><div class="mono" style="color:' + (gameViewHooked ? '#7ff2a3' : '#ff8b94') + '">' + (gameViewHooked ? 'Hooked' : 'Not Hooked') + '</div></div>'
+    html += '<div class="row"><div>Worker</div><div class="mono" style="color:' + (foundWorker ? '#7ff2a3' : '#ff8b94') + '">' + (foundWorker ? 'Wrapped' : 'Not Found') + '</div></div>'
     html += '<div class="row"><div>DisplayEvents</div><div class="mono">' + displayEventsReceived + '</div></div>'
     html += '<div class="row"><div>Donations Tracked</div><div class="mono">' + donationsTracked + '</div></div>'
     html += '<div class="row"><div>Player Data</div><div class="mono" style="color:' + (playerDataReady ? '#7ff2a3' : '#ffcf5d') + '">' + (playerDataReady ? 'Ready' : 'Loading') + '</div></div>'
     html += '<div class="row"><div>EventBus</div><div class="mono" style="color:' + (eventBus ? '#7ff2a3' : '#ff8b94') + '">' + (eventBus ? 'Found' : 'Not Found') + '</div></div>'
     html += '<div class="row"><div>WebSocket</div><div class="mono" style="color:' + (gameSocket && gameSocket.readyState === 1 ? '#7ff2a3' : '#ff8b94') + '">' + (gameSocket && gameSocket.readyState === 1 ? 'Connected' : 'Disconnected') + '</div></div>'
+    html += '<div class="row"><div>MySmallID</div><div class="mono">' + mySmallID + '</div></div>'
+    html += '<div class="row"><div>Players Loaded</div><div class="mono">' + playersById.size + '</div></div>'
+    html += '</div>'
+    if (lastReconnectResult) {
+      html += '<div style="margin-top:8px;padding:6px;background:#0d1520;border-radius:4px;font-size:10px">'
+      html += '<div class="muted" style="margin-bottom:4px">Last Reconnect (' + fmtDuration(Date.now() - lastReconnectTime) + ' ago):</div>'
+      for (const r of lastReconnectResult) {
+        const color = r.startsWith('✅') ? '#7ff2a3' : '#ff8b94'
+        html += '<div style="color:' + color + '">' + esc(r) + '</div>'
+      }
+      html += '</div>'
+    }
+    html += '</div>'
+
+    html += '<div class="box">'
+    html += '<div class="title" style="margin-top:0">Event Pipeline Diagnostics</div>'
+    html += '<div style="font-size:11px">'
+    html += '<div class="row"><div>Events Received</div><div class="mono" style="color:#7ff2a3">' + displayEventsReceived + '</div></div>'
+    html += '<div class="row"><div>Events Processed</div><div class="mono" style="color:#7ff2a3">' + diagProcessed + '</div></div>'
+    html += '<div class="row"><div>Filtered: No Type</div><div class="mono">' + diagFilteredNoType + '</div></div>'
+    html += '<div class="row"><div>Filtered: Paused</div><div class="mono">' + diagFilteredPaused + '</div></div>'
+    html += '<div class="row"><div>Filtered: Buffered</div><div class="mono" style="color:' + (pendingMessages.length > 0 ? '#ff8b94' : 'inherit') + '">' + diagFilteredBuffered + (pendingMessages.length > 0 ? ' (' + pendingMessages.length + ' stuck!)' : '') + '</div></div>'
+    html += '<div class="row"><div>Filtered: PID Mismatch</div><div class="mono" style="color:' + (diagFilteredPidMismatch > 0 && diagProcessed === 0 ? '#ff8b94' : 'inherit') + '">' + diagFilteredPidMismatch + '</div></div>'
+    html += '<div class="row"><div>Filtered: Player Not Found</div><div class="mono" style="color:' + (diagFilteredNoPlayer > 0 ? '#ffcf5d' : 'inherit') + '">' + diagFilteredNoPlayer + '</div></div>'
+    if (diagLastEvents.length > 0) {
+      const last = diagLastEvents[diagLastEvents.length - 1]
+      html += '<div style="margin-top:8px;padding:6px;background:#0d1520;border-radius:4px;font-size:10px">'
+      html += '<div class="muted">Last Event:</div>'
+      html += '<div class="row"><div>Type</div><div class="mono">' + last.mt + '</div></div>'
+      html += '<div class="row"><div>PID</div><div class="mono">' + last.pid + ' (me: ' + last.mySmallID + ')</div></div>'
+      html += '<div class="row"><div>Params</div><div class="mono" style="word-break:break-all;max-width:300px">' + esc(last.params) + '</div></div>'
+      html += '</div>'
+    }
     html += '</div>'
     html += '</div>'
 
@@ -3827,6 +4201,9 @@
     return html
   }
 
+
+  let lastRenderedHTML = ''
+  let lastRenderedView = ''
 
   function render() {
     const content = ui.querySelector('#hm-content')
@@ -3847,7 +4224,14 @@
     }
 
     const fn = views[S.view]
-    if (fn) content.innerHTML = fn()
+    if (!fn) return
+    const html = fn()
+
+    // Only rebuild DOM if content actually changed (prevents flicker)
+    if (html === lastRenderedHTML && S.view === lastRenderedView) return
+    lastRenderedHTML = html
+    lastRenderedView = S.view
+    content.innerHTML = html
 
     ui.querySelectorAll('.tab').forEach(b => {
       b.classList.toggle('active', b.getAttribute('data-v') === S.view)
@@ -3904,8 +4288,8 @@
         const target = targets[0]
         const toSend = Math.max(1, Math.floor(me.troops * (S.asTroopsRatio / 100)))
         if (asSendTroops(target.id, toSend)) {
-          showStatus(`✅ Test: Sent ${short(toSend)} troops to ${target.name}`)
-          S.asTroopsLog.push(`[${fmtTime(nowDate())}] TEST: Sent ${short(toSend)} troops to ${target.name}`)
+          showStatus(`✅ Test: Sent ${short(dTroops(toSend))} troops to ${target.name}`)
+          S.asTroopsLog.push(`[${fmtTime(nowDate())}] TEST: Sent ${short(dTroops(toSend))} troops to ${target.name}`)
         } else {
           showStatus('❌ Test failed - check connection')
         }
@@ -4042,6 +4426,17 @@
       }
     })
 
+    // Alliance "Open Full Comms" buttons
+    ui.querySelectorAll('.alliance-open-comms').forEach(btn => {
+      btn.onclick = () => {
+        const pid = btn.getAttribute('data-pid')
+        S.commsTargets.clear()
+        S.commsTargets.add(pid)
+        S.commsGroupMode = null
+        S.view = 'comms'
+      }
+    })
+
     // Comms tab handlers - group buttons
     const grpAll = ui.querySelector('#comms-grp-all')
     if (grpAll) grpAll.onclick = () => {
@@ -4105,6 +4500,8 @@
         }
       }
     })
+
+    // (Alliance Request handler removed - not functional in-game)
 
     // Send quickchat to all resolved targets
     ui.querySelectorAll('.comms-qc-btn').forEach(btn => {
@@ -4267,6 +4664,12 @@
       clearAllDonors.onclick = () => { S.inbound.clear() }
     }
 
+    // About tab - Reconnect button
+    const reconnectBtn = ui.querySelector('#about-reconnect')
+    if (reconnectBtn) {
+      reconnectBtn.onclick = () => { reconnectAll() }
+    }
+
   }
 
   const tickId = setInterval(() => {
@@ -4288,6 +4691,7 @@
     // Clear intervals
     clearInterval(tickId)
     clearInterval(reciprocateProcessorId)
+    if (playerRefreshInterval) clearInterval(playerRefreshInterval)
     if (asTroopsTimer) clearInterval(asTroopsTimer)
     if (asGoldTimer) clearInterval(asGoldTimer)
 
@@ -4333,7 +4737,7 @@
   window.__HAMMER__ = {
     cleanup,
     ui: { root: ui },
-    version: '10.4',
+    version: '10.9',
     exportLogs: Logger.exportLogs,
     setDebug: Logger.setDebug,
     isDebug: Logger.isDebug,
@@ -4362,7 +4766,16 @@
       feedInCount: S.feedIn.length,
       feedOutCount: S.feedOut.length,
       autoSendReady: !!(eventBus || (gameSocket && gameSocket.readyState === 1 && currentClientID)),
-      autoSendMethod: eventBus ? 'EventBus (preferred)' : 'WebSocket (fallback)'
+      autoSendMethod: eventBus ? 'EventBus (preferred)' : 'WebSocket (fallback)',
+      diag: {
+        filteredNoType: diagFilteredNoType,
+        filteredPaused: diagFilteredPaused,
+        filteredBuffered: diagFilteredBuffered,
+        filteredPidMismatch: diagFilteredPidMismatch,
+        filteredNoPlayer: diagFilteredNoPlayer,
+        processed: diagProcessed,
+        lastEvents: diagLastEvents
+      }
     }),
     state: S
   }
@@ -4378,7 +4791,7 @@
   if (targetCanvas) initMessages.push('✅ Canvas')
   else initMessages.push('⏳ Canvas (detecting...)')
 
-  console.log('%c[HAMMER]%c v10.4 Control Panel ready! 🔨', 'color:#deb887;font-weight:bold', 'color:inherit')
+  console.log('%c[HAMMER]%c v10.9 Control Panel ready! 🔨', 'color:#deb887;font-weight:bold', 'color:inherit')
   console.log('[HAMMER] Status:', initMessages.join(' | '))
   console.log('[HAMMER] Debug logging OFF by default. Toggle via UI button or __HAMMER__.setDebug(true)')
 })()
