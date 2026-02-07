@@ -1,14 +1,92 @@
 # Changelog
 
-All notable changes to Hammer Script will be documented in this file.
+All notable changes to Hammer Control Panel will be documented in this file.
 
-The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
-and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
+
+## [10.9] - 2026-02-07 "Buttery Smooth"
+
+### Fixed
+- **Persistent blinking in Comms/Allies/Auto-Troops/Auto-Gold tabs**: Changed `playersById`/`playersBySmallId` from `const` to `let`, enabling true atomic reference swaps (single assignment) instead of clear-then-copy pattern that left maps empty mid-cycle
+- **"Works then stops" bug**: Removed unsafe fallback that picked a random alive player when `clientID` wasn't found in Worker updates, which corrupted `mySmallID`/`myTeam`/`myAllies` and broke all PID matching + ally detection
+- **PID mismatch flood**: Now looks up our player by known `smallID` when `clientID` isn't available, instead of falling back to any alive player
+
+### Added
+- Render HTML caching: only rebuilds DOM when content actually changes, eliminating unnecessary 500ms DOM thrashing and preserving scroll position / UI state
+
+## [10.8] - 2026-02-07 "Stability & Reconnect"
+
+### Fixed
+- Comms/Alliances tab blinking: atomic swap pattern for player data maps
+- Intermittent data loss: bootstrap now extracts allies/tilesOwned data, `playerDataReady` only set when `mySmallID` is confirmed
+
+### Added
+- **Reconnect button** in About tab: re-discovers Worker, WebSocket, EventBus, GameView hook, and player data on demand with per-system status feedback
+- Escalating retry delays for Worker/WebSocket/bootstrap discovery (200ms-4s) instead of single 500ms retry
+- System health score (N/6) shown in About tab with color-coded status
+- `refreshPlayerData()` now logs errors instead of swallowing silently
+
+## [10.7] - 2026-02-06 "Donation Tracking Fix"
+
+### Fixed
+- Donation tracking showing no data (Summary/Stats/Ports/Feed all empty)
+- Root cause: bootstrap set `playerDataReady=true` but never drained buffered messages
+
+### Added
+- `drainPendingMessages()` called from bootstrap AND Worker message paths
+- Periodic player data refresh (every 3s) from game objects
+- Diagnostic counters in About tab: filtered events, PID mismatches, etc.
+- `findPlayer()` now returns null-safe with diagnostic logging
+
+## [10.6] - 2026-02-05 "Comms Fix & Alliance Requests"
+
+### Fixed
+- Comms tab not showing Teammates/Allies (all appeared as "Others")
+- "No targets selected" error when sending alliance requests
+- `readMyPlayer()` now falls back to `playersById` for singleplayer/bootstrap scenarios
+
+### Added
+- Alliance Request button uses EventBus discovery (like emoji/quickchat)
+- Alliance requests sent one by one with delay to avoid rate limiting
+- Auto-Troops target selection shows troops with %, and gold side by side
+
+### Fixed
+- 10x troop display bug: game internally stores troops at 10x display value; all troop displays now use `dTroops()` to match game UI
+
+## [10.5] - 2026-02-04 "Full Numbers & Port Fix"
+
+### Fixed
+- Port gold income incorrectly appearing in Reciprocate donor list
+
+### Added
+- Full number display with commas in previews and donor stats (e.g., `1,280,000 (1.3M)`)
+- Alliance Request button in Comms tab for quick alliance quickchat
+
+## [10.4] - 2026-02-04 "Singleplayer/Team Mode"
+
+### Fixed
+- Singleplayer/team mode support: uses `events-display.game` path when `game-view` is null
+- Bootstrap now finds `_myClientID`, `_players`, `_myPlayer` correctly
+
+### Added
+- Deep Worker/WebSocket discovery in both `game-view` and `events-display` paths
+- Immediate hook attempts for faster mid-match startup
+- Stale hook clearing for re-injection scenarios
+
+## [10.0] - 2026-02-03 "Control Panel"
+
+### Changed
+- Renamed to Hammer Control Panel
+- Reciprocate tab: split troops/gold toggles, donor stats, popup toggle
+- Auto-Troops & Auto-Gold: enhanced live preview
+- Summary: separated port data from player donations
+- Stats: expanded metrics, leaderboards, fun stats
+- Popup performance improvements (debounce, event delegation)
 
 ## [2.4.0] - 2026-02-03
 
 ### Added
-- **Quick Reciprocate Feature** - New "Troops for Gold Trust" reciprocation system
+- **Quick Reciprocate Feature** - "Troops for Gold Trust" reciprocation system
   - Interactive popup notifications when troops are received
   - Quick-send gold at preset percentages (10%, 25%, 50%, 75%, 100%)
   - Two modes: Manual (popup with buttons) or Auto (fixed percentage)
@@ -16,159 +94,45 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Recent troop donors list with one-click gold sending
   - Reciprocation history tracking
   - Configurable notification duration and auto-percentage
-  - Eliminates need to manually find players on map and calculate amounts
-
-### Technical Details
-- Notification queue system with popup rendering
-- Auto-reciprocate and manual-reciprocate handlers
-- Integration with existing donation tracking (S.feedIn, S.inbound)
-- History limited to 100 entries to prevent memory issues
-- All gold calculations use Number type (converted from BigInt)
 
 ## [2.3.0] - 2026-02-02
 
 ### Fixed
-- **MAJOR: Auto-send gold and troops now fully working**
-  - Discovered actual minified event classes from game ('Rp' for gold, 'Op' for troops)
+- **Auto-send gold and troops now fully working**
+  - Discovered actual minified event classes from game (`Rp` for gold, `Op` for troops)
   - Fixed EventBus routing by using game's native event classes instead of custom ones
   - Fixed BigInt/Number mixing errors in gold calculations and display
-  - Auto-gold tab now renders correctly with proper BigInt conversion
-  - Both single-player and multi-player modes supported
-
-### Changed
-- Event discovery system automatically finds and caches minified event classes
-- All gold BigInt values converted to Number for safe calculations
-- Exposed playersById, myAllies, myTeam in getState() for debugging
-- Added testEventClass() helper for testing different event classes
-
-### Technical Details
-- Root cause: Custom event classes didn't match minified game classes, so EventBus didn't route events
-- Solution: Use game's actual 'Rp' (gold) and 'Op' (troops) event classes discovered via EventBus.listeners
-- Gold events require BigInt amounts, troops events require number amounts
+  - Both singleplayer and multiplayer modes supported
 
 ## [2.2.0] - 2025-11-04
 
 ### Added
-- Tag Mates filter button with interactive prompt for tag entry
-- Filter toggle shows/hides non-clan members across all views
-- Tag badge displayed in button when filter active
-- Debug tab shows last 80 raw message lines
-- Export functionality creates downloadable JSON with complete match data
-- Port efficiency analysis with "consider embargo" warnings
-- GPM (gold per minute) calculations for trade partners
-- Auto-resize body height when user manually resizes window
-- Hard reset logic prevents duplicate instances when re-running script
+- Tag Mates filter with interactive prompt for tag entry
+- Debug tab with last 80 raw message lines
+- Export functionality (downloadable JSON)
+- Port efficiency analysis with embargo recommendations
+- GPM (gold per minute) calculations
+- Hard reset logic prevents duplicate instances
 
 ### Changed
 - Complete rewrite to message-only detection (removed EventBus hooks)
 - Five-tab interface: Inbound, Outbound, Ports, Feed, Debug
-- Feed view now combines both inbound and outbound streams chronologically
-- Improved styling with monospace numerics and better spacing
-- UI defaults to medium size (600x420px)
-- Raw lines buffer increased to 400 entries
-
-### Fixed
-- Stability issues from EventBus hooking approach
-- Race conditions during script reload
-- Memory leaks from unbounded collections
-- UI positioning when dragging
-
-## [2.1.0] - 2025-11-03
-
-### Added
-- Ports analysis view for trade partner efficiency
-- Average interval timing between trades
-- Last interval timing for recency
-- Trade count tracking per partner
-
-### Changed
-- Increased feed capacity to 500 entries per direction
-- Improved deduplication with bounded Set (8000 limit)
 
 ## [2.0.0] - 2025-11-02
 
 ### Added
 - Multi-tab interface (Inbound/Outbound/Feed)
-- Unified feed view with chronological stream
 - MutationObserver for DOM-based message detection
 - Support for abbreviated amounts (1k, 2M, etc.)
-- Pause/Resume functionality
-- Reset button to clear all data
-- Size cycling button (3 presets)
-- Minimize to title bar
+- Pause/Resume, Reset, Size cycling, Minimize
 
 ### Changed
-- Complete architectural rewrite
-- Moved from EventBus hooks to message parsing
+- Complete architectural rewrite from EventBus hooks to message parsing
 - Renamed from "TrainMax" to "ME Stream"
-
-### Removed
-- EventBus interception approach
-- DisplayMessageUpdate parsing approach
-- Roster tracking
-- Slackers alert (not feasible with message-only detection)
-
-## [1.4.3] - [5.1.0] - 2025-10-30 through 2025-11-01
-
-### Experimental Phase
-Multiple versions exploring different detection strategies:
-
-- v5.1: Fixed critical `hookErrors` bug in EventBus installation
-- v5.0: Simplified UI to single-screen dashboard
-- v4.1: Hybrid approach (EventBus + message parsing)
-- v3.0: DisplayMessageUpdate parsing attempts
-- v2.x: Delta matching algorithms
-- v1.4.3: Player method hooking attempts
-
-### Key Learnings
-- `Player.donateTroops()` and `Player.donateGold()` only exist server-side
-- `GameView.update()` does not process DisplayEvent updates client-side
-- `SendDonateGoldIntentEvent` and `SendDonateTroopsIntentEvent` are client-side but only fire for YOUR donations
-- EventBus approach had stability issues across game updates
-- Message-based detection is most reliable approach
-
-### Investigation Results
-- Confirmed: Cannot track donations between other players (client limitation)
-- Confirmed: DisplayMessageUpdate events are not accessible client-side
-- Confirmed: Only YOUR visible messages can be tracked
-- Confirmed: GameUpdateType.DisplayEvent = 3 but not processed by client
-
-## [Unreleased]
-
-### Planned Features
-- Historical graphs/charts
-- Match replay from exported JSON
-- Configurable embargo thresholds
-- Custom alert sounds for donations
-- Keyboard shortcuts
-- Mobile-responsive UI
-- Canvas-based message detection fallback
-- Browser extension version
-
-### Under Consideration
-- Server-side version (if API access becomes available)
-- Multi-match history database
-- Team leaderboards
-- Efficiency recommendations engine
-- Integration with game Discord bots
 
 ---
 
-## Version Format
+## Notes
 
-Version numbers follow semantic versioning: MAJOR.MINOR.PATCH
-
-- **MAJOR**: Breaking changes or complete rewrites
-- **MINOR**: New features, non-breaking changes
-- **PATCH**: Bug fixes, small improvements
-
-## Notes on Development History
-
-This project went through extensive exploration of OpenFront.io's client-side architecture to determine what data is accessible. The journey from v1.4.3 through v5.1 involved:
-
-1. Analyzing game source code in OpenFrontIO/src/
-2. Testing various hooking strategies (Player methods, EventBus, GameView)
-3. Confirming client-side limitations through diagnostic output
-4. Discovering that message-based detection is the most reliable approach
-
-The current v2.2 represents a stable, production-ready implementation based on those learnings.
+Versions 1.x through 9.x represent the experimental and iterative development phase.
+See the in-source changelog in `hammer-scripts/hammer.js` for detailed notes on all versions.
