@@ -1,5 +1,5 @@
 // =====================================================================
-// HAMMER v10.9 "CONTROL PANEL"
+// HAMMER v10.10 "CONTROL PANEL"
 //
 // Core automation tool for OpenFront.io focused on essential features:
 // - Stats tracking (gold/troops sent/received with logs)
@@ -48,6 +48,12 @@
 // =====================================================================
 // CHANGELOG
 // =====================================================================
+// v10.10 - Stable Targets (Feb 2026)
+//   - Fixed target list flickering in Auto-Troops/Auto-Gold tabs: player maps now
+//     merge incremental Worker updates into existing data instead of replacing the
+//     entire map (incremental game_update messages only contain changed players)
+//   - Same merge fix applied to periodic refreshPlayerData path
+//
 // v10.9 - Buttery Smooth (Feb 2026)
 //   - Fixed persistent blinking in Comms/Allies/Auto-Troops/Auto-Gold tabs:
 //     changed playersById/playersBySmallId from const to let, enabling true atomic
@@ -186,7 +192,7 @@
 
       logs = logs.slice(-limit)
       return JSON.stringify({
-        version: '10.9',
+        version: '10.10',
         timestamp: new Date().toISOString(),
         totalLogs: logBuffer.length,
         exportedLogs: logs.length,
@@ -867,17 +873,17 @@
       // Player updates
       const players = updates?.[GameUpdateType.Player]
       if (players?.length) {
-        // True atomic swap: build new maps, then swap references in single assignment
-        const newById = new Map()
-        const newBySmallId = new Map()
+        // Atomic merge: copy existing maps, overlay incremental updates, swap references
+        const newById = new Map(playersById)
+        const newBySmallId = new Map(playersBySmallId)
         for (const p of players) {
           if (!p) continue
           newById.set(p.id, p)
           if (p.smallID != null) newBySmallId.set(p.smallID, p)
         }
-        lastPlayers = players.slice()
         playersById = newById
         playersBySmallId = newBySmallId
+        lastPlayers = [...newById.values()]
 
         let my = null
         if (currentClientID) my = players.find(p => p.clientID === currentClientID)
@@ -1598,9 +1604,8 @@
   let playerRefreshInterval = null
 
   function updatePlayersFromList(playerList) {
-    const newPlayersById = new Map()
-    const newPlayersBySmallId = new Map()
-    const newLastPlayers = []
+    const newPlayersById = new Map(playersById)
+    const newPlayersBySmallId = new Map(playersBySmallId)
 
     for (const p of playerList) {
       if (!p) continue
@@ -1618,7 +1623,6 @@
       const playerData = { id, smallID, clientID, name, displayName: name, isAlive, team, troops, gold, tilesOwned, allies }
       newPlayersById.set(id, playerData)
       if (smallID != null) newPlayersBySmallId.set(smallID, playerData)
-      newLastPlayers.push(playerData)
 
       // Update our player's data
       if (clientID === currentClientID) {
@@ -1633,11 +1637,11 @@
       }
     }
 
-    // True atomic swap: single reference assignment, no clear() gap
+    // Atomic merge-and-swap: single reference assignment
     if (newPlayersById.size > 0) {
       playersById = newPlayersById
       playersBySmallId = newPlayersBySmallId
-      lastPlayers = newLastPlayers
+      lastPlayers = [...newPlayersById.values()]
     }
   }
 
@@ -2634,7 +2638,7 @@
   const tabs = ['summary', 'stats', 'ports', 'feed', 'alliances', 'autotroops', 'autogold', 'reciprocate', 'comms', 'hotkeys', 'about']
   ui.innerHTML = `
     <div id="hm-head" style="display:flex;align-items:center;justify-content:space-between;padding:8px 10px;background:#151f33;border-bottom:1px solid #86531f;cursor:move;flex-shrink:0">
-      <div><b>Hammer Control Panel</b> <span style="opacity:.85">v10.9</span></div>
+      <div><b>Hammer Control Panel</b> <span style="opacity:.85">v10.10</span></div>
       <div class="btns" style="display:flex;gap:6px;flex-wrap:wrap">
         <div id="hm-tabs" style="display:flex;gap:4px;flex-wrap:wrap">
           ${tabs.map(v => `<button class="tab" data-v="${v}">${v[0].toUpperCase() + v.slice(1)}</button>`).join('')}
@@ -2789,7 +2793,7 @@
     }
     const a = document.createElement('a')
     a.href = URL.createObjectURL(new Blob([JSON.stringify(obj, null, 2)], { type: 'application/json' }))
-    a.download = `hammer_v10.9_${new Date().toISOString().replace(/[:.]/g, '-')}.json`
+    a.download = `hammer_v10.10_${new Date().toISOString().replace(/[:.]/g, '-')}.json`
     a.click()
     setTimeout(() => URL.revokeObjectURL(a.href), 800)
   }
@@ -4089,7 +4093,7 @@
     html += '<div class="box">'
     html += '<div style="text-align:center;padding:16px">'
     html += '<div style="font-size:22px;font-weight:bold;color:#ffcf5d">Hammer Control Panel</div>'
-    html += '<div style="font-size:14px;color:#9bb0c8;margin-top:4px">v10.9</div>'
+    html += '<div style="font-size:14px;color:#9bb0c8;margin-top:4px">v10.10</div>'
     html += '</div>'
     html += '</div>'
 
@@ -4123,7 +4127,7 @@
     html += '<div class="title" style="margin-top:0">Credits</div>'
     html += '<div style="font-size:11px;line-height:1.6">'
     html += '<div class="row"><div>Author</div><div class="mono">Stanley</div></div>'
-    html += '<div class="row"><div>Version</div><div class="mono">10.9</div></div>'
+    html += '<div class="row"><div>Version</div><div class="mono">10.10</div></div>'
     html += '<div class="row"><div>Game</div><div class="mono">OpenFront.io</div></div>'
     html += '<div class="row"><div>License</div><div class="mono">Free to use</div></div>'
     html += '</div>'
@@ -4737,7 +4741,7 @@
   window.__HAMMER__ = {
     cleanup,
     ui: { root: ui },
-    version: '10.9',
+    version: '10.10',
     exportLogs: Logger.exportLogs,
     setDebug: Logger.setDebug,
     isDebug: Logger.isDebug,
@@ -4791,7 +4795,7 @@
   if (targetCanvas) initMessages.push('✅ Canvas')
   else initMessages.push('⏳ Canvas (detecting...)')
 
-  console.log('%c[HAMMER]%c v10.9 Control Panel ready! 🔨', 'color:#deb887;font-weight:bold', 'color:inherit')
+  console.log('%c[HAMMER]%c v10.10 Control Panel ready! 🔨', 'color:#deb887;font-weight:bold', 'color:inherit')
   console.log('[HAMMER] Status:', initMessages.join(' | '))
   console.log('[HAMMER] Debug logging OFF by default. Toggle via UI button or __HAMMER__.setDebug(true)')
 })()
