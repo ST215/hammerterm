@@ -1,5 +1,5 @@
 // =====================================================================
-// HAMMER v10.10 "CONTROL PANEL"
+// HAMMER v10.11 "CONTROL PANEL"
 //
 // Core automation tool for OpenFront.io focused on essential features:
 // - Stats tracking (gold/troops sent/received with logs)
@@ -48,6 +48,16 @@
 // =====================================================================
 // CHANGELOG
 // =====================================================================
+// v10.11 - Solid State (Feb 2026)
+//   - Fixed allies section flickering in Comms/Alliances/Auto-Troops/Auto-Gold tabs:
+//     myAllies Set was being replaced with empty set when game sent allies:[] during
+//     incremental updates; now only updates when ally data is non-empty
+//   - Fixed mySmallID/myTeam being overwritten with undefined in refreshPlayerData
+//     and bootstrap paths (missing ?? null-coalescing guards)
+//   - Default tab changed to About on startup
+//   - About tab redesigned: large hammer emoji branding, author/contact section,
+//     in-game identity, Discord contact, GitHub link
+//
 // v10.10 - Stable Targets (Feb 2026)
 //   - Fixed target list flickering in Auto-Troops/Auto-Gold tabs: player maps now
 //     merge incremental Worker updates into existing data instead of replacing the
@@ -192,7 +202,7 @@
 
       logs = logs.slice(-limit)
       return JSON.stringify({
-        version: '10.10',
+        version: '10.11',
         timestamp: new Date().toISOString(),
         totalLogs: logBuffer.length,
         exportedLogs: logs.length,
@@ -687,7 +697,7 @@
   ]
 
   const S = {
-    view: 'autotroops',
+    view: 'about',
     paused: false, minimized: false, sizeIdx: 1,
     seen: new Set(),
 
@@ -894,7 +904,7 @@
         if (my) {
           mySmallID = my.smallID ?? mySmallID
           myTeam = my.team ?? myTeam
-          if (Array.isArray(my.allies)) myAllies = new Set(my.allies)
+          if (Array.isArray(my.allies) && my.allies.length > 0) myAllies = new Set(my.allies)
           if (S.goldRateEnabled) updateGoldRate(my)
 
           // Track resource changes for alternative donation detection
@@ -1564,9 +1574,9 @@
 
       // Find our player
       if (clientID === currentClientID) {
-        mySmallID = smallID
-        myTeam = team
-        if (Array.isArray(allies)) myAllies = new Set(allies)
+        mySmallID = smallID ?? mySmallID
+        myTeam = team ?? myTeam
+        if (Array.isArray(allies) && allies.length > 0) myAllies = new Set(allies)
         foundMyPlayer = true
         console.log('[HAMMER] 🎮 Bootstrapped player data from', source, '- mySmallID:', mySmallID)
       }
@@ -1626,9 +1636,9 @@
 
       // Update our player's data
       if (clientID === currentClientID) {
-        mySmallID = smallID
-        myTeam = team
-        if (Array.isArray(allies)) myAllies = new Set(allies)
+        mySmallID = smallID ?? mySmallID
+        myTeam = team ?? myTeam
+        if (Array.isArray(allies) && allies.length > 0) myAllies = new Set(allies)
         if (!playerDataReady) {
           playerDataReady = true
           drainPendingMessages()
@@ -2638,7 +2648,7 @@
   const tabs = ['summary', 'stats', 'ports', 'feed', 'alliances', 'autotroops', 'autogold', 'reciprocate', 'comms', 'hotkeys', 'about']
   ui.innerHTML = `
     <div id="hm-head" style="display:flex;align-items:center;justify-content:space-between;padding:8px 10px;background:#151f33;border-bottom:1px solid #86531f;cursor:move;flex-shrink:0">
-      <div><b>Hammer Control Panel</b> <span style="opacity:.85">v10.10</span></div>
+      <div><b>Hammer Control Panel</b> <span style="opacity:.85">v10.11</span></div>
       <div class="btns" style="display:flex;gap:6px;flex-wrap:wrap">
         <div id="hm-tabs" style="display:flex;gap:4px;flex-wrap:wrap">
           ${tabs.map(v => `<button class="tab" data-v="${v}">${v[0].toUpperCase() + v.slice(1)}</button>`).join('')}
@@ -2793,7 +2803,7 @@
     }
     const a = document.createElement('a')
     a.href = URL.createObjectURL(new Blob([JSON.stringify(obj, null, 2)], { type: 'application/json' }))
-    a.download = `hammer_v10.10_${new Date().toISOString().replace(/[:.]/g, '-')}.json`
+    a.download = `hammer_v10.11_${new Date().toISOString().replace(/[:.]/g, '-')}.json`
     a.click()
     setTimeout(() => URL.revokeObjectURL(a.href), 800)
   }
@@ -4088,19 +4098,18 @@
   }
 
   function aboutView() {
-    let html = '<div class="title">📖 About</div>'
+    let html = ''
+
+    // Hero branding
+    html += '<div style="text-align:center;padding:24px 16px">'
+    html += '<div style="font-size:64px;line-height:1">🔨</div>'
+    html += '<div style="font-size:24px;font-weight:bold;color:#ffcf5d;margin-top:8px">Hammer Control Panel</div>'
+    html += '<div style="font-size:14px;color:#9bb0c8;margin-top:4px">v10.11</div>'
+    html += '</div>'
 
     html += '<div class="box">'
-    html += '<div style="text-align:center;padding:16px">'
-    html += '<div style="font-size:22px;font-weight:bold;color:#ffcf5d">Hammer Control Panel</div>'
-    html += '<div style="font-size:14px;color:#9bb0c8;margin-top:4px">v10.10</div>'
-    html += '</div>'
-    html += '</div>'
-
-    html += '<div class="box">'
-    html += '<div class="title" style="margin-top:0">What is Hammer?</div>'
     html += '<div class="help" style="font-size:12px;line-height:1.6">'
-    html += 'Hammer is a companion tool for <b>OpenFront.io</b> that tracks donations, '
+    html += 'A companion tool for <b>OpenFront.io</b> that tracks donations, '
     html += 'automates troop and gold sending, and provides real-time game analytics. '
     html += 'Built for alliance coordination and strategic resource management.'
     html += '</div>'
@@ -4113,7 +4122,6 @@
     html += '<div>📈 <b>Stats</b> - War report, leaderboards, fun metrics</div>'
     html += '<div>🏪 <b>Ports</b> - Port trade tracking and efficiency</div>'
     html += '<div>📋 <b>Feed</b> - Live donation feed</div>'
-    html += '<div>💹 <b>Gold Rate</b> - Gold income over time windows</div>'
     html += '<div>🤝 <b>Alliances</b> - Alliance and team overview</div>'
     html += '<div>🪖 <b>Auto-Troops</b> - Automated troop donations</div>'
     html += '<div>💰 <b>Auto-Gold</b> - Automated gold donations</div>'
@@ -4124,10 +4132,24 @@
     html += '</div>'
 
     html += '<div class="box">'
-    html += '<div class="title" style="margin-top:0">Credits</div>'
+    html += '<div class="title" style="margin-top:0">Author</div>'
+    html += '<div style="font-size:12px;line-height:1.6;color:#c8d8e8">'
+    html += '<div>Built by an automation / QA engineer for personal gameplay enjoyment, '
+    html += 'shared in the hope it provides value to others.</div>'
+    html += '</div>'
+    html += '<div style="font-size:11px;line-height:1.8;margin-top:10px">'
+    html += '<div class="row"><div class="muted">In-Game</div><div class="mono" style="color:#7ff2a3">[MARS] Hammer</div></div>'
+    html += '<div class="row"><div class="muted">Also known as</div><div class="mono">Railroad Tycoon, Seaport Tycoon, Gold 4 Troops</div></div>'
+    html += '<div class="row"><div class="muted">Discord</div><div class="mono" style="color:#7bb8ff">[MARS] Hammer</div></div>'
+    html += '<div style="display:flex;gap:8px;margin-top:10px">'
+    html += '<a href="https://github.com/ST215/hammerterm" target="_blank" rel="noopener" style="flex:1;display:block;text-align:center;padding:8px;background:#1a2a3a;border:1px solid #7bb8ff;border-radius:6px;color:#7bb8ff;text-decoration:none;font-size:11px;font-weight:bold">GitHub</a>'
+    html += '</div>'
+    html += '</div>'
+    html += '</div>'
+
+    html += '<div class="box">'
     html += '<div style="font-size:11px;line-height:1.6">'
-    html += '<div class="row"><div>Author</div><div class="mono">Stanley</div></div>'
-    html += '<div class="row"><div>Version</div><div class="mono">10.10</div></div>'
+    html += '<div class="row"><div>Version</div><div class="mono">10.11</div></div>'
     html += '<div class="row"><div>Game</div><div class="mono">OpenFront.io</div></div>'
     html += '<div class="row"><div>License</div><div class="mono">Free to use</div></div>'
     html += '</div>'
@@ -4199,7 +4221,7 @@
     html += '</div>'
 
     html += '<div style="text-align:center;margin-top:16px;color:#9bb0c8;font-size:10px">'
-    html += 'Made for the OpenFront.io community'
+    html += 'Find me on the <a href="https://discord.gg/openfront" target="_blank" rel="noopener" style="color:#7bb8ff;text-decoration:none">OpenFront Discord</a> as [MARS] Hammer'
     html += '</div>'
 
     return html
@@ -4741,7 +4763,7 @@
   window.__HAMMER__ = {
     cleanup,
     ui: { root: ui },
-    version: '10.10',
+    version: '10.11',
     exportLogs: Logger.exportLogs,
     setDebug: Logger.setDebug,
     isDebug: Logger.isDebug,
@@ -4795,7 +4817,7 @@
   if (targetCanvas) initMessages.push('✅ Canvas')
   else initMessages.push('⏳ Canvas (detecting...)')
 
-  console.log('%c[HAMMER]%c v10.10 Control Panel ready! 🔨', 'color:#deb887;font-weight:bold', 'color:inherit')
+  console.log('%c[HAMMER]%c v10.11 Control Panel ready! 🔨', 'color:#deb887;font-weight:bold', 'color:inherit')
   console.log('[HAMMER] Status:', initMessages.join(' | '))
   console.log('[HAMMER] Debug logging OFF by default. Toggle via UI button or __HAMMER__.setDebug(true)')
 })()
