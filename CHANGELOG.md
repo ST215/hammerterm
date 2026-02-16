@@ -4,6 +4,23 @@ All notable changes to Hammer Control Panel will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [11.0.3] - 2026-02-15
+
+### Added
+- **Help tab**: Comprehensive guide explaining every tab and feature — Summary, Stats, Ports, Feed, Alliances, Auto Troops, Auto Gold, Reciprocate, Comms, CIA, Hotkeys, and general tips
+- **About tab**: Added "iSend 50PCT GOLD 4 TROOPS" to in-game names
+
+## [11.0.2] - 2026-02-15
+
+### Fixed
+- **Allies section blinking every ~3 seconds**: Removed `myAllies` overwrite from `refreshPlayerData` — game object `p.allies()` returned stale/wrong-format data every 3s, causing `getAllies()` to find 0 matches until the next Worker update restored it. Worker handler is now the sole authoritative source for alliance state.
+- **CIA "Most Generous" inflated totals & doubled alerts**: Each transfer fired two DisplayEvents (SENT + RECEIVED) that bypassed dedup due to name source mismatches. CIA now only counts SENT events (types 18/21) for flow tracking — RECEIVED events are the same transfer from the receiver's perspective. Port trades (type 20) still tracked separately.
+
+## [11.0.1] - 2026-02-15
+
+### Fixed
+- **Auto Troops/Gold target button flickering**: Removed volatile player stats (troops %, gold amounts) from target selection buttons — these values changed every game tick, causing the targets section to rebuild every 500ms even with section-level DOM updates
+
 ## [10.9] - 2026-02-07 "Buttery Smooth"
 
 ### Fixed
