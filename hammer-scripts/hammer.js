@@ -1,9 +1,10 @@
 // =====================================================================
-// HAMMER v10.11 "CONTROL PANEL"
+// HAMMERTERM v11.0 "INTELLIGENCE"
 //
-// Core automation tool for OpenFront.io focused on essential features:
+// 🔨 Hammer Terminal — automation & intelligence for OpenFront.io
 // - Stats tracking (gold/troops sent/received with logs)
 // - Automation (auto-send gold/troops to targets)
+// - CIA: Server-wide economy intelligence & threat detection
 // - Enhanced logging with export for debugging
 // - Configuration UI with persistence
 //
@@ -38,6 +39,7 @@
 // ✓ Configuration persistence across reloads
 // ✓ Keyboard shortcuts (Alt+M, Alt+F)
 // ✓ Enhanced logging system
+// ✓ CIA: Server-wide economy intelligence (donation graph, threat alerts)
 //
 // =====================================================================
 // KEYBOARD SHORTCUTS
@@ -48,6 +50,23 @@
 // =====================================================================
 // CHANGELOG
 // =====================================================================
+// v11.0 - Intelligence (Feb 2026)
+//   - Rebranded to Hammer Terminal (HammerTerm)
+//   - CIA tab: server-wide economy intelligence, donation graph, threat alerts,
+//     betrayal detection, top donors/receivers, live transfer feed
+//   - Fixed flickering in AutoTroops/AutoGold/Comms tabs: section-level DOM
+//     updates only rebuild changed data-section divs instead of entire view
+//   - Separated teammates and allies in AutoTroops/AutoGold target selection
+//     with distinct AllTeam and AllAllies toggle modes
+//   - Added All Allies group button to Comms tab for messaging alliance partners
+//   - Reciprocate tab now tags each donor as [Teammate] or [Ally]
+//   - CIA betrayal alerts now only fire for teammates feeding enemies, not allies
+//     (allies naturally interact with opponents)
+//   - Group messaging buttons (All/All Team/Allies/Others) and system diagnostics
+//     moved behind discreet access
+//   - Removed legacy hammerScript.js and CONTRIBUTING.md (consolidated to
+//     hammer-scripts/hammer.js)
+//
 // v10.11 - Solid State (Feb 2026)
 //   - Fixed allies section flickering in Comms/Alliances/Auto-Troops/Auto-Gold tabs:
 //     myAllies Set was being replaced with empty set when game sent allies:[] during
@@ -132,10 +151,10 @@
   // Hard reset with PROPER cleanup
   if (window.__HAMMER__?.cleanup) {
     try {
-      console.log('[HAMMER] Cleaning up previous instance...')
+      console.log('[HAMMERTERM] Cleaning up previous instance...')
       window.__HAMMER__.cleanup()
     } catch (e) {
-      console.warn('[HAMMER] Cleanup error:', e)
+      console.warn('[HAMMERTERM] Cleanup error:', e)
     }
   }
   if (window.__HAMMER__?.ui?.root) {
@@ -202,7 +221,7 @@
 
       logs = logs.slice(-limit)
       return JSON.stringify({
-        version: '10.11',
+        version: '11.0',
         timestamp: new Date().toISOString(),
         totalLogs: logBuffer.length,
         exportedLogs: logs.length,
@@ -217,15 +236,15 @@
     const log = (...args) => {
       if (!debugEnabled) return
       addLog({ level: 'log', args: args.map(serializeValue), timestamp: new Date().toISOString() })
-      console.log('[HAMMER]', ...args)
+      console.log('[HAMMERTERM]', ...args)
     }
     const warn = (...args) => {
       addLog({ level: 'warn', args: args.map(serializeValue), timestamp: new Date().toISOString() })
-      console.warn('[HAMMER]', ...args)
+      console.warn('[HAMMERTERM]', ...args)
     }
     const error = (...args) => {
       addLog({ level: 'error', args: args.map(serializeValue), timestamp: new Date().toISOString() })
-      console.error('[HAMMER]', ...args)
+      console.error('[HAMMERTERM]', ...args)
     }
 
     function setDebug(on) { debugEnabled = !!on }
@@ -292,6 +311,22 @@
   let diagProcessed = 0
   let diagLastEvents = []  // Last 5 raw DisplayEvent structures
 
+  // CIA: Server-wide economy intelligence
+  const ciaTransfers = []        // All observed transfers: { ts, type, dir, actorPID, actorName, otherName, amount }
+  const ciaFlowGraph = new Map() // "sender→receiver" key → { gold, troops, goldCount, troopsCount, lastTs }
+  const ciaPlayerTotals = new Map() // playerName → { sentGold, sentTroops, recvGold, recvTroops, sentCount, recvCount }
+  const ciaAlerts = []           // { ts, level, message }
+  const CIA_MAX_TRANSFERS = 2000
+  const CIA_MAX_ALERTS = 200
+  const CIA_BIG_GOLD_THRESHOLD = 500000
+  const CIA_BIG_TROOPS_THRESHOLD = 500000
+  const ciaSeen = new Set()       // Dedup: "type:sender:receiver:amount:timeWindow"
+
+  // Secret feature access
+  let secretClickCount = 0
+  let secretClickTimer = null
+  let secretUnlocked = false
+
   // Drain pending messages buffer (called when playerDataReady becomes true)
   function drainPendingMessages() {
     if (pendingMessages.length === 0) return
@@ -301,6 +336,105 @@
       catch (err) { log('Buffered message error:', err) }
     }
     pendingMessages.length = 0
+  }
+
+  // ===== CIA: SERVER-WIDE ECONOMY TRACKING =====
+  function trackCIAEvent(mt, pid, params, msg) {
+    const actorPlayer = playersBySmallId.get(pid)
+    const actorName = actorPlayer ? (actorPlayer.displayName || actorPlayer.name || `PID:${pid}`) : `PID:${pid}`
+    const otherName = params.name || 'Unknown'
+    const now = Date.now()
+
+    let type = null, dir = null, amount = 0
+    let senderName = null, receiverName = null
+
+    if (mt === MessageType.SENT_TROOPS_TO_PLAYER) {
+      type = 'troops'; dir = 'sent'; amount = parseAmt(params.troops)
+      senderName = actorName; receiverName = otherName
+    } else if (mt === MessageType.RECEIVED_TROOPS_FROM_PLAYER) {
+      type = 'troops'; dir = 'received'; amount = parseAmt(params.troops)
+      senderName = otherName; receiverName = actorName
+    } else if (mt === MessageType.SENT_GOLD_TO_PLAYER) {
+      type = 'gold'; dir = 'sent'; amount = msg.goldAmount ? num(msg.goldAmount) : parseAmt(params.gold)
+      senderName = actorName; receiverName = otherName
+    } else if (mt === MessageType.RECEIVED_GOLD_FROM_PLAYER) {
+      type = 'gold'; dir = 'received'; amount = msg.goldAmount ? num(msg.goldAmount) : parseAmt(params.gold)
+      senderName = otherName; receiverName = actorName
+    } else if (mt === MessageType.RECEIVED_GOLD_FROM_TRADE) {
+      // Port trade - track but don't graph
+      type = 'port'; dir = 'received'; amount = msg.goldAmount ? num(msg.goldAmount) : parseAmt(params.gold)
+      senderName = otherName; receiverName = actorName
+    }
+
+    if (!type || amount <= 0) return
+
+    // Dedup: same logical transfer fires once per observer (10+ events for 1 transfer)
+    const dedupKey = `${type}:${senderName}:${receiverName}:${amount}:${Math.floor(now / 10000)}`
+    if (ciaSeen.has(dedupKey)) return
+    ciaSeen.add(dedupKey)
+
+    // Record transfer
+    ciaTransfers.push({ ts: now, type, dir, actorPID: pid, actorName, otherName, senderName, receiverName, amount })
+    if (ciaTransfers.length > CIA_MAX_TRANSFERS) ciaTransfers.shift()
+
+    // Update flow graph (skip port trades)
+    if (type !== 'port' && senderName && receiverName) {
+      const flowKey = `${senderName}\u2192${receiverName}`
+      if (!ciaFlowGraph.has(flowKey)) {
+        ciaFlowGraph.set(flowKey, { gold: 0, troops: 0, goldCount: 0, troopsCount: 0, lastTs: 0, sender: senderName, receiver: receiverName })
+      }
+      const flow = ciaFlowGraph.get(flowKey)
+      if (type === 'gold') { flow.gold += amount; flow.goldCount++ }
+      else { flow.troops += amount; flow.troopsCount++ }
+      flow.lastTs = now
+
+      // Update player totals
+      for (const name of [senderName, receiverName]) {
+        if (!ciaPlayerTotals.has(name)) {
+          ciaPlayerTotals.set(name, { sentGold: 0, sentTroops: 0, recvGold: 0, recvTroops: 0, sentCount: 0, recvCount: 0 })
+        }
+      }
+      const senderTotals = ciaPlayerTotals.get(senderName)
+      const receiverTotals = ciaPlayerTotals.get(receiverName)
+      if (type === 'gold') { senderTotals.sentGold += amount; receiverTotals.recvGold += amount }
+      else { senderTotals.sentTroops += amount; receiverTotals.recvTroops += amount }
+      senderTotals.sentCount++
+      receiverTotals.recvCount++
+
+      // Generate alerts for big transfers
+      if (type === 'gold' && amount >= CIA_BIG_GOLD_THRESHOLD) {
+        ciaAlerts.push({ ts: now, level: 'big', message: `${senderName} sent ${short(amount)} gold to ${receiverName}` })
+      }
+      if (type === 'troops' && amount >= CIA_BIG_TROOPS_THRESHOLD) {
+        ciaAlerts.push({ ts: now, level: 'big', message: `${senderName} sent ${short(amount)} troops to ${receiverName}` })
+      }
+
+      // Betrayal detection: TEAMMATE feeding someone on a different team
+      // Only alert for teammates, not allies (allies naturally feed enemies)
+      if (mySmallID != null) {
+        const senderPlayer = findPlayerByName(senderName)
+        const receiverPlayer = findPlayerByName(receiverName)
+        if (senderPlayer && receiverPlayer && myTeam != null) {
+          const senderIsTeammate = senderPlayer.team != null && senderPlayer.team === myTeam
+          const receiverIsAlly = asIsAlly(receiverPlayer.id)
+          if (senderIsTeammate && !receiverIsAlly && receiverPlayer.team !== myTeam) {
+            ciaAlerts.push({ ts: now, level: 'betrayal', message: `Your teammate ${senderName} is feeding enemy ${receiverName}!` })
+          }
+        }
+      }
+
+      if (ciaAlerts.length > CIA_MAX_ALERTS) ciaAlerts.shift()
+    }
+  }
+
+  // Helper: find player by display name (for CIA)
+  function findPlayerByName(name) {
+    if (!name || playersById.size === 0) return null
+    const lower = String(name).toLowerCase()
+    for (const p of playersById.values()) {
+      if ((p.displayName || p.name || '').toLowerCase() === lower) return p
+    }
+    return null
   }
 
   // Session tracking
@@ -718,6 +852,7 @@
     asTroopsCooldownSec: 10,
     asTroopsLog: [],
     asTroopsAllTeamMode: false,
+    asTroopsAllAlliesMode: false,
 
     // Auto-donate gold state (percentage-based like troops)
     asGoldRunning: false,
@@ -729,6 +864,7 @@
     asGoldCooldownSec: 10,
     asGoldLog: [],
     asGoldAllTeamMode: false,
+    asGoldAllAlliesMode: false,
 
     // Reciprocation settings
     reciprocateEnabled: true,
@@ -1000,6 +1136,9 @@
 
     log('[DisplayMessage]', { type: mt, pid, mySmallID, params: JSON.stringify(params).slice(0, 200) })
 
+    // CIA: Track ALL transfers server-wide (before self-filter)
+    trackCIAEvent(mt, pid, params, msg)
+
     if (pid !== mySmallID) {
       diagFilteredPidMismatch++
       return
@@ -1204,7 +1343,7 @@
       return origPost.call(this, data, ...rest)
     }
     w.addEventListener('message', onWorkerMessage)
-    console.log('[HAMMER] ✅ Wrapped Worker instance')
+    console.log('[HAMMERTERM] ✅ Wrapped Worker instance')
     return w
   }
 
@@ -1232,7 +1371,7 @@
         try {
           const val = window[prop]
           if (val && val instanceof OriginalWorker && !val.__hammerWrapped) {
-            console.log(`[HAMMER] 🔍 Found existing Worker at window.${prop}`)
+            console.log(`[HAMMERTERM] 🔍 Found existing Worker at window.${prop}`)
             wrapWorker(val)
             foundWorker = true
             return true
@@ -1246,7 +1385,7 @@
     for (const prop of commonProps) {
       try {
         if (window[prop] && window[prop] instanceof OriginalWorker && !window[prop].__hammerWrapped) {
-          console.log(`[HAMMER] 🔍 Found existing Worker at window.${prop}`)
+          console.log(`[HAMMERTERM] 🔍 Found existing Worker at window.${prop}`)
           wrapWorker(window[prop])
           foundWorker = true
           return true
@@ -1261,14 +1400,14 @@
         // Worker is nested inside WorkerClient: runner.worker.worker
         const workerClient = gameView.clientGameRunner?.worker
         if (workerClient?.worker && !workerClient.worker.__hammerWrapped) {
-          console.log('[HAMMER] 🔍 Found Worker in game-view.clientGameRunner.worker.worker')
+          console.log('[HAMMERTERM] 🔍 Found Worker in game-view.clientGameRunner.worker.worker')
           wrapWorker(workerClient.worker)
           foundWorker = true
           return true
         }
       }
     } catch (e) {
-      console.warn('[HAMMER] Deep Worker search error:', e)
+      console.warn('[HAMMERTERM] Deep Worker search error:', e)
     }
 
     // Deep search: look inside events-display.game (singleplayer/team mode)
@@ -1279,14 +1418,14 @@
         // Worker might be nested: workerClient.worker
         const actualWorker = workerClient.worker || workerClient
         if (actualWorker && !actualWorker.__hammerWrapped && actualWorker instanceof OriginalWorker) {
-          console.log('[HAMMER] 🔍 Found Worker in events-display.game.worker')
+          console.log('[HAMMERTERM] 🔍 Found Worker in events-display.game.worker')
           wrapWorker(actualWorker)
           foundWorker = true
           return true
         }
       }
     } catch (e) {
-      console.warn('[HAMMER] Deep Worker search (events-display) error:', e)
+      console.warn('[HAMMERTERM] Deep Worker search (events-display) error:', e)
     }
 
     return false
@@ -1295,13 +1434,13 @@
   deepFindWorker()
 
   if (!foundWorker) {
-    console.log('[HAMMER] ⚠️ No existing Worker found - will intercept when created')
+    console.log('[HAMMERTERM] ⚠️ No existing Worker found - will intercept when created')
     // Retry deep search with escalating delays (game might still be initializing)
     const workerRetryDelays = [200, 500, 1000, 2000, 4000]
     for (const delay of workerRetryDelays) {
       setTimeout(() => {
         if (!foundWorker) {
-          log('[HAMMER] 🔄 Retrying Worker discovery... (' + delay + 'ms)')
+          log('[HAMMERTERM] 🔄 Retrying Worker discovery... (' + delay + 'ms)')
           deepFindWorker()
         }
       }, delay)
@@ -1362,7 +1501,7 @@
     })
 
     gameSocket = ws
-    console.log('[HAMMER] ✅ Wrapped WebSocket instance')
+    console.log('[HAMMERTERM] ✅ Wrapped WebSocket instance')
     return ws
   }
 
@@ -1389,7 +1528,7 @@
         try {
           const val = window[prop]
           if (val && val instanceof OriginalWebSocket && !val.__hammerWrapped) {
-            console.log(`[HAMMER] 🔍 Found existing WebSocket at window.${prop}`)
+            console.log(`[HAMMERTERM] 🔍 Found existing WebSocket at window.${prop}`)
             wrapWebSocket(val)
             foundWebSocket = true
             return true
@@ -1403,7 +1542,7 @@
     for (const prop of commonProps) {
       try {
         if (window[prop] && window[prop] instanceof OriginalWebSocket && !window[prop].__hammerWrapped) {
-          console.log(`[HAMMER] 🔍 Found existing WebSocket at window.${prop}`)
+          console.log(`[HAMMERTERM] 🔍 Found existing WebSocket at window.${prop}`)
           wrapWebSocket(window[prop])
           foundWebSocket = true
           return true
@@ -1418,7 +1557,7 @@
         // Try clientGameRunner.transport.socket
         const transport = gameView.clientGameRunner?.transport
         if (transport?.socket && !transport.socket.__hammerWrapped) {
-          console.log('[HAMMER] 🔍 Found WebSocket in game-view.clientGameRunner.transport.socket')
+          console.log('[HAMMERTERM] 🔍 Found WebSocket in game-view.clientGameRunner.transport.socket')
           wrapWebSocket(transport.socket)
           foundWebSocket = true
           gameSocket = transport.socket
@@ -1426,7 +1565,7 @@
         }
         // Try clientGameRunner.transport.ws
         if (transport?.ws && !transport.ws.__hammerWrapped) {
-          console.log('[HAMMER] 🔍 Found WebSocket in game-view.clientGameRunner.transport.ws')
+          console.log('[HAMMERTERM] 🔍 Found WebSocket in game-view.clientGameRunner.transport.ws')
           wrapWebSocket(transport.ws)
           foundWebSocket = true
           gameSocket = transport.ws
@@ -1434,7 +1573,7 @@
         }
       }
     } catch (e) {
-      console.warn('[HAMMER] Deep WebSocket search error:', e)
+      console.warn('[HAMMERTERM] Deep WebSocket search error:', e)
     }
 
     // Deep search: look inside events-display.game (singleplayer/team mode)
@@ -1444,7 +1583,7 @@
         // In singleplayer mode, WebSocket might be in worker's transport
         const workerClient = eventsDisplay.game.worker
         if (workerClient?.transport?.socket && !workerClient.transport.socket.__hammerWrapped) {
-          console.log('[HAMMER] 🔍 Found WebSocket in events-display.game.worker.transport.socket')
+          console.log('[HAMMERTERM] 🔍 Found WebSocket in events-display.game.worker.transport.socket')
           wrapWebSocket(workerClient.transport.socket)
           foundWebSocket = true
           gameSocket = workerClient.transport.socket
@@ -1452,7 +1591,7 @@
         }
       }
     } catch (e) {
-      console.warn('[HAMMER] Deep WebSocket search (events-display) error:', e)
+      console.warn('[HAMMERTERM] Deep WebSocket search (events-display) error:', e)
     }
 
     return false
@@ -1461,13 +1600,13 @@
   deepFindWebSocket()
 
   if (!foundWebSocket) {
-    console.log('[HAMMER] ⚠️ No existing WebSocket found - will intercept when created')
+    console.log('[HAMMERTERM] ⚠️ No existing WebSocket found - will intercept when created')
     // Retry deep search with escalating delays
     const wsRetryDelays = [200, 500, 1000, 2000, 4000]
     for (const delay of wsRetryDelays) {
       setTimeout(() => {
         if (!foundWebSocket) {
-          log('[HAMMER] 🔄 Retrying WebSocket discovery... (' + delay + 'ms)')
+          log('[HAMMERTERM] 🔄 Retrying WebSocket discovery... (' + delay + 'ms)')
           deepFindWebSocket()
         }
       }, delay)
@@ -1485,7 +1624,7 @@
         // Get clientID from lobby (not lobbyConfig)
         if (runner.lobby?.clientID && !currentClientID) {
           currentClientID = runner.lobby.clientID
-          console.log('[HAMMER] 🆔 Bootstrapped clientID from game-view:', currentClientID)
+          console.log('[HAMMERTERM] 🆔 Bootstrapped clientID from game-view:', currentClientID)
         }
 
         // Try to get players from gameView
@@ -1501,7 +1640,7 @@
         }
       }
     } catch (e) {
-      console.warn('[HAMMER] Bootstrap (game-view) error:', e)
+      console.warn('[HAMMERTERM] Bootstrap (game-view) error:', e)
     }
 
     // Try events-display.game path (singleplayer/team mode)
@@ -1513,7 +1652,7 @@
         // Get clientID from _myClientID
         if (game._myClientID && !currentClientID) {
           currentClientID = game._myClientID
-          console.log('[HAMMER] 🆔 Bootstrapped clientID from events-display:', currentClientID)
+          console.log('[HAMMERTERM] 🆔 Bootstrapped clientID from events-display:', currentClientID)
         }
 
         // Try to get players from _players
@@ -1537,13 +1676,13 @@
             myTeam = typeof p.team === 'function' ? p.team() : p.team
             playerDataReady = true
             drainPendingMessages()
-            console.log('[HAMMER] 🎮 Bootstrapped myPlayer from events-display - mySmallID:', mySmallID)
+            console.log('[HAMMERTERM] 🎮 Bootstrapped myPlayer from events-display - mySmallID:', mySmallID)
             return true
           }
         }
       }
     } catch (e) {
-      console.warn('[HAMMER] Bootstrap (events-display) error:', e)
+      console.warn('[HAMMERTERM] Bootstrap (events-display) error:', e)
     }
 
     return false
@@ -1578,7 +1717,7 @@
         myTeam = team ?? myTeam
         if (Array.isArray(allies) && allies.length > 0) myAllies = new Set(allies)
         foundMyPlayer = true
-        console.log('[HAMMER] 🎮 Bootstrapped player data from', source, '- mySmallID:', mySmallID)
+        console.log('[HAMMERTERM] 🎮 Bootstrapped player data from', source, '- mySmallID:', mySmallID)
       }
     }
 
@@ -1589,7 +1728,7 @@
     }
 
     if (playersById.size > 0) {
-      console.log('[HAMMER] 📊 Bootstrapped', playersById.size, 'players from', source)
+      console.log('[HAMMERTERM] 📊 Bootstrapped', playersById.size, 'players from', source)
       // Only mark ready if we identified our player (mySmallID known)
       if (foundMyPlayer && mySmallID !== null) {
         playerDataReady = true
@@ -1697,18 +1836,18 @@
     for (const prop of commonPropsLegacy) {
       try {
         if (window[prop] && window[prop] instanceof OriginalWebSocket && !window[prop].__hammerWrapped) {
-          console.log(`[HAMMER] 🔍 Found existing WebSocket at window.${prop}`)
+          console.log(`[HAMMERTERM] 🔍 Found existing WebSocket at window.${prop}`)
           wrapWebSocket(window[prop])
           foundWebSocket = true
         }
       } catch {}
     }
   } catch (e) {
-    console.warn('[HAMMER] WebSocket discovery error:', e)
+    console.warn('[HAMMERTERM] WebSocket discovery error:', e)
   }
 
   if (!foundWebSocket) {
-    console.log('[HAMMER] ⚠️ No existing WebSocket found - will intercept when created')
+    console.log('[HAMMERTERM] ⚠️ No existing WebSocket found - will intercept when created')
   }
 
   // ===== EVENTBUS DISCOVERY =====
@@ -1735,7 +1874,7 @@
       const eventsDisplay = document.querySelector('events-display')
       if (eventsDisplay && eventsDisplay.eventBus) {
         eventBus = eventsDisplay.eventBus
-        console.log('[HAMMER] Found EventBus via events-display')
+        console.log('[HAMMERTERM] Found EventBus via events-display')
         onEventBusFound()
         return true
       }
@@ -1748,7 +1887,7 @@
       const gameView = document.querySelector('game-view')
       if (gameView && gameView.eventBus) {
         eventBus = gameView.eventBus
-        console.log('[HAMMER] Found EventBus via game-view')
+        console.log('[HAMMERTERM] Found EventBus via game-view')
         onEventBusFound()
         return true
       }
@@ -1762,7 +1901,7 @@
       try {
         if (window[prop] && typeof window[prop].emit === 'function') {
           eventBus = window[prop]
-          console.log(`[HAMMER] Found EventBus at window.${prop}`)
+          console.log(`[HAMMERTERM] Found EventBus at window.${prop}`)
           onEventBusFound()
           return true
         }
@@ -1792,11 +1931,11 @@
     try {
       const eventsDisplay = document.querySelector('events-display')
       if (eventsDisplay?.game?.__hammerHooked) {
-        console.log('[HAMMER] Clearing stale hook from previous session')
+        console.log('[HAMMERTERM] Clearing stale hook from previous session')
         delete eventsDisplay.game.__hammerHooked
       }
       if (eventsDisplay?.__hammerComponentHooked) {
-        console.log('[HAMMER] Clearing stale component hook from previous session')
+        console.log('[HAMMERTERM] Clearing stale component hook from previous session')
         delete eventsDisplay.__hammerComponentHooked
       }
     } catch (e) {
@@ -1837,7 +1976,7 @@
 
     // Clear stale hook if present
     if (gameView.__hammerHooked && !gameViewHooked) {
-      console.log('[HAMMER] Re-hooking GameView (stale hook detected)')
+      console.log('[HAMMERTERM] Re-hooking GameView (stale hook detected)')
       delete gameView.__hammerHooked
     }
 
@@ -1867,7 +2006,7 @@
 
     gameView.__hammerHooked = true
     gameViewHooked = true
-    console.log('[HAMMER] ✅ Successfully hooked GameView.updatesSinceLastTick() after', gameViewHookAttempts, 'attempts')
+    console.log('[HAMMERTERM] ✅ Successfully hooked GameView.updatesSinceLastTick() after', gameViewHookAttempts, 'attempts')
     return true
   }
 
@@ -1878,7 +2017,7 @@
 
   function tryHookGameView() {
     if (hookGameView()) {
-      log('[HAMMER] GameView hook successful')
+      log('[HAMMERTERM] GameView hook successful')
       if (hookCheckInterval) {
         clearInterval(hookCheckInterval)
         hookCheckInterval = null
@@ -1923,9 +2062,9 @@
   // Status log after 1 second
   setTimeout(() => {
     if (gameViewHooked) {
-      console.log('[HAMMER] ✅ Donation tracking ready')
+      console.log('[HAMMERTERM] ✅ Donation tracking ready')
     } else {
-      console.log('[HAMMER] ⏳ Still waiting for game to load... (this is normal if in lobby)')
+      console.log('[HAMMERTERM] ⏳ Still waiting for game to load... (this is normal if in lobby)')
     }
   }, 1000)
 
@@ -1976,14 +2115,14 @@
             targetCanvas = canvas
             screenCanvasWidth = canvas.width
             screenCanvasHeight = canvas.height
-            console.log('[HAMMER] 🎨 Found existing game canvas:', canvas.width, 'x', canvas.height)
+            console.log('[HAMMERTERM] 🎨 Found existing game canvas:', canvas.width, 'x', canvas.height)
             break
           }
         }
       }
     }, 100)
   } catch (e) {
-    console.warn('[HAMMER] Canvas interception error:', e)
+    console.warn('[HAMMERTERM] Canvas interception error:', e)
   }
 
   // ===== MOUSE TRACKING =====
@@ -2037,7 +2176,7 @@
 
       showStatus(`✅ Added: ${playerName}`, 3000)
     } catch (err) {
-      console.error('[HAMMER] ALT+M error:', err)
+      console.error('[HAMMERTERM] ALT+M error:', err)
       showStatus('❌ Failed to capture target')
     }
   }
@@ -2061,8 +2200,8 @@
         asTroopsStop()
         showStatus('⏸️ Auto-Feeder STOPPED')
       } else {
-        if (!S.asTroopsTargets.length && !S.asTroopsAllTeamMode) {
-          showStatus('❌ Set targets first (ALT+M or AllTeam mode)')
+        if (!S.asTroopsTargets.length && !S.asTroopsAllTeamMode && !S.asTroopsAllAlliesMode) {
+          showStatus('❌ Set targets first (ALT+M or AllTeam/AllAllies mode)')
         } else {
           asTroopsStart()
           showStatus('▶️ Auto-Feeder STARTED')
@@ -2285,14 +2424,14 @@
       : 'gold=NOT FOUND'
 
     if (donateGoldEventClass && donateTroopsEventClass) {
-      console.log(`%c[HAMMER]%c Event classes: ${troopsStatus}, ${goldStatus}`,
+      console.log(`%c[HAMMERTERM]%c Event classes: ${troopsStatus}, ${goldStatus}`,
         'color:#deb887;font-weight:bold', 'color:inherit')
       return true
     }
 
-    console.warn(`[HAMMER] Event class discovery incomplete: ${troopsStatus}, ${goldStatus}`)
+    console.warn(`[HAMMERTERM] Event class discovery incomplete: ${troopsStatus}, ${goldStatus}`)
     if (!donateTroopsEventClass || !donateGoldEventClass) {
-      console.warn('[HAMMER] Open Hammer > Diagnostics tab to inspect and fix')
+      console.warn('[HAMMERTERM] Open Hammer > Diagnostics tab to inspect and fix')
     }
     return false
   }
@@ -2333,8 +2472,16 @@
   }
 
   function asResolveTargets() {
-    if (S.asTroopsAllTeamMode) {
-      return getTeammates().map(p => ({ id: p.id, name: p.displayName || p.name }))
+    if (S.asTroopsAllTeamMode || S.asTroopsAllAlliesMode) {
+      const result = []
+      const ids = new Set()
+      if (S.asTroopsAllTeamMode) {
+        for (const p of getTeammates()) { result.push({ id: p.id, name: p.displayName || p.name }); ids.add(p.id) }
+      }
+      if (S.asTroopsAllAlliesMode) {
+        for (const p of getAllies()) { if (!ids.has(p.id)) result.push({ id: p.id, name: p.displayName || p.name }) }
+      }
+      return result
     }
 
     const resolved = []
@@ -2557,8 +2704,16 @@
   }
 
   function asResolveGoldTargets() {
-    if (S.asGoldAllTeamMode) {
-      return getTeammates().map(p => ({ id: p.id, name: p.displayName || p.name }))
+    if (S.asGoldAllTeamMode || S.asGoldAllAlliesMode) {
+      const result = []
+      const ids = new Set()
+      if (S.asGoldAllTeamMode) {
+        for (const p of getTeammates()) { result.push({ id: p.id, name: p.displayName || p.name }); ids.add(p.id) }
+      }
+      if (S.asGoldAllAlliesMode) {
+        for (const p of getAllies()) { if (!ids.has(p.id)) result.push({ id: p.id, name: p.displayName || p.name }) }
+      }
+      return result
     }
 
     const resolved = []
@@ -2645,10 +2800,10 @@
     overflow: 'hidden', userSelect: 'none', resize: 'both'
   })
 
-  const tabs = ['summary', 'stats', 'ports', 'feed', 'alliances', 'autotroops', 'autogold', 'reciprocate', 'comms', 'hotkeys', 'about']
+  const tabs = ['summary', 'stats', 'ports', 'feed', 'alliances', 'autotroops', 'autogold', 'reciprocate', 'comms', 'cia', 'hotkeys', 'about']
   ui.innerHTML = `
     <div id="hm-head" style="display:flex;align-items:center;justify-content:space-between;padding:8px 10px;background:#151f33;border-bottom:1px solid #86531f;cursor:move;flex-shrink:0">
-      <div><b>Hammer Control Panel</b> <span style="opacity:.85">v10.11</span></div>
+      <div><span id="hm-hammer-icon" style="cursor:pointer;font-size:16px;user-select:none">🔨</span> <b>HammerTerm</b> <span style="opacity:.85">v11.0</span></div>
       <div class="btns" style="display:flex;gap:6px;flex-wrap:wrap">
         <div id="hm-tabs" style="display:flex;gap:4px;flex-wrap:wrap">
           ${tabs.map(v => `<button class="tab" data-v="${v}">${v[0].toUpperCase() + v.slice(1)}</button>`).join('')}
@@ -2744,7 +2899,7 @@
     const tabsEl = ui.querySelector('#hm-tabs')
     if (min) {
       bodyEl.style.display = 'none'; tabsEl.style.display = 'none'
-      ui.style.width = '280px'; ui.style.height = '44px'
+      ui.style.width = '240px'; ui.style.height = '44px'
     } else {
       bodyEl.style.display = 'block'; tabsEl.style.display = 'flex'
       applySize(S.sizeIdx)
@@ -2753,13 +2908,25 @@
   }
 
   ui.querySelector('#hm-close').onclick = () => { cleanup(); ui.remove() }
+
+  // Secret: 4 rapid clicks on hammer icon unlocks hidden features
+  ui.querySelector('#hm-hammer-icon').onclick = () => {
+    secretClickCount++
+    if (secretClickTimer) clearTimeout(secretClickTimer)
+    secretClickTimer = setTimeout(() => { secretClickCount = 0 }, 2000)
+    if (secretClickCount >= 4) {
+      secretUnlocked = !secretUnlocked
+      secretClickCount = 0
+      lastRenderedHTML = ''
+    }
+  }
   ui.querySelector('#hm-debug').onclick = () => {
     const on = !Logger.isDebug()
     Logger.setDebug(on)
     const btn = ui.querySelector('#hm-debug')
     btn.textContent = on ? 'Debug ON' : 'Debug'
     btn.style.opacity = on ? '1' : '.5'
-    console.log(`[HAMMER] Debug logging ${on ? 'ENABLED' : 'DISABLED'}`)
+    console.log(`[HAMMERTERM] Debug logging ${on ? 'ENABLED' : 'DISABLED'}`)
   }
   ui.querySelector('#hm-size').onclick = () => applySize(S.sizeIdx + 1)
   ui.querySelector('#hm-mini').onclick = () => setMin(!S.minimized)
@@ -2803,7 +2970,7 @@
     }
     const a = document.createElement('a')
     a.href = URL.createObjectURL(new Blob([JSON.stringify(obj, null, 2)], { type: 'application/json' }))
-    a.download = `hammer_v10.11_${new Date().toISOString().replace(/[:.]/g, '-')}.json`
+    a.download = `hammerterm_v11.0_${new Date().toISOString().replace(/[:.]/g, '-')}.json`
     a.click()
     setTimeout(() => URL.revokeObjectURL(a.href), 800)
   }
@@ -3261,7 +3428,7 @@
     }
 
     const teammates = getTeammates()
-    html += '<div class="box"><div class="title" style="margin-top:0">👥 Teammates</div>'
+    html += '<div data-section="teammates"><div class="box"><div class="title" style="margin-top:0">👥 Teammates</div>'
     if (!teammates.length) {
       html += '<div class="muted">No teammates (solo or FFA mode)</div>'
     } else {
@@ -3269,10 +3436,10 @@
         html += alliancePlayerCard(p)
       }
     }
-    html += '</div>'
+    html += '</div></div>'
 
     const allies = getAllies()
-    html += '<div class="box"><div class="title" style="margin-top:0">🤝 Allies</div>'
+    html += '<div data-section="allies"><div class="box"><div class="title" style="margin-top:0">🤝 Allies</div>'
     if (!allies.length) {
       html += '<div class="muted">No active alliances</div>'
     } else {
@@ -3280,7 +3447,7 @@
         html += alliancePlayerCard(p)
       }
     }
-    html += '</div>'
+    html += '</div></div>'
 
     return html
   }
@@ -3290,7 +3457,8 @@
     const me = readMyPlayer()
     const statusDot = `<span class="status-dot ${S.asTroopsRunning ? 'running' : 'stopped'}"></span>`
 
-    let html = '<div class="title">🪖 Auto-Donate Troops</div>'
+    let html = '<div data-section="header">'
+    html += '<div class="title">🪖 Auto-Donate Troops</div>'
 
     // Status header card
     html += '<div class="box">'
@@ -3300,13 +3468,15 @@
     html += '</div>'
     html += `<div class="row" style="margin-top:4px"><div class="muted" style="font-size:10px">Ratio: ${S.asTroopsRatio}% | Threshold: ${S.asTroopsThreshold}% | Cooldown: ${S.asTroopsCooldownSec}s</div></div>`
     html += '</div>'
+    html += '</div>'
 
+    html += '<div data-section="preview">'
     if (me) {
       const maxT = estimateMaxTroops(me.tilesOwned, me.smallID)
       const troopPct = maxT > 0 ? Math.round((me.troops / maxT) * 100) : 0
       const willSend = troopPct >= S.asTroopsThreshold
       const sendAmount = willSend ? Math.floor(me.troops * (S.asTroopsRatio / 100)) : 0
-      const targetCount = S.asTroopsAllTeamMode ? getTeammates().length : S.asTroopsTargets.length
+      const targetCount = (S.asTroopsAllTeamMode || S.asTroopsAllAlliesMode) ? asResolveTargets().length : S.asTroopsTargets.length
 
       html += '<div class="preview-calc">'
       html += `<div style="font-size:16px;margin-bottom:8px"><b>LIVE PREVIEW</b></div>`
@@ -3327,7 +3497,9 @@
       }
       html += '</div>'
     }
+    html += '</div>'
 
+    html += '<div data-section="settings">'
     html += '<div class="box">'
     html += '<div class="title" style="margin-top:0">⚙️ Settings</div>'
     html += `<div class="row"><div>Send Ratio: <b>${S.asTroopsRatio}%</b></div></div>`
@@ -3345,13 +3517,18 @@
     html += `</div>`
     html += `<div class="row"><div>Cooldown</div><input id="at-cooldown" type="number" value="${S.asTroopsCooldownSec}" min="10" max="60" step="1" style="width:80px"><div class="muted" style="margin-left:8px">seconds (min 10s)</div></div>`
     html += '</div>'
+    html += '</div>'
 
+    html += '<div data-section="targets">'
     html += '<div class="box">'
     html += '<div class="title" style="margin-top:0">🎯 Target Selection</div>'
-    html += `<div class="row"><div>AllTeam Mode</div><button id="at-allteam-toggle" class="${S.asTroopsAllTeamMode ? 'active' : ''}">${S.asTroopsAllTeamMode ? 'ON' : 'OFF'}</button></div>`
-    html += '<div class="help">Send to ALL teammates automatically (great for single-player!)</div>'
+    html += '<div style="display:flex;gap:8px;margin-bottom:4px">'
+    html += `<div class="row" style="flex:1"><div>AllTeam</div><button id="at-allteam-toggle" class="${S.asTroopsAllTeamMode ? 'active' : ''}">${S.asTroopsAllTeamMode ? 'ON' : 'OFF'}</button></div>`
+    html += `<div class="row" style="flex:1"><div>AllAllies</div><button id="at-allallies-toggle" class="${S.asTroopsAllAlliesMode ? 'active' : ''}">${S.asTroopsAllAlliesMode ? 'ON' : 'OFF'}</button></div>`
+    html += '</div>'
+    html += '<div class="help">AllTeam = same-team players. AllAllies = alliance partners.</div>'
 
-    if (!S.asTroopsAllTeamMode) {
+    if (!S.asTroopsAllTeamMode && !S.asTroopsAllAlliesMode) {
       html += '<div style="margin-top:12px">'
       html += '<div class="help">Selected targets (ALT+M to add from map):</div>'
       if (S.asTroopsTargets.length > 0) {
@@ -3366,14 +3543,12 @@
 
       const teammates = getTeammates()
       const allies = getAllies()
-      const allTargets = [...teammates, ...allies].filter((p, i, arr) =>
-        arr.findIndex(x => x.id === p.id) === i
-      )
+      const allyOnly = allies.filter(a => !teammates.find(t => t.id === a.id))
 
-      if (allTargets.length > 0) {
-        html += '<div class="help" style="margin-top:8px">Available Targets (click to toggle):</div>'
+      if (teammates.length > 0) {
+        html += '<div style="font-size:10px;font-weight:bold;color:#7ff2a3;margin:8px 0 3px">Teammates</div>'
         html += `<div style="border:1px solid #2a4a6a;border-radius:4px;padding:4px;background:#0a1a2a">`
-        for (const p of allTargets) {
+        for (const p of teammates) {
           const name = p.displayName || p.name || 'Unknown'
           const isSelected = S.asTroopsTargets.includes(name)
           const maxT = estimateMaxTroops(p.tilesOwned, p.smallID)
@@ -3389,13 +3564,37 @@
         }
         html += '</div>'
       }
+      if (allyOnly.length > 0) {
+        html += '<div style="font-size:10px;font-weight:bold;color:#7bb8ff;margin:8px 0 3px">Allies</div>'
+        html += `<div style="border:1px solid #1a2a4a;border-radius:4px;padding:4px;background:#0a0a1a">`
+        for (const p of allyOnly) {
+          const name = p.displayName || p.name || 'Unknown'
+          const isSelected = S.asTroopsTargets.includes(name)
+          const maxT = estimateMaxTroops(p.tilesOwned, p.smallID)
+          const troopVal = Number(p.troops || 0)
+          const goldVal = Number(p.gold || 0)
+          const troopPct = maxT > 0 ? Math.round((troopVal / maxT) * 100) : 0
+          html += '<div class="box" style="margin:4px 0;cursor:pointer" data-toggle-troop-target="' + esc(name) + '">'
+          html += '<div class="row">'
+          html += `<div style="font-weight:${isSelected ? '700' : '400'};color:${isSelected ? '#7bb8ff' : 'inherit'}">${isSelected ? '✓ ' : ''}${esc(name)}</div>`
+          html += `<div class="mono" style="font-size:10px;text-align:right"><span style="color:#7ff2a3">${short(dTroops(troopVal))} 🪖 ${troopPct}%</span> <span style="color:#ffcf5d">${short(goldVal)} 💰</span></div>`
+          html += '</div>'
+          html += '</div>'
+        }
+        html += '</div>'
+      }
       html += '</div>'
     } else {
-      const teammates = getTeammates()
-      html += `<div class="help">Will send to <b>${teammates.length}</b> teammates</div>`
+      const resolved = asResolveTargets()
+      const parts = []
+      if (S.asTroopsAllTeamMode) parts.push(`${getTeammates().length} teammates`)
+      if (S.asTroopsAllAlliesMode) parts.push(`${getAllies().length} allies`)
+      html += `<div class="help">Will send to <b>${resolved.length}</b> targets (${parts.join(' + ')})</div>`
     }
     html += '</div>'
+    html += '</div>'
 
+    html += '<div data-section="controls">'
     html += '<div class="box">'
     html += '<div class="row">'
     html += `<button id="at-start" class="${S.asTroopsRunning ? 'danger' : 'active'}" style="flex:1">${S.asTroopsRunning ? 'STOP' : 'START'}</button>`
@@ -3406,8 +3605,10 @@
     html += '<button id="at-test-send" style="flex:1;background:#4a90e2">🧪 Test Send Troops Now</button>'
     html += '</div>'
     html += '</div>'
+    html += '</div>'
 
     // Activity Log with countdowns
+    html += '<div data-section="activity">'
     if (S.asTroopsLog.length > 0 || S.asTroopsRunning) {
       html += '<div class="box">'
       html += '<div class="title" style="margin-top:0">📋 Activity & Status</div>'
@@ -3443,6 +3644,7 @@
       }
       html += '</div>'
     }
+    html += '</div>'
 
     return html
   }
@@ -3451,7 +3653,8 @@
     const me = readMyPlayer()
     const statusDot = `<span class="status-dot ${S.asGoldRunning ? 'running' : 'stopped'}"></span>`
 
-    let html = '<div class="title">💰 Auto-Donate Gold</div>'
+    let html = '<div data-section="header">'
+    html += '<div class="title">💰 Auto-Donate Gold</div>'
 
     // Status header card
     html += '<div class="box">'
@@ -3461,13 +3664,15 @@
     html += '</div>'
     html += `<div class="row" style="margin-top:4px"><div class="muted" style="font-size:10px">Ratio: ${S.asGoldRatio}% | Min: ${short(S.asGoldThreshold)} | Cooldown: ${S.asGoldCooldownSec}s</div></div>`
     html += '</div>'
+    html += '</div>'
 
+    html += '<div data-section="preview">'
     if (me) {
       // Convert BigInt gold to number for calculations and display
       const myGold = Number(me.gold || 0n)
       const willSend = myGold >= S.asGoldThreshold
       const sendAmount = willSend ? Math.floor(myGold * (S.asGoldRatio / 100)) : 0
-      const targetCount = S.asGoldAllTeamMode ? getTeammates().length : S.asGoldTargets.length
+      const targetCount = (S.asGoldAllTeamMode || S.asGoldAllAlliesMode) ? asResolveGoldTargets().length : S.asGoldTargets.length
 
       html += '<div class="preview-calc">'
       html += `<div style="font-size:16px;margin-bottom:8px"><b>LIVE PREVIEW</b></div>`
@@ -3486,7 +3691,9 @@
       }
       html += '</div>'
     }
+    html += '</div>'
 
+    html += '<div data-section="settings">'
     html += '<div class="box">'
     html += '<div class="title" style="margin-top:0">⚙️ Settings</div>'
     html += `<div class="row"><div>Send Ratio: <b>${S.asGoldRatio}%</b></div></div>`
@@ -3499,13 +3706,18 @@
     html += `<div class="row" style="margin-top:8px"><div>Min Gold Threshold</div><input id="ag-threshold" type="number" value="${S.asGoldThreshold}" min="0" step="10000" style="width:120px"></div>`
     html += `<div class="row"><div>Cooldown</div><input id="ag-cooldown" type="number" value="${S.asGoldCooldownSec}" min="10" max="60" step="1" style="width:80px"><div class="muted" style="margin-left:8px">seconds (min 10s)</div></div>`
     html += '</div>'
+    html += '</div>'
 
+    html += '<div data-section="targets">'
     html += '<div class="box">'
     html += '<div class="title" style="margin-top:0">🎯 Target Selection</div>'
-    html += `<div class="row"><div>AllTeam Mode</div><button id="ag-allteam-toggle" class="${S.asGoldAllTeamMode ? 'active' : ''}">${S.asGoldAllTeamMode ? 'ON' : 'OFF'}</button></div>`
-    html += '<div class="help">Send to ALL teammates automatically</div>'
+    html += '<div style="display:flex;gap:8px;margin-bottom:4px">'
+    html += `<div class="row" style="flex:1"><div>AllTeam</div><button id="ag-allteam-toggle" class="${S.asGoldAllTeamMode ? 'active' : ''}">${S.asGoldAllTeamMode ? 'ON' : 'OFF'}</button></div>`
+    html += `<div class="row" style="flex:1"><div>AllAllies</div><button id="ag-allallies-toggle" class="${S.asGoldAllAlliesMode ? 'active' : ''}">${S.asGoldAllAlliesMode ? 'ON' : 'OFF'}</button></div>`
+    html += '</div>'
+    html += '<div class="help">AllTeam = same-team players. AllAllies = alliance partners.</div>'
 
-    if (!S.asGoldAllTeamMode) {
+    if (!S.asGoldAllTeamMode && !S.asGoldAllAlliesMode) {
       html += '<div style="margin-top:12px">'
       html += '<div class="help">Selected targets (ALT+M to add from map):</div>'
       if (S.asGoldTargets.length > 0) {
@@ -3520,17 +3732,14 @@
 
       const teammates = getTeammates()
       const allies = getAllies()
-      const allTargets = [...teammates, ...allies].filter((p, i, arr) =>
-        arr.findIndex(x => x.id === p.id) === i
-      )
+      const allyOnly = allies.filter(a => !teammates.find(t => t.id === a.id))
 
-      if (allTargets.length > 0) {
-        html += '<div class="help" style="margin-top:8px">Available Targets (click to toggle):</div>'
+      if (teammates.length > 0) {
+        html += '<div style="font-size:10px;font-weight:bold;color:#7ff2a3;margin:8px 0 3px">Teammates</div>'
         html += `<div style="border:1px solid #2a4a6a;border-radius:4px;padding:4px;background:#0a1a2a">`
-        for (const p of allTargets) {
+        for (const p of teammates) {
           const name = p.displayName || p.name || 'Unknown'
           const isSelected = S.asGoldTargets.includes(name)
-          // Safely convert BigInt gold to number for display
           const goldAmount = p.gold ? Number(p.gold) : 0
           html += '<div class="box" style="margin:4px 0;cursor:pointer" data-toggle-gold-target="' + esc(name) + '">'
           html += '<div class="row">'
@@ -3541,13 +3750,34 @@
         }
         html += '</div>'
       }
+      if (allyOnly.length > 0) {
+        html += '<div style="font-size:10px;font-weight:bold;color:#7bb8ff;margin:8px 0 3px">Allies</div>'
+        html += `<div style="border:1px solid #1a2a4a;border-radius:4px;padding:4px;background:#0a0a1a">`
+        for (const p of allyOnly) {
+          const name = p.displayName || p.name || 'Unknown'
+          const isSelected = S.asGoldTargets.includes(name)
+          const goldAmount = p.gold ? Number(p.gold) : 0
+          html += '<div class="box" style="margin:4px 0;cursor:pointer" data-toggle-gold-target="' + esc(name) + '">'
+          html += '<div class="row">'
+          html += `<div style="font-weight:${isSelected ? '700' : '400'};color:${isSelected ? '#7bb8ff' : 'inherit'}">${isSelected ? '✓ ' : ''}${esc(name)}</div>`
+          html += `<div class="mono" style="color:#ffcf5d">${short(goldAmount)} 💰</div>`
+          html += '</div>'
+          html += '</div>'
+        }
+        html += '</div>'
+      }
       html += '</div>'
     } else {
-      const teammates = getTeammates()
-      html += `<div class="help">Will send to <b>${teammates.length}</b> teammates</div>`
+      const resolved = asResolveGoldTargets()
+      const parts = []
+      if (S.asGoldAllTeamMode) parts.push(`${getTeammates().length} teammates`)
+      if (S.asGoldAllAlliesMode) parts.push(`${getAllies().length} allies`)
+      html += `<div class="help">Will send to <b>${resolved.length}</b> targets (${parts.join(' + ')})</div>`
     }
     html += '</div>'
+    html += '</div>'
 
+    html += '<div data-section="controls">'
     html += '<div class="box">'
     html += '<div class="row">'
     html += `<button id="ag-start" class="${S.asGoldRunning ? 'danger' : 'active'}" style="flex:1">${S.asGoldRunning ? 'STOP' : 'START'}</button>`
@@ -3558,8 +3788,10 @@
     html += '<button id="ag-test-send" style="flex:1;background:#4a90e2">🧪 Test Send Gold Now</button>'
     html += '</div>'
     html += '</div>'
+    html += '</div>'
 
     // Activity Log with countdowns
+    html += '<div data-section="activity">'
     if (S.asGoldLog.length > 0 || S.asGoldRunning) {
       html += '<div class="box">'
       html += '<div class="title" style="margin-top:0">📋 Activity & Status</div>'
@@ -3595,6 +3827,7 @@
       }
       html += '</div>'
     }
+    html += '</div>'
 
     return html
   }
@@ -3700,9 +3933,14 @@
 
       for (const donor of recentDonors) {
         const timeSince = Math.floor((Date.now() - donor.lastTime.getTime()) / 1000)
+        const donorPlayer = playersById.get(donor.id)
+        const meForTag = readMyPlayer()
+        const isTeammate = donorPlayer && meForTag && donorPlayer.team != null && donorPlayer.team === meForTag.team
+        const isAllyTag = !isTeammate && donorPlayer && myAllies.has(donorPlayer.smallID)
+        const relationTag = isTeammate ? ' <span style="color:#7ff2a3;font-size:9px;font-weight:normal">[Teammate]</span>' : isAllyTag ? ' <span style="color:#7bb8ff;font-size:9px;font-weight:normal">[Ally]</span>' : ''
         html += '<div class="box" style="margin:8px 0;background:#0d1520">'
         html += '<div class="row">'
-        html += `<div><b>${esc(donor.name)}</b></div>`
+        html += `<div><b>${esc(donor.name)}</b>${relationTag}</div>`
         html += `<div style="display:flex;align-items:center;gap:6px">`
         html += `<span class="muted" style="font-size:10px">${fmtDuration(timeSince * 1000)} ago</span>`
         html += `<button class="recip-clear-donor" data-donor-id="${donor.id}" style="padding:2px 6px;background:#3a2a2a;color:#ff8b94;border:1px solid #ff8b94;border-radius:3px;cursor:pointer;font-size:9px">✕</button>`
@@ -3809,6 +4047,8 @@
       }
     } else if (S.commsGroupMode === 'all-team') {
       for (const p of getTeammates()) addPlayer(p)
+    } else if (S.commsGroupMode === 'all-allies') {
+      for (const p of getAllies()) addPlayer(p)
     } else if (S.commsGroupMode === 'all-non-team') {
       const teammates = getTeammates()
       const teamIds = new Set(teammates.map(t => t.id))
@@ -3828,13 +4068,15 @@
   }
 
   function commsView() {
-    let html = '<div class="title">📡 Comms</div>'
+    let html = '<div data-section="header">'
+    html += '<div class="title">📡 Comms</div>'
     html += '<div class="help">Send emojis and quick messages to players</div>'
 
     // Connection status
     const canSend = (gameSocket && gameSocket.readyState === 1 && currentClientID) || eventBus
     html += `<div style="margin-bottom:8px;padding:4px 8px;border-radius:4px;font-size:10px;background:${canSend ? '#1a2a1a' : '#2a1a1a'};color:${canSend ? '#7ff2a3' : '#ff8b94'}">`
     html += canSend ? '● Connected — ready to send' : '● Not connected — waiting for game'
+    html += '</div>'
     html += '</div>'
 
     // If picking a target for a QuickChat message, show player picker
@@ -3900,21 +4142,27 @@
     const resolvedTargets = resolveCommsTargets()
     const selectedCount = resolvedTargets.length
 
+    html += '<div data-section="sendto">'
     html += '<div class="box"><div class="title" style="margin-top:0">🎯 Send To</div>'
     html += `<div class="help" style="margin-bottom:6px">Selected: <b>${selectedCount}</b> player${selectedCount !== 1 ? 's' : ''} (click to toggle, groups are shortcuts)</div>`
 
-    // Group buttons row
-    html += '<div style="display:flex;gap:4px;margin-bottom:8px">'
+    // Group buttons row (hidden until unlocked)
     const grpAll = S.commsGroupMode === 'all'
     const grpTeam = S.commsGroupMode === 'all-team'
+    const grpAllies = S.commsGroupMode === 'all-allies'
     const grpNonTeam = S.commsGroupMode === 'all-non-team'
-    html += `<button id="comms-grp-all" style="flex:1;padding:6px;border-radius:4px;cursor:pointer;font-size:11px;font-weight:bold;border:1px solid ${grpAll ? '#ffcf5d' : '#2a4a6a'};background:${grpAll ? '#3a3520' : '#0a1a2a'};color:${grpAll ? '#ffcf5d' : '#9bb0c8'}">📢 All</button>`
-    html += `<button id="comms-grp-team" style="flex:1;padding:6px;border-radius:4px;cursor:pointer;font-size:11px;font-weight:bold;border:1px solid ${grpTeam ? '#7ff2a3' : '#2a4a2a'};background:${grpTeam ? '#1a3a1a' : '#0a1a0a'};color:${grpTeam ? '#7ff2a3' : '#7a9a7a'}">👥 All Team</button>`
-    html += `<button id="comms-grp-nonteam" style="flex:1;padding:6px;border-radius:4px;cursor:pointer;font-size:11px;font-weight:bold;border:1px solid ${grpNonTeam ? '#ff9f5d' : '#2a2a1a'};background:${grpNonTeam ? '#2a1a0a' : '#0a0a0a'};color:${grpNonTeam ? '#ff9f5d' : '#7a7a5a'}">🌍 All Non-Team</button>`
-    html += '<button id="comms-grp-clear" style="padding:6px 10px;border-radius:4px;cursor:pointer;font-size:11px;border:1px solid #ff8b94;background:#2a1a1a;color:#ff8b94">Clear</button>'
-    html += '</div>'
+    if (secretUnlocked) {
+      html += '<div style="display:flex;gap:4px;margin-bottom:8px;flex-wrap:wrap">'
+      html += `<button id="comms-grp-all" style="flex:1;padding:6px;border-radius:4px;cursor:pointer;font-size:11px;font-weight:bold;border:1px solid ${grpAll ? '#ffcf5d' : '#2a4a6a'};background:${grpAll ? '#3a3520' : '#0a1a2a'};color:${grpAll ? '#ffcf5d' : '#9bb0c8'}">📢 All</button>`
+      html += `<button id="comms-grp-team" style="flex:1;padding:6px;border-radius:4px;cursor:pointer;font-size:11px;font-weight:bold;border:1px solid ${grpTeam ? '#7ff2a3' : '#2a4a2a'};background:${grpTeam ? '#1a3a1a' : '#0a1a0a'};color:${grpTeam ? '#7ff2a3' : '#7a9a7a'}">👥 Team</button>`
+      html += `<button id="comms-grp-allies" style="flex:1;padding:6px;border-radius:4px;cursor:pointer;font-size:11px;font-weight:bold;border:1px solid ${grpAllies ? '#7bb8ff' : '#1a2a4a'};background:${grpAllies ? '#1a2a4a' : '#0a0a1a'};color:${grpAllies ? '#7bb8ff' : '#5a7a9a'}">🤝 Allies</button>`
+      html += `<button id="comms-grp-nonteam" style="flex:1;padding:6px;border-radius:4px;cursor:pointer;font-size:11px;font-weight:bold;border:1px solid ${grpNonTeam ? '#ff9f5d' : '#2a2a1a'};background:${grpNonTeam ? '#2a1a0a' : '#0a0a0a'};color:${grpNonTeam ? '#ff9f5d' : '#7a7a5a'}">🌍 Others</button>`
+      html += '<button id="comms-grp-clear" style="padding:6px 10px;border-radius:4px;cursor:pointer;font-size:11px;border:1px solid #ff8b94;background:#2a1a1a;color:#ff8b94">Clear</button>'
+      html += '</div>'
+    }
 
     // Team section
+    html += '<div>'
     if (teammates.length > 0) {
       html += '<div style="font-size:10px;font-weight:bold;color:#7ff2a3;margin:6px 0 3px">Team</div>'
       html += '<div style="display:flex;flex-wrap:wrap;gap:3px">'
@@ -3925,20 +4173,24 @@
       }
       html += '</div>'
     }
+    html += '</div>'
 
     // Allies section
+    html += '<div>'
     if (allyOnly.length > 0) {
       html += '<div style="font-size:10px;font-weight:bold;color:#7bb8ff;margin:6px 0 3px">Allies</div>'
       html += '<div style="display:flex;flex-wrap:wrap;gap:3px">'
       for (const p of allyOnly) {
         const name = p.displayName || p.name || '?'
-        const sel = S.commsTargets.has(String(p.id)) || S.commsTargets.has(p.id) || grpAll || grpNonTeam
+        const sel = S.commsTargets.has(String(p.id)) || S.commsTargets.has(p.id) || grpAll || grpAllies
         html += `<button class="comms-target-btn" data-comms-target="${p.id}" style="padding:4px 8px;border-radius:4px;cursor:pointer;font-size:10px;border:1px solid ${sel ? '#7bb8ff' : '#1a2a4a'};background:${sel ? '#1a2a4a' : '#0a0a1a'};color:${sel ? '#7bb8ff' : '#5a7a9a'}">${esc(name)}</button>`
       }
       html += '</div>'
     }
+    html += '</div>'
 
     // Non-team / Others section (collapsible block)
+    html += '<div>'
     if (nonTeamPlayers.length > 0) {
       // Filter out allies already shown above
       const shownIds = new Set(allyOnly.map(p => p.id))
@@ -3961,12 +4213,15 @@
         html += '</div>'
       }
     }
+    html += '</div>'
 
+    html += '</div>'
     html += '</div>'
 
     // (Alliance Request removed - not functional in-game)
 
     // Emoji grid
+    html += '<div data-section="emojis">'
     html += '<div class="box"><div class="title" style="margin-top:0">😀 Emojis</div>'
     html += '<div class="help">Click to send. Note: you may not see your own emojis in-game.</div>'
     html += '<div style="display:grid;grid-template-columns:repeat(10,1fr);gap:2px">'
@@ -3974,8 +4229,10 @@
       html += `<button class="comms-emoji-btn" data-emoji-idx="${i}" style="padding:4px;font-size:18px;background:#0d1520;border:1px solid #1a2a3a;border-radius:4px;cursor:pointer" title="Emoji ${i}">${EMOJI_TABLE[i]}</button>`
     }
     html += '</div></div>'
+    html += '</div>'
 
     // QuickChat sections
+    html += '<div data-section="quickchat">'
     html += '<div class="box"><div class="title" style="margin-top:0">💬 Quick Chat</div>'
     html += '<div class="help">🎯 = requires target player selection</div>'
     for (const [cat, data] of Object.entries(QUICKCHAT)) {
@@ -3993,8 +4250,10 @@
       html += '</div></div>'
     }
     html += '</div>'
+    html += '</div>'
 
     // Recent sent log - no nested scroll
+    html += '<div data-section="recent">'
     if (S.commsRecentSent.length > 0) {
       html += '<div class="box"><div class="title" style="margin-top:0">📤 Recently Sent</div>'
       for (const entry of S.commsRecentSent) {
@@ -4006,6 +4265,7 @@
       }
       html += '</div>'
     }
+    html += '</div>'
 
     return html
   }
@@ -4024,7 +4284,7 @@
     lastReconnectTime = now
 
     const results = []
-    console.log('[HAMMER] 🔄 Manual reconnect triggered...')
+    console.log('[HAMMERTERM] 🔄 Manual reconnect triggered...')
 
     // 1. Re-discover Worker
     if (!foundWorker) {
@@ -4081,13 +4341,280 @@
 
     lastReconnectResult = results
     const summary = results.join(' | ')
-    console.log('[HAMMER] Reconnect results:', summary)
+    console.log('[HAMMERTERM] Reconnect results:', summary)
     showStatus('🔄 ' + results.filter(r => r.startsWith('✅')).length + '/' + results.length + ' systems connected', 3000)
+  }
+
+  // ===== CIA VIEW: SERVER-WIDE ECONOMY INTELLIGENCE =====
+  function ciaView() {
+    let html = '<div class="title">🕵️ CIA — ECONOMY INTELLIGENCE</div>'
+    html += '<div class="help">Server-wide resource flow tracking. Sees ALL player transfers, not just yours.</div>'
+
+    // Legend
+    html += '<div class="box" style="padding:6px 8px">'
+    html += '<div style="display:flex;flex-wrap:wrap;gap:8px;font-size:10px;line-height:1.6">'
+    html += '<span>💰 Gold</span>'
+    html += '<span>🪖 Troops</span>'
+    html += '<span>🏪 Port Trade</span>'
+    html += '<span style="color:#7ff2a3">■ Ally/Team</span>'
+    html += '<span style="color:#e7eef5">■ Other</span>'
+    html += '</div>'
+    html += '<div style="font-size:10px;color:#9bb0c8;margin-top:4px;line-height:1.5">'
+    html += '<b style="color:#ffcf5d">Alerts:</b> '
+    html += '<span>💸 Large transfer (500k+)</span> · '
+    html += '<span>⚠️ Teammate feeding enemy (betrayal)</span>'
+    html += '</div>'
+    html += '</div>'
+
+    // Summary stats (exclude port trades from intelligence)
+    let totalIntelTransfers = 0, totalPortTrades = 0
+    let totalGoldFlow = 0, totalTroopFlow = 0, totalPortGold = 0
+    for (const t of ciaTransfers) {
+      if (t.type === 'port') {
+        totalPortTrades++
+        totalPortGold += t.amount
+      } else {
+        totalIntelTransfers++
+        if (t.type === 'gold') totalGoldFlow += t.amount
+        else if (t.type === 'troops') totalTroopFlow += t.amount
+      }
+    }
+
+    html += '<div class="stat-grid">'
+    html += `<div class="stat-card"><div class="stat-label">Intel Transfers</div><div class="stat-value">${totalIntelTransfers}</div></div>`
+    html += `<div class="stat-card"><div class="stat-label">Gold Flow</div><div class="stat-value">${short(totalGoldFlow)} 💰</div></div>`
+    html += `<div class="stat-card"><div class="stat-label">Troop Flow</div><div class="stat-value">${short(totalTroopFlow)} 🪖</div></div>`
+    html += `<div class="stat-card"><div class="stat-label">Active Connections</div><div class="stat-value">${ciaFlowGraph.size}</div></div>`
+    html += '</div>'
+
+    // Alerts
+    const recentAlerts = ciaAlerts.slice(-10).reverse()
+    html += '<div data-section="alerts">'
+    if (recentAlerts.length > 0) {
+      html += '<div class="box"><div class="title" style="margin-top:0">🚨 ALERTS</div>'
+      for (const alert of recentAlerts) {
+        const age = fmtDuration(Math.floor((Date.now() - alert.ts) / 5000) * 5000)
+        const color = alert.level === 'betrayal' ? '#ff4444' : '#ffcf5d'
+        const icon = alert.level === 'betrayal' ? '⚠️' : '💸'
+        html += `<div style="margin:3px 0;padding:6px;background:#0d1520;border-left:3px solid ${color};border-radius:4px;font-size:11px">`
+        html += `<span style="color:${color}">${icon} ${esc(alert.message)}</span>`
+        html += `<span class="muted" style="float:right;font-size:10px">${age} ago</span>`
+        html += '</div>'
+      }
+      html += '</div>'
+    }
+    html += '</div>'
+
+    // Top donation flows (who's feeding whom)
+    const flows = [...ciaFlowGraph.values()]
+      .map(f => ({ ...f, total: f.gold + f.troops }))
+      .sort((a, b) => b.total - a.total)
+      .slice(0, 15)
+
+    html += '<div data-section="flows">'
+    if (flows.length > 0) {
+      html += '<div class="box"><div class="title" style="margin-top:0">🔗 TOP RESOURCE FLOWS</div>'
+      html += '<div class="help">Who is feeding whom — largest flows first</div>'
+      for (const flow of flows) {
+        const senderIsAlly = findPlayerByName(flow.sender) ? asIsAlly(findPlayerByName(flow.sender).id) : false
+        const receiverIsAlly = findPlayerByName(flow.receiver) ? asIsAlly(findPlayerByName(flow.receiver).id) : false
+        const senderColor = senderIsAlly ? '#7ff2a3' : '#e7eef5'
+        const receiverColor = receiverIsAlly ? '#7ff2a3' : '#e7eef5'
+        const totalCount = flow.goldCount + flow.troopsCount
+        html += `<div style="margin:4px 0;padding:8px;background:#0d1520;border-radius:4px">`
+        html += `<div class="row">`
+        html += `<div style="flex:1"><span style="color:${senderColor};font-weight:bold">${esc(flow.sender)}</span> <span class="muted">→</span> <span style="color:${receiverColor};font-weight:bold">${esc(flow.receiver)}</span></div>`
+        html += `<div class="mono" style="font-size:10px;color:#9bb0c8">${totalCount}x</div>`
+        html += '</div>'
+        html += '<div style="display:flex;gap:12px;margin-top:4px;font-size:11px">'
+        if (flow.gold > 0) html += `<span class="mono" style="color:#ffcf5d">${short(flow.gold)} 💰</span>`
+        if (flow.troops > 0) html += `<span class="mono" style="color:#7bb8ff">${short(flow.troops)} 🪖</span>`
+        html += '</div>'
+        html += '</div>'
+      }
+      html += '</div>'
+    }
+    html += '</div>'
+
+    // Player rankings
+    const rankings = [...ciaPlayerTotals.entries()]
+      .map(([name, t]) => ({
+        name,
+        totalSent: t.sentGold + t.sentTroops,
+        totalRecv: t.recvGold + t.recvTroops,
+        ...t
+      }))
+
+    // Most generous (sent the most)
+    const topSenders = [...rankings].sort((a, b) => b.totalSent - a.totalSent).slice(0, 10)
+    // Most fed (received the most)
+    const topReceivers = [...rankings].sort((a, b) => b.totalRecv - a.totalRecv).slice(0, 10)
+
+    html += '<div data-section="rankings">'
+    if (topSenders.length > 0) {
+      html += '<div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-top:8px">'
+
+      html += '<div class="box" style="margin:0"><div class="title" style="margin-top:0">🎁 MOST GENEROUS</div>'
+      html += '<div class="help">Sent the most resources</div>'
+      for (let i = 0; i < topSenders.length; i++) {
+        const p = topSenders[i]
+        if (p.totalSent === 0) continue
+        const isAlly = findPlayerByName(p.name) ? asIsAlly(findPlayerByName(p.name).id) : false
+        const nameColor = isAlly ? '#7ff2a3' : '#e7eef5'
+        html += `<div style="margin:3px 0;padding:4px;background:#0d1520;border-radius:4px;font-size:11px">`
+        html += `<div class="row"><div style="color:${nameColor}">${i + 1}. ${esc(p.name)}</div></div>`
+        html += `<div style="font-size:10px;color:#9bb0c8">${short(p.sentGold)} 💰 ${short(p.sentTroops)} 🪖</div>`
+        html += '</div>'
+      }
+      html += '</div>'
+
+      html += '<div class="box" style="margin:0"><div class="title" style="margin-top:0">🎯 MOST FED</div>'
+      html += '<div class="help">Received the most resources</div>'
+      for (let i = 0; i < topReceivers.length; i++) {
+        const p = topReceivers[i]
+        if (p.totalRecv === 0) continue
+        const isAlly = findPlayerByName(p.name) ? asIsAlly(findPlayerByName(p.name).id) : false
+        const nameColor = isAlly ? '#7ff2a3' : '#e7eef5'
+        const isEnemy = !isAlly && findPlayerByName(p.name)
+        html += `<div style="margin:3px 0;padding:4px;background:${isEnemy ? '#1a1010' : '#0d1520'};border-radius:4px;font-size:11px">`
+        html += `<div class="row"><div style="color:${nameColor}">${i + 1}. ${esc(p.name)}${isEnemy ? ' ⚠️' : ''}</div></div>`
+        html += `<div style="font-size:10px;color:#9bb0c8">${short(p.recvGold)} 💰 ${short(p.recvTroops)} 🪖</div>`
+        html += '</div>'
+      }
+      html += '</div>'
+
+      html += '</div>'
+    }
+    html += '</div>'
+
+    // Net balance: who's a feeder vs a parasite
+    html += '<div data-section="netbalance">'
+    if (rankings.length > 0) {
+      const netBalances = rankings
+        .map(p => ({ ...p, net: p.totalSent - p.totalRecv }))
+        .filter(p => p.totalSent > 0 || p.totalRecv > 0)
+        .sort((a, b) => b.net - a.net)
+
+      if (netBalances.length > 0) {
+        html += '<div class="box"><div class="title" style="margin-top:0">⚖️ NET BALANCE</div>'
+        html += '<div class="help">Positive = net giver (feeder), Negative = net taker (parasite)</div>'
+        for (const p of netBalances.slice(0, 12)) {
+          const isAlly = findPlayerByName(p.name) ? asIsAlly(findPlayerByName(p.name).id) : false
+          const nameColor = isAlly ? '#7ff2a3' : '#e7eef5'
+          const netColor = p.net > 0 ? '#7ff2a3' : p.net < 0 ? '#ff8b94' : '#9bb0c8'
+          const netLabel = p.net > 0 ? `+${short(p.net)}` : p.net < 0 ? `-${short(Math.abs(p.net))}` : '0'
+          const barPct = Math.min(100, Math.abs(p.net) / (Math.max(1, totalGoldFlow + totalTroopFlow)) * 500)
+          html += `<div style="margin:3px 0;padding:4px;background:#0d1520;border-radius:4px;font-size:11px">`
+          html += `<div class="row"><div style="color:${nameColor}">${esc(p.name)}</div><div class="mono" style="color:${netColor};font-weight:bold">${netLabel}</div></div>`
+          html += `<div style="margin-top:2px;height:3px;background:#1a2a3a;border-radius:2px"><div style="height:100%;width:${barPct}%;background:${netColor};border-radius:2px"></div></div>`
+          html += '</div>'
+        }
+        html += '</div>'
+      }
+    }
+    html += '</div>'
+
+    // Economy pulse: flow rates
+    html += '<div data-section="pulse">'
+    if (totalIntelTransfers > 0) {
+      const oldestTransfer = ciaTransfers.find(t => t.type !== 'port')
+      if (oldestTransfer) {
+        const windowMs = Math.floor(Math.max(60000, Date.now() - oldestTransfer.ts) / 5000) * 5000
+        const windowMin = windowMs / 60000
+        const goldPerMin = Math.round(totalGoldFlow / windowMin)
+        const troopsPerMin = Math.round(totalTroopFlow / windowMin)
+        const transfersPerMin = (totalIntelTransfers / windowMin).toFixed(1)
+
+        html += '<div class="box"><div class="title" style="margin-top:0">📈 ECONOMY PULSE</div>'
+        html += '<div class="help">Server-wide flow rates</div>'
+        html += '<div class="stat-grid">'
+        html += `<div class="stat-card"><div class="stat-label">Gold/Min</div><div class="stat-value">${short(goldPerMin)} 💰</div></div>`
+        html += `<div class="stat-card"><div class="stat-label">Troops/Min</div><div class="stat-value">${short(troopsPerMin)} 🪖</div></div>`
+        html += `<div class="stat-card"><div class="stat-label">Transfers/Min</div><div class="stat-value">${transfersPerMin}</div></div>`
+        html += `<div class="stat-card"><div class="stat-label">Tracking Window</div><div class="stat-value">${fmtDuration(windowMs)}</div></div>`
+        html += '</div>'
+        html += '</div>'
+      }
+    }
+    html += '</div>'
+
+    // Live transfer feed (player-to-player only)
+    const recentTransfers = ciaTransfers.filter(t => t.type !== 'port').slice(-30).reverse()
+    html += '<div data-section="livefeed">'
+    if (recentTransfers.length > 0) {
+      html += '<div class="box"><div class="title" style="margin-top:0">📡 LIVE TRANSFER FEED</div>'
+      html += '<div class="help">All observed resource transfers in real-time</div>'
+      for (const t of recentTransfers) {
+        const age = Math.floor((Date.now() - t.ts) / 5000) * 5
+        const icon = t.type === 'gold' ? '💰' : t.type === 'troops' ? '🪖' : '🏪'
+        const senderIsAlly = findPlayerByName(t.senderName) ? asIsAlly(findPlayerByName(t.senderName).id) : false
+        const receiverIsAlly = findPlayerByName(t.receiverName) ? asIsAlly(findPlayerByName(t.receiverName).id) : false
+        const sColor = senderIsAlly ? '#7ff2a3' : '#e7eef5'
+        const rColor = receiverIsAlly ? '#7ff2a3' : '#e7eef5'
+        html += `<div style="margin:2px 0;padding:4px 6px;background:#0d1520;border-radius:3px;font-size:10px;display:flex;align-items:center;gap:6px">`
+        html += `<span class="muted" style="min-width:35px">${age}s</span>`
+        html += `<span style="color:${sColor}">${esc(t.senderName)}</span>`
+        html += `<span class="muted">→</span>`
+        html += `<span style="color:${rColor}">${esc(t.receiverName)}</span>`
+        html += `<span class="mono" style="margin-left:auto">${short(t.amount)} ${icon}</span>`
+        html += '</div>'
+      }
+      html += '</div>'
+    } else {
+      html += '<div class="box"><div class="muted">No transfers observed yet. Data appears as players send gold/troops during the match.</div></div>'
+    }
+    html += '</div>'
+
+    // Port Economy section (separated from player intelligence)
+    html += '<div class="box"><div class="title" style="margin-top:0">🏪 PORT ECONOMY</div>'
+    html += '<div class="help">Gold received from port trades — separated from player intelligence</div>'
+    html += '<div class="stat-grid" style="margin-bottom:8px">'
+    html += `<div class="stat-card"><div class="stat-label">Port Trades</div><div class="stat-value">${totalPortTrades}</div></div>`
+    html += `<div class="stat-card"><div class="stat-label">Port Gold</div><div class="stat-value">${short(totalPortGold)} 💰</div></div>`
+    html += '</div>'
+
+    const portTrades = ciaTransfers.filter(t => t.type === 'port')
+    const portByPlayer = new Map()
+    for (const t of portTrades) {
+      const name = t.receiverName
+      if (!portByPlayer.has(name)) portByPlayer.set(name, { gold: 0, count: 0 })
+      const p = portByPlayer.get(name)
+      p.gold += t.amount
+      p.count++
+    }
+    const topPortTraders = [...portByPlayer.entries()]
+      .sort((a, b) => b[1].gold - a[1].gold)
+      .slice(0, 10)
+
+    if (topPortTraders.length > 0) {
+      html += '<div class="help">Top Port Traders:</div>'
+      for (const [name, data] of topPortTraders) {
+        const isAlly = findPlayerByName(name) ? asIsAlly(findPlayerByName(name).id) : false
+        const nameColor = isAlly ? '#7ff2a3' : '#e7eef5'
+        html += `<div style="margin:3px 0;padding:4px;background:#0d1520;border-radius:4px;font-size:11px">`
+        html += `<div class="row"><div style="color:${nameColor}">${esc(name)}</div><div class="mono" style="color:#ffcf5d">${short(data.gold)} 💰 (${data.count}x)</div></div>`
+        html += '</div>'
+      }
+    }
+
+    if (totalPortTrades === 0) {
+      html += '<div class="muted">No port trades observed yet.</div>'
+    }
+    html += '</div>'
+
+    // Controls
+    html += '<div class="box">'
+    html += '<div class="row">'
+    html += '<button id="cia-clear" class="danger">Clear All Data</button>'
+    html += '</div>'
+    html += '</div>'
+
+    return html
   }
 
   function hotkeysView() {
     let html = '<div class="title">⌨️ Keyboard Shortcuts</div>'
-    html += '<div class="help">Available keyboard shortcuts</div>'
+    html += '<div class="help">🔨 HammerTerm keyboard shortcuts</div>'
 
     html += '<div class="box"><div class="title" style="margin-top:0">Auto-Troops</div>'
     html += '<div class="row"><div>Add Target</div><span class="hotkey">ALT+M</span></div>'
@@ -4103,15 +4630,15 @@
     // Hero branding
     html += '<div style="text-align:center;padding:24px 16px">'
     html += '<div style="font-size:64px;line-height:1">🔨</div>'
-    html += '<div style="font-size:24px;font-weight:bold;color:#ffcf5d;margin-top:8px">Hammer Control Panel</div>'
-    html += '<div style="font-size:14px;color:#9bb0c8;margin-top:4px">v10.11</div>'
+    html += '<div style="font-size:24px;font-weight:bold;color:#ffcf5d;margin-top:8px">Hammer Terminal</div>'
+    html += '<div style="font-size:14px;color:#9bb0c8;margin-top:4px">v11.0</div>'
     html += '</div>'
 
     html += '<div class="box">'
     html += '<div class="help" style="font-size:12px;line-height:1.6">'
-    html += 'A companion tool for <b>OpenFront.io</b> that tracks donations, '
-    html += 'automates troop and gold sending, and provides real-time game analytics. '
-    html += 'Built for alliance coordination and strategic resource management.'
+    html += '🔨 <b>HammerTerm</b> — automation &amp; intelligence companion for <b>OpenFront.io</b>. '
+    html += 'Tracks donations, automates troop and gold sending, monitors server-wide economy, '
+    html += 'and provides real-time game analytics. Built for alliance coordination and strategic resource management.'
     html += '</div>'
     html += '</div>'
 
@@ -4127,6 +4654,7 @@
     html += '<div>💰 <b>Auto-Gold</b> - Automated gold donations</div>'
     html += '<div>🔄 <b>Reciprocate</b> - Quick payback for incoming donations</div>'
     html += '<div>📡 <b>Comms</b> - Send emojis and quick chat messages</div>'
+    html += '<div>🕵️ <b>CIA</b> - Server-wide economy intelligence</div>'
     html += '<div>⌨️ <b>Hotkeys</b> - Keyboard shortcuts</div>'
     html += '</div>'
     html += '</div>'
@@ -4149,66 +4677,9 @@
 
     html += '<div class="box">'
     html += '<div style="font-size:11px;line-height:1.6">'
-    html += '<div class="row"><div>Version</div><div class="mono">10.11</div></div>'
+    html += '<div class="row"><div>Version</div><div class="mono">11.0</div></div>'
     html += '<div class="row"><div>Game</div><div class="mono">OpenFront.io</div></div>'
     html += '<div class="row"><div>License</div><div class="mono">Free to use</div></div>'
-    html += '</div>'
-    html += '</div>'
-
-    // System status with health score
-    const sysChecks = [gameViewHooked, playerDataReady, !!eventBus, gameSocket && gameSocket.readyState === 1, foundWorker, mySmallID !== null]
-    const sysOk = sysChecks.filter(Boolean).length
-    const sysTotal = sysChecks.length
-    const healthPct = Math.round((sysOk / sysTotal) * 100)
-    const healthColor = healthPct === 100 ? '#7ff2a3' : healthPct >= 67 ? '#ffcf5d' : '#ff8b94'
-
-    html += '<div class="box">'
-    html += '<div class="row" style="margin-bottom:8px"><div class="title" style="margin-top:0">System Status</div>'
-    html += '<div style="display:flex;align-items:center;gap:8px">'
-    html += '<span class="mono" style="color:' + healthColor + ';font-size:14px;font-weight:bold">' + sysOk + '/' + sysTotal + '</span>'
-    html += '<button id="about-reconnect" style="padding:6px 14px;background:#1a3a4a;border:2px solid #7bb8ff;border-radius:6px;cursor:pointer;font-weight:bold;color:#7bb8ff;font-size:12px">🔄 Reconnect</button>'
-    html += '</div></div>'
-    html += '<div style="font-size:11px">'
-    html += '<div class="row"><div>GameView Hook</div><div class="mono" style="color:' + (gameViewHooked ? '#7ff2a3' : '#ff8b94') + '">' + (gameViewHooked ? 'Hooked' : 'Not Hooked') + '</div></div>'
-    html += '<div class="row"><div>Worker</div><div class="mono" style="color:' + (foundWorker ? '#7ff2a3' : '#ff8b94') + '">' + (foundWorker ? 'Wrapped' : 'Not Found') + '</div></div>'
-    html += '<div class="row"><div>DisplayEvents</div><div class="mono">' + displayEventsReceived + '</div></div>'
-    html += '<div class="row"><div>Donations Tracked</div><div class="mono">' + donationsTracked + '</div></div>'
-    html += '<div class="row"><div>Player Data</div><div class="mono" style="color:' + (playerDataReady ? '#7ff2a3' : '#ffcf5d') + '">' + (playerDataReady ? 'Ready' : 'Loading') + '</div></div>'
-    html += '<div class="row"><div>EventBus</div><div class="mono" style="color:' + (eventBus ? '#7ff2a3' : '#ff8b94') + '">' + (eventBus ? 'Found' : 'Not Found') + '</div></div>'
-    html += '<div class="row"><div>WebSocket</div><div class="mono" style="color:' + (gameSocket && gameSocket.readyState === 1 ? '#7ff2a3' : '#ff8b94') + '">' + (gameSocket && gameSocket.readyState === 1 ? 'Connected' : 'Disconnected') + '</div></div>'
-    html += '<div class="row"><div>MySmallID</div><div class="mono">' + mySmallID + '</div></div>'
-    html += '<div class="row"><div>Players Loaded</div><div class="mono">' + playersById.size + '</div></div>'
-    html += '</div>'
-    if (lastReconnectResult) {
-      html += '<div style="margin-top:8px;padding:6px;background:#0d1520;border-radius:4px;font-size:10px">'
-      html += '<div class="muted" style="margin-bottom:4px">Last Reconnect (' + fmtDuration(Date.now() - lastReconnectTime) + ' ago):</div>'
-      for (const r of lastReconnectResult) {
-        const color = r.startsWith('✅') ? '#7ff2a3' : '#ff8b94'
-        html += '<div style="color:' + color + '">' + esc(r) + '</div>'
-      }
-      html += '</div>'
-    }
-    html += '</div>'
-
-    html += '<div class="box">'
-    html += '<div class="title" style="margin-top:0">Event Pipeline Diagnostics</div>'
-    html += '<div style="font-size:11px">'
-    html += '<div class="row"><div>Events Received</div><div class="mono" style="color:#7ff2a3">' + displayEventsReceived + '</div></div>'
-    html += '<div class="row"><div>Events Processed</div><div class="mono" style="color:#7ff2a3">' + diagProcessed + '</div></div>'
-    html += '<div class="row"><div>Filtered: No Type</div><div class="mono">' + diagFilteredNoType + '</div></div>'
-    html += '<div class="row"><div>Filtered: Paused</div><div class="mono">' + diagFilteredPaused + '</div></div>'
-    html += '<div class="row"><div>Filtered: Buffered</div><div class="mono" style="color:' + (pendingMessages.length > 0 ? '#ff8b94' : 'inherit') + '">' + diagFilteredBuffered + (pendingMessages.length > 0 ? ' (' + pendingMessages.length + ' stuck!)' : '') + '</div></div>'
-    html += '<div class="row"><div>Filtered: PID Mismatch</div><div class="mono" style="color:' + (diagFilteredPidMismatch > 0 && diagProcessed === 0 ? '#ff8b94' : 'inherit') + '">' + diagFilteredPidMismatch + '</div></div>'
-    html += '<div class="row"><div>Filtered: Player Not Found</div><div class="mono" style="color:' + (diagFilteredNoPlayer > 0 ? '#ffcf5d' : 'inherit') + '">' + diagFilteredNoPlayer + '</div></div>'
-    if (diagLastEvents.length > 0) {
-      const last = diagLastEvents[diagLastEvents.length - 1]
-      html += '<div style="margin-top:8px;padding:6px;background:#0d1520;border-radius:4px;font-size:10px">'
-      html += '<div class="muted">Last Event:</div>'
-      html += '<div class="row"><div>Type</div><div class="mono">' + last.mt + '</div></div>'
-      html += '<div class="row"><div>PID</div><div class="mono">' + last.pid + ' (me: ' + last.mySmallID + ')</div></div>'
-      html += '<div class="row"><div>Params</div><div class="mono" style="word-break:break-all;max-width:300px">' + esc(last.params) + '</div></div>'
-      html += '</div>'
-    }
     html += '</div>'
     html += '</div>'
 
@@ -4219,6 +4690,65 @@
     html += '<div class="row"><div>ALT+F</div><div class="muted">Toggle auto-troops</div></div>'
     html += '</div>'
     html += '</div>'
+
+    // System status + diagnostics (hidden until unlocked)
+    if (secretUnlocked) {
+      const sysChecks = [gameViewHooked, playerDataReady, !!eventBus, gameSocket && gameSocket.readyState === 1, foundWorker, mySmallID !== null]
+      const sysOk = sysChecks.filter(Boolean).length
+      const sysTotal = sysChecks.length
+      const healthPct = Math.round((sysOk / sysTotal) * 100)
+      const healthColor = healthPct === 100 ? '#7ff2a3' : healthPct >= 67 ? '#ffcf5d' : '#ff8b94'
+
+      html += '<div class="box">'
+      html += '<div class="row" style="margin-bottom:8px"><div class="title" style="margin-top:0">System Status</div>'
+      html += '<div style="display:flex;align-items:center;gap:8px">'
+      html += '<span class="mono" style="color:' + healthColor + ';font-size:14px;font-weight:bold">' + sysOk + '/' + sysTotal + '</span>'
+      html += '<button id="about-reconnect" style="padding:6px 14px;background:#1a3a4a;border:2px solid #7bb8ff;border-radius:6px;cursor:pointer;font-weight:bold;color:#7bb8ff;font-size:12px">🔄 Reconnect</button>'
+      html += '</div></div>'
+      html += '<div style="font-size:11px">'
+      html += '<div class="row"><div>GameView Hook</div><div class="mono" style="color:' + (gameViewHooked ? '#7ff2a3' : '#ff8b94') + '">' + (gameViewHooked ? 'Hooked' : 'Not Hooked') + '</div></div>'
+      html += '<div class="row"><div>Worker</div><div class="mono" style="color:' + (foundWorker ? '#7ff2a3' : '#ff8b94') + '">' + (foundWorker ? 'Wrapped' : 'Not Found') + '</div></div>'
+      html += '<div class="row"><div>DisplayEvents</div><div class="mono">' + displayEventsReceived + '</div></div>'
+      html += '<div class="row"><div>Donations Tracked</div><div class="mono">' + donationsTracked + '</div></div>'
+      html += '<div class="row"><div>Player Data</div><div class="mono" style="color:' + (playerDataReady ? '#7ff2a3' : '#ffcf5d') + '">' + (playerDataReady ? 'Ready' : 'Loading') + '</div></div>'
+      html += '<div class="row"><div>EventBus</div><div class="mono" style="color:' + (eventBus ? '#7ff2a3' : '#ff8b94') + '">' + (eventBus ? 'Found' : 'Not Found') + '</div></div>'
+      html += '<div class="row"><div>WebSocket</div><div class="mono" style="color:' + (gameSocket && gameSocket.readyState === 1 ? '#7ff2a3' : '#ff8b94') + '">' + (gameSocket && gameSocket.readyState === 1 ? 'Connected' : 'Disconnected') + '</div></div>'
+      html += '<div class="row"><div>MySmallID</div><div class="mono">' + mySmallID + '</div></div>'
+      html += '<div class="row"><div>Players Loaded</div><div class="mono">' + playersById.size + '</div></div>'
+      html += '</div>'
+      if (lastReconnectResult) {
+        html += '<div style="margin-top:8px;padding:6px;background:#0d1520;border-radius:4px;font-size:10px">'
+        html += '<div class="muted" style="margin-bottom:4px">Last Reconnect (' + fmtDuration(Date.now() - lastReconnectTime) + ' ago):</div>'
+        for (const r of lastReconnectResult) {
+          const color = r.startsWith('✅') ? '#7ff2a3' : '#ff8b94'
+          html += '<div style="color:' + color + '">' + esc(r) + '</div>'
+        }
+        html += '</div>'
+      }
+      html += '</div>'
+
+      html += '<div class="box">'
+      html += '<div class="title" style="margin-top:0">Event Pipeline Diagnostics</div>'
+      html += '<div style="font-size:11px">'
+      html += '<div class="row"><div>Events Received</div><div class="mono" style="color:#7ff2a3">' + displayEventsReceived + '</div></div>'
+      html += '<div class="row"><div>Events Processed</div><div class="mono" style="color:#7ff2a3">' + diagProcessed + '</div></div>'
+      html += '<div class="row"><div>Filtered: No Type</div><div class="mono">' + diagFilteredNoType + '</div></div>'
+      html += '<div class="row"><div>Filtered: Paused</div><div class="mono">' + diagFilteredPaused + '</div></div>'
+      html += '<div class="row"><div>Filtered: Buffered</div><div class="mono" style="color:' + (pendingMessages.length > 0 ? '#ff8b94' : 'inherit') + '">' + diagFilteredBuffered + (pendingMessages.length > 0 ? ' (' + pendingMessages.length + ' stuck!)' : '') + '</div></div>'
+      html += '<div class="row"><div>Filtered: PID Mismatch</div><div class="mono" style="color:' + (diagFilteredPidMismatch > 0 && diagProcessed === 0 ? '#ff8b94' : 'inherit') + '">' + diagFilteredPidMismatch + '</div></div>'
+      html += '<div class="row"><div>Filtered: Player Not Found</div><div class="mono" style="color:' + (diagFilteredNoPlayer > 0 ? '#ffcf5d' : 'inherit') + '">' + diagFilteredNoPlayer + '</div></div>'
+      if (diagLastEvents.length > 0) {
+        const last = diagLastEvents[diagLastEvents.length - 1]
+        html += '<div style="margin-top:8px;padding:6px;background:#0d1520;border-radius:4px;font-size:10px">'
+        html += '<div class="muted">Last Event:</div>'
+        html += '<div class="row"><div>Type</div><div class="mono">' + last.mt + '</div></div>'
+        html += '<div class="row"><div>PID</div><div class="mono">' + last.pid + ' (me: ' + last.mySmallID + ')</div></div>'
+        html += '<div class="row"><div>Params</div><div class="mono" style="word-break:break-all;max-width:300px">' + esc(last.params) + '</div></div>'
+        html += '</div>'
+      }
+      html += '</div>'
+      html += '</div>'
+    }
 
     html += '<div style="text-align:center;margin-top:16px;color:#9bb0c8;font-size:10px">'
     html += 'Find me on the <a href="https://discord.gg/openfront" target="_blank" rel="noopener" style="color:#7bb8ff;text-decoration:none">OpenFront Discord</a> as [MARS] Hammer'
@@ -4245,6 +4775,7 @@
       autogold: autoDonateGoldView,
       reciprocate: reciprocateView,
       comms: commsView,
+      cia: ciaView,
       hotkeys: hotkeysView,
       about: aboutView
     }
@@ -4253,11 +4784,40 @@
     if (!fn) return
     const html = fn()
 
-    // Only rebuild DOM if content actually changed (prevents flicker)
+    // Skip if nothing changed
     if (html === lastRenderedHTML && S.view === lastRenderedView) return
+
+    let fullRebuild = S.view !== lastRenderedView
+
+    if (!fullRebuild) {
+      // Same-tab re-render: try section-level update
+      const temp = document.createElement('div')
+      temp.innerHTML = html
+      const directSections = temp.querySelectorAll(':scope > [data-section]')
+
+      // Only use section mode if ALL top-level children are data-sections
+      if (directSections.length > 0 && directSections.length === temp.children.length) {
+        for (const newSec of directSections) {
+          const name = newSec.getAttribute('data-section')
+          const oldSec = content.querySelector(':scope > [data-section="' + name + '"]')
+          if (!oldSec) { fullRebuild = true; break }
+          if (oldSec.innerHTML !== newSec.innerHTML) {
+            oldSec.innerHTML = newSec.innerHTML
+          }
+        }
+      } else {
+        fullRebuild = true
+      }
+    }
+
+    if (fullRebuild) {
+      const scrollTop = content.scrollTop
+      content.innerHTML = html
+      content.scrollTop = scrollTop
+    }
+
     lastRenderedHTML = html
     lastRenderedView = S.view
-    content.innerHTML = html
 
     ui.querySelectorAll('.tab').forEach(b => {
       b.classList.toggle('active', b.getAttribute('data-v') === S.view)
@@ -4284,6 +4844,10 @@
     }
     if (atAllTeamToggle) {
       atAllTeamToggle.onclick = () => { S.asTroopsAllTeamMode = !S.asTroopsAllTeamMode }
+    }
+    const atAllAlliesToggle = ui.querySelector('#at-allallies-toggle')
+    if (atAllAlliesToggle) {
+      atAllAlliesToggle.onclick = () => { S.asTroopsAllAlliesMode = !S.asTroopsAllAlliesMode }
     }
     if (atStart) {
       atStart.onclick = () => {
@@ -4365,6 +4929,10 @@
     }
     if (agAllTeamToggle) {
       agAllTeamToggle.onclick = () => { S.asGoldAllTeamMode = !S.asGoldAllTeamMode }
+    }
+    const agAllAlliesToggle = ui.querySelector('#ag-allallies-toggle')
+    if (agAllAlliesToggle) {
+      agAllAlliesToggle.onclick = () => { S.asGoldAllAlliesMode = !S.asGoldAllAlliesMode }
     }
     if (agStart) {
       agStart.onclick = () => {
@@ -4471,6 +5039,10 @@
     const grpTeam = ui.querySelector('#comms-grp-team')
     if (grpTeam) grpTeam.onclick = () => {
       S.commsGroupMode = S.commsGroupMode === 'all-team' ? null : 'all-team'
+    }
+    const grpAllies = ui.querySelector('#comms-grp-allies')
+    if (grpAllies) grpAllies.onclick = () => {
+      S.commsGroupMode = S.commsGroupMode === 'all-allies' ? null : 'all-allies'
     }
     const grpNonTeam = ui.querySelector('#comms-grp-nonteam')
     if (grpNonTeam) grpNonTeam.onclick = () => {
@@ -4696,12 +5268,24 @@
       reconnectBtn.onclick = () => { reconnectAll() }
     }
 
+    // CIA tab handlers
+    const ciaClear = ui.querySelector('#cia-clear')
+    if (ciaClear) {
+      ciaClear.onclick = () => {
+        ciaTransfers.length = 0
+        ciaFlowGraph.clear()
+        ciaPlayerTotals.clear()
+        ciaAlerts.length = 0
+        ciaSeen.clear()
+      }
+    }
+
   }
 
   const tickId = setInterval(() => {
     render()
   }, 500)
-  setInterval(() => S.seen.clear(), 60000)
+  setInterval(() => { S.seen.clear(); ciaSeen.clear() }, 60000)
 
   // Start reciprocate queue processor
   const reciprocateProcessorId = setInterval(() => {
@@ -4712,7 +5296,7 @@
 
   // ===== CLEANUP FUNCTION =====
   function cleanup() {
-    console.log('[HAMMER] Cleanup started...')
+    console.log('[HAMMERTERM] Cleanup started...')
 
     // Clear intervals
     clearInterval(tickId)
@@ -4723,7 +5307,7 @@
 
     // Clean up all event listeners
     eventCleanup.forEach(fn => {
-      try { fn() } catch (e) { console.warn('[HAMMER] Event cleanup error:', e) }
+      try { fn() } catch (e) { console.warn('[HAMMERTERM] Event cleanup error:', e) }
     })
     eventCleanup.length = 0
 
@@ -4757,13 +5341,13 @@
       })
     } catch {}
 
-    console.log('[HAMMER] Cleanup complete')
+    console.log('[HAMMERTERM] Cleanup complete')
   }
 
   window.__HAMMER__ = {
     cleanup,
     ui: { root: ui },
-    version: '10.11',
+    version: '11.0',
     exportLogs: Logger.exportLogs,
     setDebug: Logger.setDebug,
     isDebug: Logger.isDebug,
@@ -4817,7 +5401,7 @@
   if (targetCanvas) initMessages.push('✅ Canvas')
   else initMessages.push('⏳ Canvas (detecting...)')
 
-  console.log('%c[HAMMER]%c v10.11 Control Panel ready! 🔨', 'color:#deb887;font-weight:bold', 'color:inherit')
-  console.log('[HAMMER] Status:', initMessages.join(' | '))
-  console.log('[HAMMER] Debug logging OFF by default. Toggle via UI button or __HAMMER__.setDebug(true)')
+  console.log('%c[HAMMERTERM]%c 🔨 v11.0 ready!', 'color:#deb887;font-weight:bold', 'color:inherit')
+  console.log('[HAMMERTERM] Status:', initMessages.join(' | '))
+  console.log('[HAMMERTERM] Debug logging OFF by default. Toggle via UI button or __HAMMER__.setDebug(true)')
 })()
