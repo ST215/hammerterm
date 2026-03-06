@@ -4,6 +4,11 @@ All notable changes to Hammer Control Panel will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [11.0.4] - 2026-02-19
+
+### Fixed
+- **Reciprocate on Gold sends wrong resource**: When receiving gold, the system now sends **troops** back (not gold). This enables the "Troops for Gold Trust" playstyle — receive troops → send gold back, receive gold → send troops back. Affects manual popup buttons, auto mode, and reciprocation history display.
+
 ## [11.0.3] - 2026-02-15
 
 ### Added

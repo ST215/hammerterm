@@ -719,6 +719,13 @@
     const latest = active[active.length - 1]
     const me = readMyPlayer()
     const myGold = me ? Number(me.gold || 0n) : 0
+    const myTroops = me ? Number(me.troops || 0) : 0
+    // Cross-resource: received gold → send troops back, received troops → send gold back
+    const sendTroops = latest.gold > 0
+    const sendType = sendTroops ? "troops" : "gold"
+    const myResource = sendTroops ? myTroops : myGold
+    const resourceLabel = sendTroops ? "troops" : "gold"
+    const resourceIcon = sendTroops ? "🪖" : "💰"
 
     popup.style.cssText = `
       position: fixed;
@@ -741,10 +748,10 @@
         ${latest.gold > 0 ? `💰 ${esc(latest.donorName)} sent you ${short(latest.gold)} gold` : ""}
       </div>
       <div style="font-size: 13px; margin-bottom: 12px; color: #9bb0c8;">
-        You have ${short(myGold)} gold
+        You have ${short(myResource)} ${resourceLabel} ${resourceIcon}
       </div>
       <div style="font-size: 14px; font-weight: bold; margin-bottom: 8px;">
-        Send Gold Back:
+        Send ${sendTroops ? "Troops" : "Gold"} Back:
       </div>
       <div style="display: flex; gap: 8px; margin-bottom: 12px;">
         ${[10, 25, 50, 75, 100]
@@ -753,11 +760,12 @@
           <button
             data-reciprocate-pct="${pct}"
             data-reciprocate-id="${latest.id}"
+            data-send-type="${sendType}"
             style="flex: 1; padding: 8px; background: #2a4a6a; color: #fff; border: 1px solid #7bb8ff; border-radius: 6px; cursor: pointer; font-weight: bold;"
             onmouseover="this.style.background='#3a5a7a'"
             onmouseout="this.style.background='#2a4a6a'"
           >
-            ${pct}%<br><span style="font-size:10px">${short(Math.floor((myGold * pct) / 100))}</span>
+            ${pct}%<br><span style="font-size:10px">${short(sendTroops ? dTroops(Math.floor((myResource * pct) / 100)) : Math.floor((myResource * pct) / 100))}</span>
           </button>
         `,
           )
@@ -793,7 +801,8 @@
       const pctBtn = e.target.closest("[data-reciprocate-pct]")
       if (pctBtn) {
         const pct = parseInt(pctBtn.getAttribute("data-reciprocate-pct"))
-        handleQuickReciprocate(notification.donorId, notification.donorName, pct, notification.id)
+        const sendType = pctBtn.getAttribute("data-send-type") || "gold"
+        handleQuickReciprocate(notification.donorId, notification.donorName, pct, notification.id, sendType)
         return
       }
       if (e.target.closest("#reciprocate-dismiss")) {
@@ -807,47 +816,57 @@
     }
   }
 
-  function handleQuickReciprocate(donorId, donorName, percentage, notificationId) {
+  function handleQuickReciprocate(donorId, donorName, percentage, notificationId, sendType) {
     const me = readMyPlayer()
     if (!me) {
       showStatus("❌ Player data not available")
       return
     }
 
-    const myGold = Number(me.gold || 0n)
-    const goldToSend = Math.floor((myGold * percentage) / 100)
+    const sendTroops = sendType === "troops"
+    const myResource = sendTroops ? Number(me.troops || 0) : Number(me.gold || 0n)
+    const amountToSend = Math.floor((myResource * percentage) / 100)
+    const resourceLabel = sendTroops ? "troops" : "gold"
+    const icon = sendTroops ? "🪖" : "💰"
 
-    if (goldToSend === 0) {
-      showStatus("❌ Not enough gold to send")
+    if (amountToSend === 0) {
+      showStatus(`❌ Not enough ${resourceLabel} to send`)
       if (notificationId) dismissReciprocateNotification(notificationId)
       return
     }
 
-    const success = asSendGold(donorId, goldToSend)
+    const success = sendTroops
+      ? asSendTroops(donorId, amountToSend)
+      : asSendGold(donorId, amountToSend)
 
     if (success) {
-      S.reciprocateHistory.push({
+      const historyEntry = {
         donorId,
         donorName,
-        goldSent: goldToSend,
         percentage,
         timestamp: Date.now(),
         mode: "manual",
-      })
+      }
+      if (sendTroops) {
+        historyEntry.troopsSent = amountToSend
+      } else {
+        historyEntry.goldSent = amountToSend
+      }
+      S.reciprocateHistory.push(historyEntry)
 
       if (S.reciprocateHistory.length > 100) {
         S.reciprocateHistory.shift()
       }
 
-      showStatus(`✅ Sent ${short(goldToSend)} gold (${percentage}%) to ${donorName}`)
+      showStatus(`✅ Sent ${short(amountToSend)} ${resourceLabel} ${icon} (${percentage}%) to ${donorName}`)
       if (notificationId) dismissReciprocateNotification(notificationId)
     } else {
-      showStatus(`❌ Failed to send gold to ${donorName}`)
+      showStatus(`❌ Failed to send ${resourceLabel} to ${donorName}`)
     }
   }
 
-  function handleAutoReciprocate(donorId, donorName, troopsReceived) {
-    log("[RECIPROCATE] Auto-reciprocate for", donorName, "| troops:", troopsReceived)
+  function handleAutoReciprocate(donorId, donorName, amountReceived, receivedType) {
+    log("[RECIPROCATE] Auto-reciprocate for", donorName, "|", receivedType, ":", amountReceived)
     // Check cooldown first
     const lastSent = reciprocateCooldowns.get(donorId)
     if (lastSent && Date.now() - lastSent < RECIPROCATE_COOLDOWN_MS) {
@@ -859,7 +878,8 @@
     const pending = {
       donorId,
       donorName,
-      troopsReceived,
+      amountReceived,
+      receivedType: receivedType || "troops",
       addedAt: Date.now(),
       attempts: 0,
       maxAttempts: 5,
@@ -867,7 +887,7 @@
 
     reciprocatePending.push(pending)
     log(
-      `[RECIPROCATE] Queued auto-send for ${donorName} (${troopsReceived} troops, queue size: ${reciprocatePending.length})`,
+      `[RECIPROCATE] Queued auto-send for ${donorName} (${amountReceived} ${receivedType}, queue size: ${reciprocatePending.length})`,
     )
   }
 
@@ -886,6 +906,7 @@
     }
 
     const myGold = Number(me.gold || 0n)
+    const myTroops = Number(me.troops || 0)
     const now = Date.now()
 
     // Process up to 3 pending reciprocations per interval
@@ -908,15 +929,19 @@
         continue
       }
 
-      // Calculate gold to send
+      // Cross-resource: received gold → send troops, received troops → send gold
+      const sendTroops = pending.receivedType === "gold"
       const percentage = S.reciprocateAutoPct
-      const goldToSend = Math.floor((myGold * percentage) / 100)
+      const amountToSend = sendTroops
+        ? Math.floor((myTroops * percentage) / 100)
+        : Math.floor((myGold * percentage) / 100)
+      const resourceLabel = sendTroops ? "troops" : "gold"
 
-      if (goldToSend === 0) {
+      if (amountToSend === 0) {
         pending.attempts++
         if (pending.attempts < pending.maxAttempts) {
           log(
-            `[RECIPROCATE] Not enough gold, re-queueing (attempt ${pending.attempts}/${pending.maxAttempts})`,
+            `[RECIPROCATE] Not enough ${resourceLabel}, re-queueing (attempt ${pending.attempts}/${pending.maxAttempts})`,
           )
           reciprocatePending.push(pending) // Re-queue for later
         } else {
@@ -925,20 +950,28 @@
         continue
       }
 
-      // Attempt to send gold
-      const success = asSendGold(pending.donorId, goldToSend)
+      // Send the opposite resource back
+      const success = sendTroops
+        ? asSendTroops(pending.donorId, amountToSend)
+        : asSendGold(pending.donorId, amountToSend)
 
       if (success) {
         // Record in history
-        S.reciprocateHistory.push({
+        const historyEntry = {
           donorId: pending.donorId,
           donorName: pending.donorName,
-          goldSent: goldToSend,
           percentage,
-          troopsReceived: pending.troopsReceived,
+          amountReceived: pending.amountReceived,
+          receivedType: pending.receivedType,
           timestamp: Date.now(),
           mode: "auto",
-        })
+        }
+        if (sendTroops) {
+          historyEntry.troopsSent = amountToSend
+        } else {
+          historyEntry.goldSent = amountToSend
+        }
+        S.reciprocateHistory.push(historyEntry)
 
         if (S.reciprocateHistory.length > 100) {
           S.reciprocateHistory.shift()
@@ -947,11 +980,12 @@
         // Set cooldown
         reciprocateCooldowns.set(pending.donorId, now)
 
+        const icon = sendTroops ? "🪖" : "💰"
         showStatus(
-          `✅ Auto-sent ${short(goldToSend)} gold (${percentage}%) to ${pending.donorName}`,
+          `✅ Auto-sent ${short(amountToSend)} ${resourceLabel} ${icon} (${percentage}%) to ${pending.donorName}`,
         )
         log(
-          `[RECIPROCATE] Successfully sent ${goldToSend} gold to ${pending.donorName} (queue size: ${reciprocatePending.length})`,
+          `[RECIPROCATE] Successfully sent ${amountToSend} ${resourceLabel} to ${pending.donorName} (queue size: ${reciprocatePending.length})`,
         )
       } else {
         // Failed to send, retry
@@ -1376,7 +1410,7 @@
           // Trigger reciprocation (manual or auto)
           if (S.reciprocateEnabled && S.reciprocateOnTroops) {
             if (S.reciprocateMode === "auto") {
-              handleAutoReciprocate(from.id, name, amt)
+              handleAutoReciprocate(from.id, name, amt, "troops")
             } else if (S.reciprocatePopupsEnabled) {
               showReciprocateNotification({
                 id: from.id,
@@ -1472,7 +1506,7 @@
           // Trigger reciprocation on gold received
           if (S.reciprocateEnabled && S.reciprocateOnGold) {
             if (S.reciprocateMode === "auto") {
-              handleAutoReciprocate(from.id, name, amt)
+              handleAutoReciprocate(from.id, name, amt, "gold")
             } else if (S.reciprocatePopupsEnabled) {
               showReciprocateNotification({
                 id: from.id,
@@ -4552,7 +4586,9 @@
       for (const entry of recent) {
         const ts = new Date(entry.timestamp)
         html += `<div style="margin:2px 0;padding:4px;background:#0d1520;border-radius:4px;color:#9bb0c8">`
-        html += `[${fmtTime(ts)}] Sent ${short(entry.goldSent)} 💰 (${entry.percentage}%) to ${esc(entry.donorName)}`
+        const sentIcon = entry.troopsSent ? "🪖" : "💰"
+        const sentAmount = entry.troopsSent || entry.goldSent || 0
+        html += `[${fmtTime(ts)}] Sent ${short(sentAmount)} ${sentIcon} (${entry.percentage}%) to ${esc(entry.donorName)}`
         html += `</div>`
       }
       html += "</div>"
