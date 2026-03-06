@@ -1,0 +1,41 @@
+@import "tailwindcss";
+
+@theme inline {
+  /* Pixel-based spacing — avoids rem dependency on host page font-size in shadow DOM */
+  --spacing-0_5: 2px;
+  --spacing-1: 4px;
+  --spacing-1_5: 6px;
+  --spacing-2: 8px;
+  --spacing-2_5: 10px;
+  --spacing-3: 12px;
+  --spacing-4: 16px;
+  --spacing-5: 20px;
+  --spacing-6: 24px;
+  --spacing-8: 32px;
+  --spacing-10: 40px;
+  --spacing-12: 48px;
+  --spacing-16: 64px;
+
+  /* Font sizes */
+  --text-2xs: 9px;
+  --text-xs: 10px;
+  --text-sm: 11px;
+  --text-base: 12px;
+  --text-lg: 13px;
+  --text-xl: 15px;
+  --text-2xl: 18px;
+
+  /* Hammer terminal color palette */
+  --color-hammer-bg: #0b1220;
+  --color-hammer-surface: #0d1520;
+  --color-hammer-border: #1a3050;
+  --color-hammer-text: #c8d6e5;
+  --color-hammer-muted: #5a7a9a;
+  --color-hammer-green: #7ff2a3;
+  --color-hammer-blue: #7bb8ff;
+  --color-hammer-gold: #ffcf5d;
+  --color-hammer-red: #ff6b6b;
+  --color-hammer-purple: #b088f9;
+  --color-hammer-cyan: #4ecdc4;
+  --color-hammer-header: #0a0f1a;
+}
