@@ -31,6 +31,7 @@ export interface CommsSlice {
   setCommsPendingQC: (pending: CommsPendingQC | null) => void;
   addCommsRecentSent: (entry: CommsRecentEntry) => void;
   toggleAllianceCommsExpanded: (id: string) => void;
+  resetComms: () => void;
 }
 
 export const createCommsSlice: StateCreator<CommsSlice, [], [], CommsSlice> = (set) => ({
@@ -76,5 +77,13 @@ export const createCommsSlice: StateCreator<CommsSlice, [], [], CommsSlice> = (s
       const next = new Map(s.allianceCommsExpanded);
       next.set(id, !next.get(id));
       return { allianceCommsExpanded: next };
+    }),
+
+  resetComms: () =>
+    set({
+      commsTargets: new Set(),
+      commsPendingQC: null,
+      commsRecentSent: [],
+      allianceCommsExpanded: new Map(),
     }),
 });

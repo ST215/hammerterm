@@ -14,6 +14,7 @@ export interface DonationToastsSlice {
   donationToasts: DonationToast[];
   addDonationToast: (toast: DonationToast) => void;
   dismissDonationToast: (id: number) => void;
+  resetDonationToasts: () => void;
 }
 
 export const createDonationToastsSlice: StateCreator<
@@ -35,4 +36,6 @@ export const createDonationToastsSlice: StateCreator<
     set((s) => ({
       donationToasts: s.donationToasts.filter((t) => t.id !== id),
     })),
+
+  resetDonationToasts: () => set({ donationToasts: [] }),
 });

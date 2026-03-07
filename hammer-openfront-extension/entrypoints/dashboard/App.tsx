@@ -26,8 +26,8 @@ const LOCAL_KEYS = new Set([
   "asGoldAllTeamMode", "asGoldAllAlliesMode",
   // CIA user preferences
   "ciaWindowMs", "ciaFeedFilter",
-  // Recorder
-  "recorderOn", "recorderEventCount",
+  // Recorder (only the toggle — count & events come from content script snapshots)
+  "recorderOn",
 ]);
 
 export default function DashboardApp() {
@@ -129,14 +129,14 @@ export default function DashboardApp() {
           height: "100vh",
           backgroundColor: "#0b1220",
           color: "#ff6b6b",
-          fontFamily: "Consolas, monospace",
-          fontSize: 14,
+          fontFamily: "JetBrains Mono, monospace",
+          fontSize: 16,
           padding: 24,
           textAlign: "center",
         }}
       >
         <div>
-          <div style={{ fontSize: 18, marginBottom: 12, color: "#7ff2a3" }}>
+          <div style={{ fontSize: 21, marginBottom: 12, color: "#7ff2a3" }}>
             {">"}_ Hammer Terminal
           </div>
           <div>{error}</div>
@@ -155,8 +155,8 @@ export default function DashboardApp() {
           height: "100vh",
           backgroundColor: "#0b1220",
           color: "#6b7a99",
-          fontFamily: "Consolas, monospace",
-          fontSize: 14,
+          fontFamily: "JetBrains Mono, monospace",
+          fontSize: 16,
         }}
       >
         Connecting to game...

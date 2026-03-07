@@ -36,6 +36,7 @@ export interface AutoTroopsSlice {
   clearAsTroopsTargets: () => void;
   addAsTroopsLog: (entry: AutoTroopsLogEntry) => void;
   updateAsTroopsSendTimes: (targetId: string, lastSend: number, nextSend: number) => void;
+  resetAutoTroops: () => void;
 }
 
 export const createAutoTroopsSlice: StateCreator<AutoTroopsSlice, [], [], AutoTroopsSlice> = (
@@ -104,4 +105,13 @@ export const createAutoTroopsSlice: StateCreator<AutoTroopsSlice, [], [], AutoTr
       asTroopsLastSend: { ...s.asTroopsLastSend, [targetId]: lastSend },
       asTroopsNextSend: { ...s.asTroopsNextSend, [targetId]: nextSend },
     })),
+
+  resetAutoTroops: () =>
+    set({
+      asTroopsRunning: false,
+      asTroopsTargets: [],
+      asTroopsLog: [],
+      asTroopsLastSend: {},
+      asTroopsNextSend: {},
+    }),
 });

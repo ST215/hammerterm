@@ -1,22 +1,11 @@
-import { useEffect } from "react";
 import { useStore } from "@store/index";
-import { getRecentEvents } from "../../recorder";
 
 export default function RecorderView() {
   const recorderOn = useStore((s) => s.recorderOn);
   const eventCount = useStore((s) => s.recorderEventCount);
   const toggleRecorder = useStore((s) => s.toggleRecorder);
   const exportRecorder = useStore((s) => s.exportRecorder);
-  const refreshCount = useStore((s) => s.refreshRecorderCount);
-
-  // Refresh event count every second while recording
-  useEffect(() => {
-    if (!recorderOn) return;
-    const id = setInterval(refreshCount, 1000);
-    return () => clearInterval(id);
-  }, [recorderOn, refreshCount]);
-
-  const recent = recorderOn ? getRecentEvents(20) : [];
+  const recent = useStore((s) => s.recorderRecentEvents);
 
   return (
     <div className="space-y-3">

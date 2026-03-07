@@ -28,6 +28,7 @@ export interface DonationsSlice {
   recordPort: (playerId: string, gold: number, timestamp: number) => void;
   addRawMessage: (msg: unknown) => void;
   clearSeen: () => void;
+  resetDonations: () => void;
 }
 
 export const createDonationsSlice: StateCreator<DonationsSlice, [], [], DonationsSlice> = (
@@ -93,4 +94,15 @@ export const createDonationsSlice: StateCreator<DonationsSlice, [], [], Donation
     }),
 
   clearSeen: () => set({ seen: new Set() }),
+
+  resetDonations: () =>
+    set({
+      inbound: new Map(),
+      outbound: new Map(),
+      ports: new Map(),
+      feedIn: [],
+      feedOut: [],
+      rawMessages: [],
+      seen: new Set(),
+    }),
 });

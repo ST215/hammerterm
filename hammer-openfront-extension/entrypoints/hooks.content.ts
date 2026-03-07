@@ -89,19 +89,19 @@ export default defineContentScript({
       const id = readProp(p, "id");
       if (id == null) return null;
       const gold = readProp(p, "gold");
+      const rawAllies = readProp(p, "allies");
       return {
         id: String(id),
-        smallID: readProp(p, "smallID") ?? null,
-        clientID: readProp(p, "clientID") ?? null,
-        name: readProp(p, "name"),
-        displayName: readProp(p, "displayName") || readProp(p, "name"),
-        isAlive: readProp(p, "isAlive") ?? true,
-        team: readProp(p, "team") ?? null,
+        smallID: Number(readProp(p, "smallID") ?? 0) || null,
+        clientID: readProp(p, "clientID") ? String(readProp(p, "clientID")) : null,
+        name: String(readProp(p, "name") ?? ""),
+        displayName: String(readProp(p, "displayName") || readProp(p, "name") || ""),
+        isAlive: !!(readProp(p, "isAlive") ?? true),
+        team: Number(readProp(p, "team") ?? 0) || null,
         troops: Number(readProp(p, "troops") || 0),
-        gold: typeof gold === "bigint" ? Number(gold) : Number(gold || 0),
-        tilesOwned:
-          readProp(p, "numTilesOwned") ?? readProp(p, "tilesOwned") ?? 0,
-        allies: readProp(p, "allies") ?? undefined,
+        gold: Number(typeof gold === "bigint" ? gold : gold || 0),
+        tilesOwned: Number(readProp(p, "numTilesOwned") ?? readProp(p, "tilesOwned") ?? 0),
+        allies: rawAllies ? Array.from(rawAllies).map(Number) : undefined,
       };
     }
 

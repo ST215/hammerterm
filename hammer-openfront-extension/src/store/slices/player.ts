@@ -27,6 +27,7 @@ export interface PlayerSlice {
   updateAllies: (allies: Set<number>) => void;
   setCurrentClientID: (clientID: string | null) => void;
   markPlayerDataReady: () => void;
+  resetPlayerState: () => void;
 }
 
 export const createPlayerSlice: StateCreator<PlayerSlice, [], [], PlayerSlice> = (set) => ({
@@ -67,4 +68,16 @@ export const createPlayerSlice: StateCreator<PlayerSlice, [], [], PlayerSlice> =
   setCurrentClientID: (clientID) => set({ currentClientID: clientID }),
 
   markPlayerDataReady: () => set({ playerDataReady: true }),
+
+  resetPlayerState: () =>
+    set({
+      playersById: new Map(),
+      playersBySmallId: new Map(),
+      lastPlayers: [],
+      mySmallID: null,
+      myTeam: null,
+      myAllies: new Set(),
+      playerDataReady: false,
+      playerSummary: { count: 0, names: [], myName: null },
+    }),
 });

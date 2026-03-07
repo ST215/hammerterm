@@ -12,7 +12,7 @@ import { useStore } from "@store/index";
 import type { PlayerData } from "@shared/types";
 import { serialize } from "@shared/serialize";
 import { processDisplayMessage, drainPendingMessages } from "./game/message-processor";
-import { record } from "../recorder";
+import { record, startRecording, stopRecording } from "../recorder";
 
 // ---------------------------------------------------------------------------
 // Hook status (for diagnostics UI)
@@ -115,6 +115,34 @@ export function installBridge(): void {
     }
   });
 
+  // React to recorder toggle — start/stop recording in the content script
+  // context where all record() calls actually happen.
+  let recorderRefreshInterval: ReturnType<typeof setInterval> | null = null;
+
+  useStore.subscribe((state, prev) => {
+    if (state.recorderOn === prev.recorderOn) return;
+
+    if (state.recorderOn) {
+      startRecording();
+      // Snapshot current hook status so recording always starts with context
+      for (const [hook, found] of Object.entries(hookStatus)) {
+        record("hook", hook + (found ? ".found" : ".missing"), { found, snapshot: true });
+      }
+      // Periodically refresh recorder data in the store (for dashboard sync)
+      recorderRefreshInterval = setInterval(() => {
+        useStore.getState().refreshRecorderCount();
+      }, 1000);
+    } else {
+      stopRecording();
+      if (recorderRefreshInterval) {
+        clearInterval(recorderRefreshInterval);
+        recorderRefreshInterval = null;
+      }
+      // Final count update
+      useStore.getState().refreshRecorderCount();
+    }
+  });
+
   console.log("[Hammer:Bridge] Listening for main world messages");
 }
 
@@ -159,7 +187,24 @@ function onBridgeMessage(e: MessageEvent): void {
 
 function handleInit(payload: { clientID: string }): void {
   if (!payload?.clientID) return;
-  useStore.getState().setCurrentClientID(payload.clientID);
+
+  const store = useStore.getState();
+
+  // If player data was already ready, this is a new game — reset all stale state
+  if (store.playerDataReady) {
+    console.log("[Hammer:Bridge] New game detected, resetting game state");
+    record("bridge", "game-reset", { prevSmallID: store.mySmallID });
+    store.resetPlayerState();
+    store.resetDonations();
+    store.resetAutoTroops();
+    store.resetAutoGold();
+    store.resetReciprocate();
+    store.resetComms();
+    store.resetCIA();
+    store.resetDonationToasts();
+  }
+
+  store.setCurrentClientID(payload.clientID);
   console.log("[Hammer:Bridge] ClientID set:", payload.clientID);
 }
 
@@ -276,8 +321,11 @@ function handleRefresh(payload: { players: any[] }): void {
   if (!payload?.players?.length) return;
 
   const store = useStore.getState();
-  const newById = new Map(store.playersById);
-  const newBySmallId = new Map(store.playersBySmallId);
+
+  // Full replacement — refreshPlayers sends a complete snapshot every 3s,
+  // so we discard stale players from previous games or dead players.
+  const newById = new Map<string, PlayerData>();
+  const newBySmallId = new Map<number, PlayerData>();
 
   for (const p of payload.players) {
     if (!p) continue;
@@ -296,9 +344,7 @@ function handleRefresh(payload: { players: any[] }): void {
     }
   }
 
-  if (newById.size > 0) {
-    store.setPlayers(newById, newBySmallId, [...newById.values()]);
-  }
+  store.setPlayers(newById, newBySmallId, [...newById.values()]);
 }
 
 function handleTiles(payload: { packed: string[] }): void {

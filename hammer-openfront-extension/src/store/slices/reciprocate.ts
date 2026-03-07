@@ -57,6 +57,7 @@ export interface ReciprocateSlice {
   clearReciprocateNotifications: () => void;
   addReciprocatePending: (item: ReciprocatePendingItem) => void;
   removeReciprocatePending: (index: number) => void;
+  resetReciprocate: () => void;
 }
 
 export const createReciprocateSlice: StateCreator<ReciprocateSlice, [], [], ReciprocateSlice> = (
@@ -140,4 +141,11 @@ export const createReciprocateSlice: StateCreator<ReciprocateSlice, [], [], Reci
     set((s) => ({
       reciprocatePending: s.reciprocatePending.filter((_, i) => i !== index),
     })),
+
+  resetReciprocate: () =>
+    set({
+      reciprocateHistory: [],
+      reciprocateNotifications: [],
+      reciprocatePending: [],
+    }),
 });

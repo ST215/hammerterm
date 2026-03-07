@@ -1,17 +1,15 @@
 import type { StateCreator } from "zustand";
+import type { RecorderEvent } from "../../recorder";
 import {
-  startRecording,
-  stopRecording,
-  isRecording,
   getEventCount,
+  getRecentEvents,
   exportRecording,
-  record,
 } from "../../recorder";
-import { getHookStatus } from "../../content/bridge";
 
 export interface RecorderSlice {
   recorderOn: boolean;
   recorderEventCount: number;
+  recorderRecentEvents: RecorderEvent[];
   toggleRecorder: () => void;
   exportRecorder: () => void;
   refreshRecorderCount: () => void;
@@ -20,24 +18,12 @@ export interface RecorderSlice {
 export const createRecorderSlice: StateCreator<RecorderSlice> = (set) => ({
   recorderOn: false,
   recorderEventCount: 0,
+  recorderRecentEvents: [],
 
   toggleRecorder: () => {
-    if (isRecording()) {
-      stopRecording();
-      set({ recorderOn: false, recorderEventCount: getEventCount() });
-    } else {
-      startRecording();
-      // Snapshot current hook status so recording always starts with context
-      try {
-        const status = getHookStatus();
-        for (const [hook, found] of Object.entries(status)) {
-          record("hook", hook + (found ? ".found" : ".missing"), { found, snapshot: true });
-        }
-      } catch {
-        // getHookStatus may not be available in dashboard context
-      }
-      set({ recorderOn: true, recorderEventCount: 0 });
-    }
+    // Just flip the flag — bridge.ts subscribes and handles
+    // startRecording/stopRecording in the content script context.
+    set((s) => ({ recorderOn: !s.recorderOn }));
   },
 
   exportRecorder: () => {
@@ -53,6 +39,9 @@ export const createRecorderSlice: StateCreator<RecorderSlice> = (set) => ({
   },
 
   refreshRecorderCount: () => {
-    set({ recorderEventCount: getEventCount() });
+    set({
+      recorderEventCount: getEventCount(),
+      recorderRecentEvents: getRecentEvents(20),
+    });
   },
 });

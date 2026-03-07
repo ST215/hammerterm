@@ -36,6 +36,7 @@ export interface AutoGoldSlice {
   clearAsGoldTargets: () => void;
   addAsGoldLog: (entry: AutoGoldLogEntry) => void;
   updateAsGoldSendTimes: (targetId: string, lastSend: number, nextSend: number) => void;
+  resetAutoGold: () => void;
 }
 
 export const createAutoGoldSlice: StateCreator<AutoGoldSlice, [], [], AutoGoldSlice> = (set) => ({
@@ -101,4 +102,13 @@ export const createAutoGoldSlice: StateCreator<AutoGoldSlice, [], [], AutoGoldSl
       asGoldLastSend: { ...s.asGoldLastSend, [targetId]: lastSend },
       asGoldNextSend: { ...s.asGoldNextSend, [targetId]: nextSend },
     })),
+
+  resetAutoGold: () =>
+    set({
+      asGoldRunning: false,
+      asGoldTargets: [],
+      asGoldLog: [],
+      asGoldLastSend: {},
+      asGoldNextSend: {},
+    }),
 });

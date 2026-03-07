@@ -17,6 +17,7 @@ export interface CIASlice {
   setGoldRates: (gps30: number, gpm60: number, gpm120: number) => void;
   setCIAWindow: (ms: number) => void;
   setCIAFeedFilter: (filter: CIAFeedFilter) => void;
+  resetCIA: () => void;
 }
 
 export const createCIASlice: StateCreator<CIASlice, [], [], CIASlice> = (set, get) => ({
@@ -33,4 +34,12 @@ export const createCIASlice: StateCreator<CIASlice, [], [], CIASlice> = (set, ge
   setGoldRates: (gps30, gpm60, gpm120) => set({ gps30, gpm60, gpm120 }),
   setCIAWindow: (ciaWindowMs) => set({ ciaWindowMs }),
   setCIAFeedFilter: (ciaFeedFilter) => set({ ciaFeedFilter }),
+
+  resetCIA: () =>
+    set({
+      ciaState: createCIAState(),
+      gps30: 0,
+      gpm60: 0,
+      gpm120: 0,
+    }),
 });
