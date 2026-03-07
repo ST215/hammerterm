@@ -1,5 +1,14 @@
 # Project Rules
 
+## Quick Start for AI Agents
+- **Working directory**: `cd hammer-openfront-extension` before any npm commands
+- **Install**: `npm install`
+- **Build**: `npm run build` (production) or `npm run dev` (HMR)
+- **Test**: `npm test` (380+ tests, all should pass)
+- **Typecheck**: `npm run typecheck`
+- **Key entry points to read first**: `src/store/index.ts` (store shape), `src/content/bridge.ts` (data flow), `entrypoints/hooks.content.ts` (game hooks)
+- **Path aliases**: `@shared` = `src/shared`, `@content` = `src/content`, `@ui` = `src/ui`, `@store` = `src/store`
+
 ## Project Structure
 - `hammer-scripts/hammer.js` — legacy single-file browser console injection (v10.x).
 - `hammer-scripts/HAMMER_ARCHITECTURE.md` — architecture guide for the legacy script.
