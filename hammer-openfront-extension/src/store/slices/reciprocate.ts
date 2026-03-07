@@ -1,4 +1,18 @@
 import type { StateCreator } from "zustand";
+import type { PalantirPhase } from "@shared/logic/palantir";
+
+export interface PalantirDecision {
+  sacrificeRatio: number;
+  loyaltyMultiplier: number;
+  teammateMultiplier: number;
+  selfMod: number;
+  phase: PalantirPhase;
+  rawAmount: number;
+  flooredAmount: number;
+  cappedAmount: number;
+  donorTroops: number;
+  sendCount: number;
+}
 
 export interface ReciprocateHistoryEntry {
   donorId: string;
@@ -8,6 +22,7 @@ export interface ReciprocateHistoryEntry {
   mode: string;
   troopsSent?: number;
   goldSent?: number;
+  palantir?: PalantirDecision;
 }
 
 export interface ReciprocateNotification {
@@ -33,7 +48,7 @@ const NOTIFICATION_CAP = 5;
 
 export interface ReciprocateSlice {
   reciprocateEnabled: boolean;
-  reciprocateMode: "manual" | "auto";
+  reciprocateMode: "manual" | "auto" | "palantir";
   reciprocateAutoPct: number;
   reciprocateOnTroops: boolean;
   reciprocateOnGold: boolean;
@@ -45,7 +60,7 @@ export interface ReciprocateSlice {
   reciprocatePending: ReciprocatePendingItem[];
 
   toggleReciprocateEnabled: () => void;
-  setReciprocateMode: (mode: "manual" | "auto") => void;
+  setReciprocateMode: (mode: "manual" | "auto" | "palantir") => void;
   setReciprocateAutoPct: (pct: number) => void;
   toggleReciprocateOnTroops: () => void;
   toggleReciprocateOnGold: () => void;

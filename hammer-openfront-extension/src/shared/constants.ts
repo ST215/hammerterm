@@ -45,6 +45,20 @@ export const SIZES = [
 
 export const RECIPROCATE_COOLDOWN_MS = 10_000;
 
+// Palantir smart reciprocation constants
+export const PALANTIR_FLOOR = 10_000;
+export const PALANTIR_CAP_PCT = 0.4;
+export const PALANTIR_TEAM_BONUS = 1.25;
+export const PALANTIR_LOYALTY_STEP = 0.05;
+export const PALANTIR_LOYALTY_MAX = 0.5;
+export const PALANTIR_DEFAULT_SACRIFICE = 0.1;
+export const PALANTIR_SMALL_THRESHOLD = 50_000;
+export const PALANTIR_MID_THRESHOLD = 200_000;
+export const PALANTIR_SELF_SMALL = 0.6;
+export const PALANTIR_SELF_MID = 1.2;
+export const PALANTIR_SELF_DOMINANT = 1.5;
+export const PALANTIR_MIN_GOLD = 1_000;
+
 export const LOG_LEVELS = { DEBUG: 0, INFO: 1, WARN: 2, ERROR: 3 } as const;
 export const LEVEL_NAMES = ["debug", "info", "warn", "error"] as const;
 export const CONSOLE_LEVEL_MAP: Record<string, number> = { debug: 0, log: 1, info: 1, warn: 2, error: 3 };

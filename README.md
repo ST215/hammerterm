@@ -12,7 +12,7 @@ This project started as `hammer-scripts/hammer.js`, a single-file console inject
 
 - **Auto Troops** -- automatically send troops to teammates/allies above a configurable threshold
 - **Auto Gold** -- distribute gold to teammates on a timed interval
-- **Reciprocate** -- automatically return resources when you receive donations (cross-resource: gold in, troops back)
+- **Reciprocate** -- automatically return resources when you receive donations (cross-resource: gold in, troops back). Includes **Palantir mode** -- sacrifice-aware smart reciprocation that weighs donor sacrifice ratio, loyalty, team relationship, and your power phase
 - **CIA** -- real-time threat intelligence tracking all server-wide transfers, betrayal alerts, leaderboard
 - **Comms** -- send emoji sequences and coordinate with allies
 - **Alliances** -- view teammates vs allies, manage diplomacy

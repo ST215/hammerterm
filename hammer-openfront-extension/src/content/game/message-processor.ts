@@ -134,10 +134,13 @@ function handleReceivedTroops(
   // Trigger reciprocation when enabled
   const s = useStore.getState();
   if (s.reciprocateEnabled && s.reciprocateOnTroops) {
-    if (s.reciprocateMode === "auto") {
+    if (s.reciprocateMode === "auto" || s.reciprocateMode === "palantir") {
+      // Get send count from inbound donation record for Palantir loyalty calc
+      const donorRecord = s.inbound.get(from.id);
+      const sendCount = donorRecord ? donorRecord.count : 1;
       // Lazy import to avoid circular dependency
       import("../automation/reciprocate-engine").then((m) => {
-        m.handleAutoReciprocate(from.id, name, amt, "troops");
+        m.handleAutoReciprocate(from.id, name, amt, "troops", donorTroopSnapshot, sendCount);
       });
     } else if (s.reciprocatePopupsEnabled) {
       s.addReciprocateNotification({
@@ -223,9 +226,11 @@ function handleReceivedGold(
   // Trigger reciprocation on gold received
   const s = useStore.getState();
   if (s.reciprocateEnabled && s.reciprocateOnGold) {
-    if (s.reciprocateMode === "auto") {
+    if (s.reciprocateMode === "auto" || s.reciprocateMode === "palantir") {
+      const donorRecord = s.inbound.get(from.id);
+      const sendCount = donorRecord ? donorRecord.count : 1;
       import("../automation/reciprocate-engine").then((m) => {
-        m.handleAutoReciprocate(from.id, name, amt, "gold");
+        m.handleAutoReciprocate(from.id, name, amt, "gold", donorTroopSnapshot, sendCount);
       });
     } else if (s.reciprocatePopupsEnabled) {
       s.addReciprocateNotification({

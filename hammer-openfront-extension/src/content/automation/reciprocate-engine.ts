@@ -18,7 +18,8 @@ import { RECIPROCATE_COOLDOWN_MS } from "@shared/constants";
 import { short } from "@shared/utils";
 import { registerInterval } from "../cleanup";
 import { record } from "../../recorder";
-import type { ReciprocatePendingItem } from "@store/slices/reciprocate";
+import { calcPalantirAmount } from "@shared/logic/palantir";
+import type { ReciprocatePendingItem, PalantirDecision } from "@store/slices/reciprocate";
 
 // ---------- Module-level state ----------
 
@@ -31,6 +32,8 @@ const pendingQueue: PendingItem[] = [];
 interface PendingItem extends ReciprocatePendingItem {
   attempts: number;
   cooldownUntil?: number;
+  donorTroops?: number;
+  sendCount?: number;
 }
 
 /** Maximum age for a pending item before it is dropped (5 minutes) */
@@ -63,7 +66,7 @@ function syncQueueToStore(): void {
 // ---------- handleAutoReciprocate ----------
 
 /**
- * Called when a donation is received and auto-reciprocate is enabled.
+ * Called when a donation is received and auto/palantir reciprocate is enabled.
  * Checks cooldown then adds to the pending queue for deferred processing.
  */
 export function handleAutoReciprocate(
@@ -71,6 +74,8 @@ export function handleAutoReciprocate(
   donorName: string,
   amountReceived: number,
   receivedType: string,
+  donorTroops?: number,
+  sendCount?: number,
 ): void {
   log("[RECIPROCATE] Auto-reciprocate for", donorName, "|", receivedType, ":", amountReceived);
 
@@ -92,6 +97,8 @@ export function handleAutoReciprocate(
     receivedType: receivedType || "troops",
     addedAt: Date.now(),
     attempts: 0,
+    donorTroops,
+    sendCount,
   });
 
   syncQueueToStore();
@@ -167,8 +174,9 @@ export function handleQuickReciprocate(
  */
 function processReciprocateQueue(): void {
   const s = useStore.getState();
+  const mode = s.reciprocateMode;
 
-  if (!s.reciprocateEnabled || s.reciprocateMode !== "auto") {
+  if (!s.reciprocateEnabled || (mode !== "auto" && mode !== "palantir")) {
     if (pendingQueue.length > 0) {
       record("recip", "cleared", { reason: "disabled", count: pendingQueue.length });
       pendingQueue.length = 0;
@@ -219,11 +227,50 @@ function processReciprocateQueue(): void {
 
     // Cross-resource: received gold -> send troops, received troops -> send gold
     const sendTroops = item.receivedType === "gold";
-    const percentage = s.reciprocateAutoPct;
-    const amountToSend = sendTroops
-      ? Math.floor((myTroops * percentage) / 100)
-      : Math.floor((myGold * percentage) / 100);
     const resourceLabel = sendTroops ? "troops" : "gold";
+
+    let amountToSend: number;
+    let percentage: number;
+    let palantirDecision: PalantirDecision | undefined;
+
+    if (mode === "palantir") {
+      // Determine if donor is a teammate
+      const donorPlayer = s.playersById.get(item.donorId);
+      const isTeammate = donorPlayer != null && s.myTeam != null && donorPlayer.team === s.myTeam;
+
+      // Use the resource we're sending FROM for the Palantir calc
+      const myResource = sendTroops ? myTroops : myGold;
+
+      const result = calcPalantirAmount({
+        amountSent: item.amountReceived,
+        donorTroops: item.donorTroops ?? 0,
+        sendCount: item.sendCount ?? 1,
+        myGold: myResource,
+        myTroops,
+        isTeammate,
+      });
+
+      amountToSend = result.final;
+      percentage = Math.round(result.sacrificeRatio * 100);
+      palantirDecision = {
+        sacrificeRatio: result.sacrificeRatio,
+        loyaltyMultiplier: result.loyaltyMultiplier,
+        teammateMultiplier: result.teammateMultiplier,
+        selfMod: result.selfMod,
+        phase: result.phase,
+        rawAmount: result.rawAmount,
+        flooredAmount: result.flooredAmount,
+        cappedAmount: result.cappedAmount,
+        donorTroops: item.donorTroops ?? 0,
+        sendCount: item.sendCount ?? 1,
+      };
+    } else {
+      // Classic auto mode: flat percentage
+      percentage = s.reciprocateAutoPct;
+      amountToSend = sendTroops
+        ? Math.floor((myTroops * percentage) / 100)
+        : Math.floor((myGold * percentage) / 100);
+    }
 
     if (amountToSend === 0) {
       item.attempts++;
@@ -252,7 +299,8 @@ function processReciprocateQueue(): void {
         donorName: item.donorName,
         percentage,
         timestamp: Date.now(),
-        mode: "auto",
+        mode: mode,
+        palantir: palantirDecision,
       };
       if (sendTroops) {
         historyEntry.troopsSent = amountToSend;
@@ -264,7 +312,10 @@ function processReciprocateQueue(): void {
       // Set cooldown
       reciprocateCooldowns.set(item.donorId, now);
 
-      record("recip", "sent", { donor: item.donorName, type: resourceLabel, amt: amountToSend });
+      const palantirLog = palantirDecision
+        ? { palantir: true, sacrifice: palantirDecision.sacrificeRatio, loyalty: palantirDecision.loyaltyMultiplier, phase: palantirDecision.phase, raw: palantirDecision.rawAmount, final: amountToSend }
+        : {};
+      record("recip", "sent", { donor: item.donorName, type: resourceLabel, amt: amountToSend, ...palantirLog });
       log(
         `[RECIPROCATE] Successfully sent ${amountToSend} ${resourceLabel} to ${item.donorName} (queue size: ${pendingQueue.length})`,
       );
