@@ -38,9 +38,9 @@ export const CIA_MAX_TRANSFERS = 2000;
 export const CIA_MAX_ALERTS = 200;
 
 export const SIZES = [
-  { w: 520, h: 420, bodyH: 372, label: "S" },
-  { w: 750, h: 580, bodyH: 532, label: "M" },
-  { w: 1000, h: 720, bodyH: 672, label: "L" },
+  { w: 600, h: 500, bodyH: 446, label: "S" },
+  { w: 850, h: 660, bodyH: 606, label: "M" },
+  { w: 1120, h: 820, bodyH: 766, label: "L" },
 ];
 
 export const RECIPROCATE_COOLDOWN_MS = 10_000;

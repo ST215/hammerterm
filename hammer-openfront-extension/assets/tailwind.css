@@ -1,56 +1,63 @@
 @import "tailwindcss";
 
-/* IBM Plex Mono — bundled via Vite for shadow DOM compatibility */
+/* JetBrains Mono — bundled via Vite for shadow DOM compatibility */
 @font-face {
-  font-family: 'IBM Plex Mono';
+  font-family: 'JetBrains Mono';
   font-style: normal;
   font-weight: 400;
   font-display: swap;
-  src: url('./fonts/IBMPlexMono-Regular.woff2') format('woff2');
+  src: url('./fonts/JetBrainsMono-Regular.woff2') format('woff2');
 }
 @font-face {
-  font-family: 'IBM Plex Mono';
+  font-family: 'JetBrains Mono';
   font-style: normal;
   font-weight: 500;
   font-display: swap;
-  src: url('./fonts/IBMPlexMono-Medium.woff2') format('woff2');
+  src: url('./fonts/JetBrainsMono-Medium.woff2') format('woff2');
 }
 @font-face {
-  font-family: 'IBM Plex Mono';
+  font-family: 'JetBrains Mono';
   font-style: normal;
   font-weight: 600;
   font-display: swap;
-  src: url('./fonts/IBMPlexMono-SemiBold.woff2') format('woff2');
+  src: url('./fonts/JetBrainsMono-SemiBold.woff2') format('woff2');
 }
 
 @theme inline {
   /* Pixel-based spacing — avoids rem dependency on host page font-size in shadow DOM */
   --spacing-0_5: 2px;
-  --spacing-1: 4px;
-  --spacing-1_5: 6px;
-  --spacing-2: 8px;
-  --spacing-2_5: 10px;
-  --spacing-3: 12px;
-  --spacing-4: 16px;
-  --spacing-5: 20px;
-  --spacing-6: 24px;
-  --spacing-8: 32px;
-  --spacing-10: 40px;
-  --spacing-12: 48px;
-  --spacing-16: 64px;
+  --spacing-1: 5px;
+  --spacing-1_5: 7px;
+  --spacing-2: 9px;
+  --spacing-2_5: 12px;
+  --spacing-3: 14px;
+  --spacing-4: 18px;
+  --spacing-5: 23px;
+  --spacing-6: 28px;
+  --spacing-8: 36px;
+  --spacing-10: 46px;
+  --spacing-12: 56px;
+  --spacing-16: 74px;
 
   /* Font sizes */
-  --text-2xs: 9px;
-  --text-xs: 10px;
-  --text-sm: 11px;
-  --text-base: 12px;
-  --text-lg: 13px;
-  --text-xl: 15px;
-  --text-2xl: 18px;
+  --text-2xs: 11px;
+  --text-2xs--line-height: 16px;
+  --text-xs: 12px;
+  --text-xs--line-height: 18px;
+  --text-sm: 13px;
+  --text-sm--line-height: 20px;
+  --text-base: 14px;
+  --text-base--line-height: 20px;
+  --text-lg: 15px;
+  --text-lg--line-height: 22px;
+  --text-xl: 17px;
+  --text-xl--line-height: 24px;
+  --text-2xl: 21px;
+  --text-2xl--line-height: 28px;
 
   /* Font family */
-  --font-sans: 'IBM Plex Mono', ui-monospace, monospace;
-  --font-mono: 'IBM Plex Mono', ui-monospace, monospace;
+  --font-sans: 'JetBrains Mono', ui-monospace, monospace;
+  --font-mono: 'JetBrains Mono', ui-monospace, monospace;
 
   /* Font weights */
   --font-weight-normal: 400;

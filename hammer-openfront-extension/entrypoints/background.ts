@@ -126,8 +126,8 @@ export default defineBackground(() => {
       {
         url: chrome.runtime.getURL("/dashboard.html"),
         type: "popup",
-        width: 1000,
-        height: 720,
+        width: 1120,
+        height: 820,
       },
       (win) => {
         dashboardWindowId = win?.id ?? null;

@@ -24,7 +24,7 @@ This project started as `hammer-scripts/hammer.js`, a single-file console inject
 - [WXT](https://wxt.dev/) -- Chrome Extension framework (Manifest V3)
 - React 18 -- UI components
 - Zustand -- state management (10 slices)
-- Tailwind CSS v4 -- styling
+- Tailwind CSS v4 -- styling (JetBrains Mono, pixel-based theme)
 - TypeScript -- everything is typed
 - Vitest -- unit tests (380+ tests)
 
