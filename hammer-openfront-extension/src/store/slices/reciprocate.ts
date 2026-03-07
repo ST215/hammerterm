@@ -100,6 +100,23 @@ export const createReciprocateSlice: StateCreator<ReciprocateSlice, [], [], Reci
 
   addReciprocateNotification: (notification) =>
     set((s) => {
+      const existing = s.reciprocateNotifications.find(
+        (n) => n.donorId === notification.donorId && !n.dismissed,
+      );
+      if (existing) {
+        return {
+          reciprocateNotifications: s.reciprocateNotifications.map((n) =>
+            n === existing
+              ? {
+                  ...n,
+                  troops: n.troops + notification.troops,
+                  gold: n.gold + notification.gold,
+                  timestamp: notification.timestamp,
+                }
+              : n,
+          ),
+        };
+      }
       const next = [...s.reciprocateNotifications, notification];
       if (next.length > NOTIFICATION_CAP) next.shift();
       return { reciprocateNotifications: next };

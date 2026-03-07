@@ -1,4 +1,4 @@
-import type { CIAState, PlayerData } from "../types";
+import type { CIAState, PlayerData, CIARollingRates, CIAPlayerRelationship, CIAAlertV2, AlertSeverity, AlertCategory, CIATransfer, CIAPlayerTotal } from "../types";
 import { MessageType, CIA_BIG_GOLD_THRESHOLD, CIA_BIG_TROOPS_THRESHOLD, CIA_MAX_TRANSFERS, CIA_MAX_ALERTS } from "../constants";
 import { num, short, parseAmt } from "../utils";
 import { findPlayerByName, asIsAlly } from "./player-helpers";
@@ -138,4 +138,220 @@ export function trackCIAEvent(
   }
 
   return true;
+}
+
+// --- Rolling window computations ---
+
+export function computeRollingRates(
+  transfers: CIATransfer[],
+  windowMs: number,
+  myName: string,
+): CIARollingRates {
+  const cutoff = Date.now() - windowMs;
+  let goldIn = 0, goldOut = 0, troopsIn = 0, troopsOut = 0, count = 0;
+  for (const t of transfers) {
+    if (t.ts < cutoff || t.type === "port") continue;
+    count++;
+    if (t.receiverName === myName) {
+      if (t.type === "gold") goldIn += t.amount;
+      else troopsIn += t.amount;
+    }
+    if (t.senderName === myName) {
+      if (t.type === "gold") goldOut += t.amount;
+      else troopsOut += t.amount;
+    }
+  }
+  return { windowMs, goldIn, goldOut, troopsIn, troopsOut, transferCount: count };
+}
+
+export function computeRelationships(
+  transfers: CIATransfer[],
+  playerTotals: Map<string, CIAPlayerTotal>,
+  playersById: Map<string, PlayerData>,
+  myTeam: number | null,
+  myAllies: Set<number>,
+  windowMs: number,
+): CIAPlayerRelationship[] {
+  const cutoff = Date.now() - windowMs;
+
+  // Build name→PlayerData lookup
+  const playerByName = new Map<string, PlayerData>();
+  for (const p of playersById.values()) {
+    const name = p.displayName || p.name || "";
+    if (name) playerByName.set(name, p);
+  }
+
+  // Recent per-player accumulation
+  const recent = new Map<string, { goldSent: number; goldRecv: number; troopsSent: number; troopsRecv: number; lastTs: number }>();
+  for (const t of transfers) {
+    if (t.ts < cutoff || t.type === "port") continue;
+    for (const name of [t.senderName, t.receiverName]) {
+      if (!recent.has(name)) recent.set(name, { goldSent: 0, goldRecv: 0, troopsSent: 0, troopsRecv: 0, lastTs: 0 });
+    }
+    const sr = recent.get(t.senderName)!;
+    const rr = recent.get(t.receiverName)!;
+    if (t.type === "gold") { sr.goldSent += t.amount; rr.goldRecv += t.amount; }
+    else { sr.troopsSent += t.amount; rr.troopsRecv += t.amount; }
+    sr.lastTs = Math.max(sr.lastTs, t.ts);
+    rr.lastTs = Math.max(rr.lastTs, t.ts);
+  }
+
+  // Check who sends to non-ally/non-team (with gold/troops breakdown)
+  const feedsNonAllyMap = new Map<string, { receivers: Map<string, { gold: number; troops: number }> }>();
+  for (const t of transfers) {
+    if (t.type === "port") continue;
+    const receiverPlayer = playerByName.get(t.receiverName);
+    if (!receiverPlayer) continue;
+    const receiverIsTeam = receiverPlayer.team != null && myTeam != null && receiverPlayer.team === myTeam;
+    const receiverIsAlly = receiverPlayer.smallID != null && myAllies.has(receiverPlayer.smallID);
+    if (!receiverIsTeam && !receiverIsAlly) {
+      if (!feedsNonAllyMap.has(t.senderName)) {
+        feedsNonAllyMap.set(t.senderName, { receivers: new Map() });
+      }
+      const entry = feedsNonAllyMap.get(t.senderName)!;
+      if (!entry.receivers.has(t.receiverName)) {
+        entry.receivers.set(t.receiverName, { gold: 0, troops: 0 });
+      }
+      const recv = entry.receivers.get(t.receiverName)!;
+      if (t.type === "gold") recv.gold += t.amount;
+      else recv.troops += t.amount;
+    }
+  }
+
+  // Build relationship list
+  const result: CIAPlayerRelationship[] = [];
+  const allNames = new Set([...playerTotals.keys(), ...recent.keys()]);
+
+  for (const name of allNames) {
+    const player = playerByName.get(name);
+    const lt = playerTotals.get(name);
+    const rc = recent.get(name);
+    const isTeammate = player?.team != null && myTeam != null && player.team === myTeam;
+    const isAlly = player?.smallID != null && myAllies.has(player.smallID);
+
+    // Build feeding non-ally detail with gold/troops breakdown
+    let feedsNonAllyDetail: string | null = null;
+    const fnaEntry = feedsNonAllyMap.get(name);
+    if (fnaEntry) {
+      const parts: string[] = [];
+      for (const [recvName, amounts] of fnaEntry.receivers) {
+        const amtParts: string[] = [];
+        if (amounts.gold > 0) amtParts.push(`${short(amounts.gold)}g`);
+        if (amounts.troops > 0) amtParts.push(`${short(amounts.troops)}t`);
+        parts.push(`${recvName} (${amtParts.join("+")})`);
+      }
+      feedsNonAllyDetail = parts.join(", ");
+    }
+
+    result.push({
+      playerId: player?.id ?? "",
+      name,
+      team: player?.team ?? null,
+      isTeammate,
+      isAlly,
+      recentGoldSent: rc?.goldSent ?? 0,
+      recentGoldRecv: rc?.goldRecv ?? 0,
+      recentTroopsSent: rc?.troopsSent ?? 0,
+      recentTroopsRecv: rc?.troopsRecv ?? 0,
+      lifetimeGoldSent: lt?.sentGold ?? 0,
+      lifetimeGoldRecv: lt?.recvGold ?? 0,
+      lifetimeTroopsSent: lt?.sentTroops ?? 0,
+      lifetimeTroopsRecv: lt?.recvTroops ?? 0,
+      lastActivity: rc?.lastTs ?? 0,
+      feedsNonAlly: fnaEntry != null,
+      feedsNonAllyDetail,
+    });
+  }
+
+  result.sort((a, b) => {
+    const aTotal = a.recentGoldSent + a.recentGoldRecv + a.recentTroopsSent + a.recentTroopsRecv;
+    const bTotal = b.recentGoldSent + b.recentGoldRecv + b.recentTroopsSent + b.recentTroopsRecv;
+    return bTotal - aTotal;
+  });
+
+  return result;
+}
+
+export function classifyAlerts(
+  transfers: CIATransfer[],
+  playersById: Map<string, PlayerData>,
+  myTeam: number | null,
+  myAllies: Set<number>,
+): CIAAlertV2[] {
+  const playerByName = new Map<string, PlayerData>();
+  for (const p of playersById.values()) {
+    const name = p.displayName || p.name || "";
+    if (name) playerByName.set(name, p);
+  }
+
+  const alerts: CIAAlertV2[] = [];
+  const seen = new Set<string>();
+
+  for (const t of transfers) {
+    if (t.type === "port") continue;
+
+    const senderPlayer = playerByName.get(t.senderName);
+    const receiverPlayer = playerByName.get(t.receiverName);
+
+    // Critical: teammate sending to known enemy
+    if (senderPlayer && receiverPlayer && myTeam != null) {
+      const senderIsTeammate = senderPlayer.team != null && senderPlayer.team === myTeam;
+      const receiverIsTeam = receiverPlayer.team != null && receiverPlayer.team === myTeam;
+      const receiverIsAlly = receiverPlayer.smallID != null && myAllies.has(receiverPlayer.smallID);
+
+      if (senderIsTeammate && !receiverIsTeam && !receiverIsAlly) {
+        const key = `critical:${t.senderName}:${t.receiverName}:${t.type}`;
+        if (!seen.has(key)) {
+          seen.add(key);
+          alerts.push({
+            ts: t.ts,
+            severity: "critical",
+            category: "threat",
+            title: `${t.senderName} feeding enemy ${t.type}`,
+            detail: `${short(t.amount)} ${t.type} to ${t.receiverName}`,
+            playerNames: [t.senderName, t.receiverName],
+          });
+        }
+      }
+    }
+
+    // Warning: any player sending to non-ally/non-team
+    if (receiverPlayer && myTeam != null) {
+      const receiverIsTeam = receiverPlayer.team != null && receiverPlayer.team === myTeam;
+      const receiverIsAlly = receiverPlayer.smallID != null && myAllies.has(receiverPlayer.smallID);
+      const senderIsTeam = senderPlayer?.team != null && senderPlayer.team === myTeam;
+
+      if (!senderIsTeam && !receiverIsTeam && !receiverIsAlly) {
+        const key = `warn:${t.senderName}:${t.receiverName}:${t.type}`;
+        if (!seen.has(key)) {
+          seen.add(key);
+          alerts.push({
+            ts: t.ts,
+            severity: "warning",
+            category: "relationship",
+            title: `${t.senderName} sends ${t.type} to non-ally`,
+            detail: `${short(t.amount)} ${t.type} to ${t.receiverName}`,
+            playerNames: [t.senderName, t.receiverName],
+          });
+        }
+      }
+    }
+
+    // Info: large transfer
+    const isLarge = (t.type === "gold" && t.amount >= CIA_BIG_GOLD_THRESHOLD) ||
+      (t.type === "troops" && t.amount >= CIA_BIG_TROOPS_THRESHOLD);
+    if (isLarge) {
+      alerts.push({
+        ts: t.ts,
+        severity: "info",
+        category: "economy",
+        title: `Large ${t.type} transfer`,
+        detail: `${t.senderName} sent ${short(t.amount)} ${t.type} to ${t.receiverName}`,
+        playerNames: [t.senderName, t.receiverName],
+      });
+    }
+  }
+
+  alerts.sort((a, b) => b.ts - a.ts);
+  return alerts;
 }

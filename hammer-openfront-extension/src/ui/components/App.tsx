@@ -1,15 +1,44 @@
+import { Component, type ReactNode } from "react";
 import { useStore } from "@store/index";
 import Panel from "./Panel";
 import HeaderButtons from "./HeaderButtons";
 import TabBar from "./TabBar";
 import ReciprocatePopup from "./ReciprocatePopup";
+import DonationToast from "./DonationToast";
 import StatusToast from "./StatusToast";
 
-// View imports — each view is a default-exported React component
+class ViewErrorBoundary extends Component<
+  { children: ReactNode },
+  { error: Error | null }
+> {
+  state = { error: null as Error | null };
+  static getDerivedStateFromError(error: Error) {
+    return { error };
+  }
+  componentDidCatch(error: Error) {
+    console.error("[Hammer] View render error:", error);
+  }
+  render() {
+    if (this.state.error) {
+      return (
+        <div className="p-2 text-hammer-red text-2xs">
+          <div className="font-semibold">View Error</div>
+          <div className="text-hammer-muted mt-1">{this.state.error.message}</div>
+          <button
+            className="mt-1 text-hammer-blue underline cursor-pointer"
+            onClick={() => this.setState({ error: null })}
+          >
+            Retry
+          </button>
+        </div>
+      );
+    }
+    return this.props.children;
+  }
+}
+
+// View imports
 import SummaryView from "../views/SummaryView";
-import StatsView from "../views/StatsView";
-import PortsView from "../views/PortsView";
-import FeedView from "../views/FeedView";
 import AlliancesView from "../views/AlliancesView";
 import AutoTroopsView from "../views/AutoTroopsView";
 import AutoGoldView from "../views/AutoGoldView";
@@ -17,8 +46,7 @@ import ReciprocateView from "../views/ReciprocateView";
 import CommsView from "../views/CommsView";
 import CIAView from "../views/CIAView";
 import HelpView from "../views/HelpView";
-import HotkeysView from "../views/HotkeysView";
-import AboutView from "../views/AboutView";
+import RecorderView from "../views/RecorderView";
 
 interface AppProps {
   mode: "overlay" | "window";
@@ -26,9 +54,6 @@ interface AppProps {
 
 const VIEW_MAP: Record<string, React.FC> = {
   summary: SummaryView,
-  stats: StatsView,
-  ports: PortsView,
-  feed: FeedView,
   alliances: AlliancesView,
   autotroops: AutoTroopsView,
   autogold: AutoGoldView,
@@ -36,8 +61,7 @@ const VIEW_MAP: Record<string, React.FC> = {
   comms: CommsView,
   cia: CIAView,
   help: HelpView,
-  hotkeys: HotkeysView,
-  about: AboutView,
+  recorder: RecorderView,
 };
 
 export default function App({ mode }: AppProps) {
@@ -47,16 +71,27 @@ export default function App({ mode }: AppProps) {
 
   if (!uiVisible) return null;
 
-  // Hide overlay when in window mode (dashboard is showing instead)
-  if (mode === "overlay" && displayMode === "window") return null;
+  // In window mode, the overlay hides the panel but keeps notifications
+  // so they still appear over the game page.
+  if (mode === "overlay" && displayMode === "window") {
+    return (
+      <>
+        <DonationToast />
+        <ReciprocatePopup />
+        <StatusToast />
+      </>
+    );
+  }
 
-  const ActiveView = VIEW_MAP[view] ?? AboutView;
+  const ActiveView = VIEW_MAP[view] ?? SummaryView;
 
   const content = (
     <>
       <TabBar />
       <div className="p-2">
-        <ActiveView />
+        <ViewErrorBoundary>
+          <ActiveView />
+        </ViewErrorBoundary>
       </div>
     </>
   );
@@ -67,6 +102,7 @@ export default function App({ mode }: AppProps) {
         <Panel header={<HeaderButtons />}>
           {content}
         </Panel>
+        <DonationToast />
         <ReciprocatePopup />
         <StatusToast />
       </>

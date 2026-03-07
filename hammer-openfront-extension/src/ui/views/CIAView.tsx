@@ -1,14 +1,17 @@
-import { useMemo } from "react";
+import { useMemo, useCallback } from "react";
 import { useStore } from "@store/index";
+import { useMyPlayer } from "@ui/hooks/usePlayerHelpers";
 import { short, comma } from "@shared/utils";
-import { asIsAlly } from "@shared/logic/player-helpers";
-import type { CIAFlowEntry, CIAPlayerTotal } from "@shared/types";
+import { computeRollingRates, computeRelationships, classifyAlerts } from "@shared/logic/cia";
+import { Section, StatCard, Badge, PresetButton } from "@ui/components/ds";
+import type { CIAFeedFilter } from "@store/slices/cia";
+import { CIA_BIG_GOLD_THRESHOLD, CIA_BIG_TROOPS_THRESHOLD } from "@shared/constants";
 
 function timeAgo(ts: number): string {
   const ms = Date.now() - ts;
-  if (ms < 60_000) return `${Math.floor(ms / 1000)}s ago`;
-  if (ms < 3_600_000) return `${Math.floor(ms / 60_000)}m ago`;
-  return `${Math.floor(ms / 3_600_000)}h ago`;
+  if (ms < 60_000) return `${Math.floor(ms / 1000)}s`;
+  if (ms < 3_600_000) return `${Math.floor(ms / 60_000)}m`;
+  return `${Math.floor(ms / 3_600_000)}h`;
 }
 
 function nameColor(
@@ -28,97 +31,176 @@ function nameColor(
   return "text-hammer-text";
 }
 
+const SEVERITY_DOT: Record<string, string> = {
+  critical: "bg-hammer-red",
+  warning: "bg-hammer-warn",
+  info: "bg-hammer-blue",
+  note: "bg-hammer-dim",
+};
+
+const WINDOW_OPTIONS = [
+  { label: "1m", ms: 60_000 },
+  { label: "5m", ms: 300_000 },
+  { label: "15m", ms: 900_000 },
+  { label: "All", ms: 0 },
+];
+
+const FILTER_OPTIONS: { label: string; value: CIAFeedFilter }[] = [
+  { label: "All", value: "all" },
+  { label: "Gold", value: "gold" },
+  { label: "Troops", value: "troops" },
+  { label: "Large", value: "large" },
+];
+
 export default function CIAView() {
+  const me = useMyPlayer();
   const ciaState = useStore((s) => s.ciaState);
-  const gps30 = useStore((s) => s.gps30);
-  const gpm60 = useStore((s) => s.gpm60);
-  const gpm120 = useStore((s) => s.gpm120);
   const playersById = useStore((s) => s.playersById);
   const myTeam = useStore((s) => s.myTeam);
   const myAllies = useStore((s) => s.myAllies);
+  const ciaWindowMs = useStore((s) => s.ciaWindowMs);
+  const ciaFeedFilter = useStore((s) => s.ciaFeedFilter);
+  const setCIAWindow = useStore((s) => s.setCIAWindow);
+  const setCIAFeedFilter = useStore((s) => s.setCIAFeedFilter);
 
-  const { transfers, flowGraph, playerTotals, alerts } = ciaState;
+  const { transfers } = ciaState;
+  const myName = me?.displayName || me?.name || "";
 
-  // Stat totals
-  const stats = useMemo(() => {
-    let totalGold = 0;
-    let totalTroops = 0;
-    for (const flow of flowGraph.values()) {
-      totalGold += flow.gold;
-      totalTroops += flow.troops;
+  // Effective window (0 = all time)
+  const effectiveWindow = ciaWindowMs === 0 ? Date.now() : ciaWindowMs;
+
+  // Rolling rates for my economy
+  const myRates = useMemo(
+    () => computeRollingRates(transfers, effectiveWindow, myName),
+    [transfers, effectiveWindow, myName],
+  );
+
+  // Relationships
+  const relationships = useMemo(
+    () => computeRelationships(transfers, ciaState.playerTotals, playersById, myTeam, myAllies, effectiveWindow),
+    [transfers, ciaState.playerTotals, playersById, myTeam, myAllies, effectiveWindow],
+  );
+
+  // My feeders (people sending TO me in the window)
+  const myFeedersList = useMemo(() => {
+    const cutoff = Date.now() - effectiveWindow;
+    const feeders = new Map<string, { gold: number; troops: number; total: number }>();
+    for (const t of transfers) {
+      if (t.ts < cutoff || t.type === "port") continue;
+      if (t.receiverName === myName) {
+        const prev = feeders.get(t.senderName) || { gold: 0, troops: 0, total: 0 };
+        if (t.type === "gold") prev.gold += t.amount;
+        else prev.troops += t.amount;
+        prev.total = prev.gold + prev.troops;
+        feeders.set(t.senderName, prev);
+      }
     }
-    return {
-      transferCount: transfers.length,
-      totalGold,
-      totalTroops,
-      connections: flowGraph.size,
-    };
-  }, [transfers.length, flowGraph]);
+    return [...feeders.entries()]
+      .map(([name, data]) => ({ name, ...data }))
+      .sort((a, b) => b.total - a.total);
+  }, [transfers, effectiveWindow, myName]);
 
-  // Alerts sorted desc
-  const sortedAlerts = useMemo(
-    () => [...alerts].sort((a, b) => b.ts - a.ts).slice(0, 10),
-    [alerts],
+  // My sends (who I'm sending to)
+  const mySendsList = useMemo(() => {
+    const cutoff = Date.now() - effectiveWindow;
+    const sends = new Map<string, { gold: number; troops: number; total: number }>();
+    for (const t of transfers) {
+      if (t.ts < cutoff || t.type === "port") continue;
+      if (t.senderName === myName) {
+        const prev = sends.get(t.receiverName) || { gold: 0, troops: 0, total: 0 };
+        if (t.type === "gold") prev.gold += t.amount;
+        else prev.troops += t.amount;
+        prev.total = prev.gold + prev.troops;
+        sends.set(t.receiverName, prev);
+      }
+    }
+    return [...sends.entries()]
+      .map(([name, data]) => ({ name, ...data }))
+      .sort((a, b) => b.total - a.total);
+  }, [transfers, effectiveWindow, myName]);
+
+  // Top income contributor percentage
+  const totalIn = myRates.goldIn + myRates.troopsIn;
+  const topFeederPct = myFeedersList.length > 0 && totalIn > 0
+    ? (myFeedersList[0].total / totalIn * 100).toFixed(0)
+    : null;
+
+  // Alerts v2
+  const alertsV2 = useMemo(
+    () => classifyAlerts(transfers, playersById, myTeam, myAllies).slice(0, 20),
+    [transfers, playersById, myTeam, myAllies],
   );
 
-  // Top flows sorted by total
+  // Players feeding non-ally
+  const feedingNonAlly = useMemo(
+    () => relationships.filter((r) => r.feedsNonAlly),
+    [relationships],
+  );
+
+  // Live feed with filter
+  const liveFeed = useMemo(() => {
+    let filtered = transfers.filter((t) => t.type !== "port");
+    if (ciaFeedFilter === "gold") filtered = filtered.filter((t) => t.type === "gold");
+    else if (ciaFeedFilter === "troops") filtered = filtered.filter((t) => t.type === "troops");
+    else if (ciaFeedFilter === "large") filtered = filtered.filter((t) =>
+      (t.type === "gold" && t.amount >= CIA_BIG_GOLD_THRESHOLD) ||
+      (t.type === "troops" && t.amount >= CIA_BIG_TROOPS_THRESHOLD),
+    );
+    return filtered.slice(-30).reverse();
+  }, [transfers, ciaFeedFilter]);
+
+  // World economy
+  const worldEcon = useMemo(() => {
+    const cutoff = Date.now() - effectiveWindow;
+    let goldRate = 0, troopRate = 0;
+    const flowPairs = new Set<string>();
+    for (const t of transfers) {
+      if (t.ts < cutoff || t.type === "port") continue;
+      if (t.type === "gold") goldRate += t.amount;
+      else troopRate += t.amount;
+      flowPairs.add(`${t.senderName}\u2192${t.receiverName}`);
+    }
+    return { goldRate, troopRate, activeFlows: flowPairs.size };
+  }, [transfers, effectiveWindow]);
+
+  // Top flows (rolling window)
   const topFlows = useMemo(() => {
-    const entries = [...flowGraph.values()];
-    entries.sort((a, b) => (b.gold + b.troops) - (a.gold + a.troops));
-    return entries.slice(0, 15);
-  }, [flowGraph]);
+    const cutoff = Date.now() - effectiveWindow;
+    const flows = new Map<string, { sender: string; receiver: string; gold: number; troops: number; count: number }>();
+    for (const t of transfers) {
+      if (t.ts < cutoff || t.type === "port") continue;
+      const key = `${t.senderName}\u2192${t.receiverName}`;
+      const prev = flows.get(key) || { sender: t.senderName, receiver: t.receiverName, gold: 0, troops: 0, count: 0 };
+      if (t.type === "gold") prev.gold += t.amount;
+      else prev.troops += t.amount;
+      prev.count++;
+      flows.set(key, prev);
+    }
+    return [...flows.values()]
+      .sort((a, b) => (b.gold + b.troops) - (a.gold + a.troops))
+      .slice(0, 15);
+  }, [transfers, effectiveWindow]);
 
-  // Rankings
-  const rankings = useMemo(() => {
-    const entries = [...playerTotals.entries()];
-    const senders = entries
-      .map(([name, t]) => ({ name, total: t.sentGold + t.sentTroops, ...t }))
-      .sort((a, b) => b.total - a.total)
-      .slice(0, 10);
-    const receivers = entries
-      .map(([name, t]) => ({ name, total: t.recvGold + t.recvTroops, ...t }))
-      .sort((a, b) => b.total - a.total)
-      .slice(0, 10);
-    return { senders, receivers };
-  }, [playerTotals]);
+  // Power rankings
+  const powerRankings = useMemo(() => {
+    const cutoff = Date.now() - effectiveWindow;
+    const players = new Map<string, { sent: number; recv: number }>();
+    for (const t of transfers) {
+      if (t.ts < cutoff || t.type === "port") continue;
+      const sp = players.get(t.senderName) || { sent: 0, recv: 0 };
+      sp.sent += t.amount;
+      players.set(t.senderName, sp);
+      const rp = players.get(t.receiverName) || { sent: 0, recv: 0 };
+      rp.recv += t.amount;
+      players.set(t.receiverName, rp);
+    }
+    return [...players.entries()]
+      .map(([name, d]) => ({ name, sent: d.sent, recv: d.recv, net: d.sent - d.recv }))
+      .sort((a, b) => Math.abs(b.net) - Math.abs(a.net))
+      .slice(0, 15);
+  }, [transfers, effectiveWindow]);
 
-  // Net balance
-  const netBalance = useMemo(() => {
-    const entries = [...playerTotals.entries()];
-    const balances = entries.map(([name, t]) => {
-      const sent = t.sentGold + t.sentTroops;
-      const recv = t.recvGold + t.recvTroops;
-      return { name, net: sent - recv, sent, recv };
-    });
-    balances.sort((a, b) => b.net - a.net);
-    const maxAbs = Math.max(1, ...balances.map((b) => Math.abs(b.net)));
-    return { balances, maxAbs };
-  }, [playerTotals]);
-
-  // Economy pulse
-  const economyPulse = useMemo(() => {
-    const now = Date.now();
-    const recent = transfers.filter((t) => now - t.ts < 60_000);
-    const goldPerMin = recent.filter((t) => t.type === "gold").reduce((s, t) => s + t.amount, 0);
-    const troopsPerMin = recent.filter((t) => t.type === "troops").reduce((s, t) => s + t.amount, 0);
-    return {
-      goldPerMin,
-      troopsPerMin,
-      transfersPerMin: recent.length,
-    };
-  }, [transfers]);
-
-  // Live feed: last 30 non-port transfers
-  const liveFeed = useMemo(
-    () =>
-      transfers
-        .filter((t) => t.type !== "port")
-        .slice(-30)
-        .reverse(),
-    [transfers],
-  );
-
-  function handleClearAll() {
+  const handleClearAll = useCallback(() => {
     useStore.setState({
       ciaState: {
         transfers: [],
@@ -128,230 +210,231 @@ export default function CIAView() {
         seen: new Set(),
       },
     });
-  }
+  }, []);
+
+  const netFlow = myRates.goldIn + myRates.troopsIn - myRates.goldOut - myRates.troopsOut;
+  const windowLabel = WINDOW_OPTIONS.find((w) => w.ms === ciaWindowMs)?.label ?? "5m";
 
   return (
-    <div className="flex flex-col gap-8 p-8">
-      {/* Legend */}
-      <div className="bg-hammer-card border border-hammer-border p-8 flex flex-col gap-4">
-        <div className="text-hammer-green text-sm font-bold">Legend</div>
-        <div className="flex flex-wrap gap-8 text-xs">
-          <span className="text-hammer-gold">Gold = gold transfers</span>
-          <span className="text-hammer-blue">Troops = troop transfers</span>
-          <span className="text-hammer-red">Betrayal = teammate feeding enemy</span>
-          <span className="text-hammer-gold">Big = large transfers</span>
+    <div>
+      {/* Section 1: My Economy */}
+      <Section title="My Economy">
+        <div className="grid grid-cols-2 gap-1">
+          <StatCard label="Gold In" value={short(myRates.goldIn)} color="text-hammer-green" sub={`in ${windowLabel}`} />
+          <StatCard label="Troops In" value={short(myRates.troopsIn)} color="text-hammer-blue" sub={`in ${windowLabel}`} />
+          <StatCard label="Gold Out" value={short(myRates.goldOut)} color="text-hammer-gold" sub={`in ${windowLabel}`} />
+          <StatCard
+            label="Net Flow"
+            value={short(netFlow)}
+            color={netFlow >= 0 ? "text-hammer-green" : "text-hammer-red"}
+            sub={netFlow >= 0 ? "positive" : "negative"}
+          />
         </div>
-      </div>
 
-      {/* Stat Grid */}
-      <div className="grid grid-cols-4 gap-4">
-        {[
-          { label: "Transfers", value: comma(stats.transferCount), color: "text-hammer-text" },
-          { label: "Gold Flow", value: short(stats.totalGold), color: "text-hammer-gold" },
-          { label: "Troop Flow", value: short(stats.totalTroops), color: "text-hammer-blue" },
-          { label: "Connections", value: String(stats.connections), color: "text-hammer-green" },
-        ].map((s) => (
-          <div key={s.label} className="bg-hammer-card border border-hammer-border p-8 flex flex-col items-center gap-4">
-            <span className="text-hammer-muted text-xs">{s.label}</span>
-            <span className={`text-sm font-bold ${s.color}`}>{s.value}</span>
-          </div>
-        ))}
-      </div>
-
-      {/* Alerts */}
-      <div className="bg-hammer-card border border-hammer-border p-8 flex flex-col gap-4">
-        <div className="text-hammer-green text-sm font-bold">Alerts</div>
-        {sortedAlerts.length === 0 ? (
-          <div className="text-hammer-muted text-xs">No alerts yet.</div>
-        ) : (
-          sortedAlerts.map((a, i) => (
-            <div key={i} className="flex items-start gap-8 text-xs">
-              <span className="text-hammer-muted whitespace-nowrap">{timeAgo(a.ts)}</span>
-              <span
-                className={
-                  a.level === "betrayal"
-                    ? "text-hammer-red"
-                    : a.level === "big"
-                      ? "text-hammer-gold"
-                      : "text-hammer-text"
-                }
-              >
-                {a.message}
-              </span>
+        {/* My Feeders */}
+        {myFeedersList.length > 0 && (
+          <div className="mt-2">
+            <div className="text-2xs text-hammer-muted uppercase tracking-wider mb-1">
+              My Feeders
+              <span className="ml-1 text-hammer-dim">({myFeedersList.length})</span>
             </div>
-          ))
+            <div className="flex flex-col gap-0_5">
+              {myFeedersList.slice(0, 8).map((f, i) => (
+                <div key={f.name} className="flex items-center justify-between bg-hammer-raised rounded px-2 py-0_5 border border-hammer-border-subtle text-2xs">
+                  <div className="flex items-center gap-1 truncate mr-2">
+                    <span className={nameColor(f.name, playersById, myTeam, myAllies)}>{f.name}</span>
+                    {i === 0 && topFeederPct && Number(topFeederPct) >= 25 && (
+                      <Badge label="TOP" color="gold" />
+                    )}
+                  </div>
+                  <div className="flex gap-2 shrink-0">
+                    {f.gold > 0 && <span className="text-hammer-gold">{short(f.gold)}g</span>}
+                    {f.troops > 0 && <span className="text-hammer-blue">{short(f.troops)}t</span>}
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
         )}
-      </div>
 
-      {/* Top Resource Flows */}
-      <div className="bg-hammer-card border border-hammer-border p-8 flex flex-col gap-4">
-        <div className="text-hammer-green text-sm font-bold">Top Resource Flows</div>
-        {topFlows.length === 0 ? (
-          <div className="text-hammer-muted text-xs">No flows recorded yet.</div>
+        {/* My Sends */}
+        {mySendsList.length > 0 && (
+          <div className="mt-2">
+            <div className="text-2xs text-hammer-muted uppercase tracking-wider mb-1">
+              My Sends
+              <span className="ml-1 text-hammer-dim">({mySendsList.length})</span>
+            </div>
+            <div className="flex flex-col gap-0_5">
+              {mySendsList.slice(0, 8).map((s) => (
+                <div key={s.name} className="flex items-center justify-between bg-hammer-raised rounded px-2 py-0_5 border border-hammer-border-subtle text-2xs">
+                  <span className={`truncate mr-2 ${nameColor(s.name, playersById, myTeam, myAllies)}`}>{s.name}</span>
+                  <div className="flex gap-2 shrink-0">
+                    {s.gold > 0 && <span className="text-hammer-gold">{short(s.gold)}g</span>}
+                    {s.troops > 0 && <span className="text-hammer-blue">{short(s.troops)}t</span>}
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+      </Section>
+
+      {/* Section 2: Threat Board */}
+      <Section title="Threat Board">
+        {alertsV2.length === 0 && feedingNonAlly.length === 0 ? (
+          <div className="text-hammer-dim text-2xs">No alerts.</div>
         ) : (
-          <div className="flex flex-col gap-4">
-            {topFlows.map((flow, i) => {
-              const sColor = nameColor(flow.sender, playersById, myTeam, myAllies);
-              const rColor = nameColor(flow.receiver, playersById, myTeam, myAllies);
-              const totalCount = flow.goldCount + flow.troopsCount;
+          <>
+            {alertsV2.length > 0 && (
+              <div className="flex flex-col gap-0_5">
+                {alertsV2.slice(0, 10).map((a, i) => (
+                  <div key={i} className="flex items-start gap-1_5 text-2xs">
+                    <div className={`w-1_5 h-1_5 rounded-full mt-0_5 shrink-0 ${SEVERITY_DOT[a.severity] ?? SEVERITY_DOT.note}`} />
+                    <div className="flex flex-col">
+                      <span className="text-hammer-text">{a.title}</span>
+                      <span className="text-hammer-dim">{a.detail}</span>
+                    </div>
+                    <span className="text-hammer-dim ml-auto shrink-0">{timeAgo(a.ts)}</span>
+                  </div>
+                ))}
+              </div>
+            )}
+
+            {feedingNonAlly.length > 0 && (
+              <div className="mt-2">
+                <div className="text-2xs text-hammer-muted uppercase tracking-wider mb-1">
+                  Feeding Non-Ally
+                  <span className="ml-1 text-hammer-dim">({feedingNonAlly.length})</span>
+                </div>
+                <div className="flex flex-col gap-0_5">
+                  {feedingNonAlly.slice(0, 8).map((r) => (
+                    <div key={r.name} className="flex items-center justify-between bg-hammer-raised rounded px-2 py-0_5 border border-hammer-border-subtle text-2xs">
+                      <span className={nameColor(r.name, playersById, myTeam, myAllies)}>{r.name}</span>
+                      <span className="text-hammer-warn">{"\u2192"} {r.feedsNonAllyDetail}</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+          </>
+        )}
+      </Section>
+
+      {/* Section 3: Intelligence Feed */}
+      <Section title="Intelligence Feed" count={liveFeed.length}>
+        <div className="flex items-center gap-1 mb-1">
+          {FILTER_OPTIONS.map((f) => (
+            <PresetButton
+              key={f.value}
+              label={f.label}
+              active={ciaFeedFilter === f.value}
+              onClick={() => setCIAFeedFilter(f.value)}
+            />
+          ))}
+        </div>
+        {liveFeed.length === 0 ? (
+          <div className="text-hammer-dim text-2xs">No transfers recorded yet.</div>
+        ) : (
+          <div className="flex flex-col gap-0_5">
+            {liveFeed.map((t, i) => {
+              const isLarge = (t.type === "gold" && t.amount >= CIA_BIG_GOLD_THRESHOLD) ||
+                (t.type === "troops" && t.amount >= CIA_BIG_TROOPS_THRESHOLD);
               return (
-                <div key={i} className="flex items-center gap-4 text-xs">
-                  <span className="text-hammer-muted w-4 text-right">{i + 1}.</span>
-                  <span className={sColor}>{flow.sender}</span>
-                  <span className="text-hammer-muted">{"\u2192"}</span>
-                  <span className={rColor}>{flow.receiver}</span>
-                  <span className="text-hammer-gold">{short(flow.gold)}g</span>
-                  <span className="text-hammer-blue">{short(flow.troops)}t</span>
-                  <span className="text-hammer-muted">({totalCount}x)</span>
+                <div
+                  key={i}
+                  className={`flex items-center gap-1_5 text-2xs px-1 py-0_5 rounded ${isLarge ? "bg-hammer-warn/5" : ""}`}
+                >
+                  <span className="text-hammer-dim w-4 shrink-0 text-right">{timeAgo(t.ts)}</span>
+                  <div className={`w-1 h-1 rounded-full shrink-0 ${t.type === "gold" ? "bg-hammer-gold" : "bg-hammer-blue"}`} />
+                  <span className={nameColor(t.senderName, playersById, myTeam, myAllies)}>{t.senderName}</span>
+                  <span className="text-hammer-dim">{"\u2192"}</span>
+                  <span className={nameColor(t.receiverName, playersById, myTeam, myAllies)}>{t.receiverName}</span>
+                  <span className={`ml-auto shrink-0 ${t.type === "gold" ? "text-hammer-gold" : "text-hammer-blue"}`}>
+                    {short(t.amount)}
+                  </span>
                 </div>
               );
             })}
           </div>
         )}
-      </div>
+      </Section>
 
-      {/* Rankings */}
-      <div className="grid grid-cols-2 gap-8">
-        {/* Most Generous */}
-        <div className="bg-hammer-card border border-hammer-border p-8 flex flex-col gap-4">
-          <div className="text-hammer-gold text-sm font-bold">Most Generous</div>
-          {rankings.senders.length === 0 ? (
-            <div className="text-hammer-muted text-xs">No data.</div>
-          ) : (
-            rankings.senders.map((s, i) => (
-              <div key={i} className="flex items-center justify-between text-xs">
-                <div className="flex items-center gap-4">
-                  <span className="text-hammer-muted">{i + 1}.</span>
-                  <span className={nameColor(s.name, playersById, myTeam, myAllies)}>
-                    {s.name}
-                  </span>
-                </div>
-                <span className="text-hammer-gold">{short(s.total)}</span>
-              </div>
-            ))
-          )}
+      {/* Section 4: World Economy */}
+      <Section title="World Economy">
+        <div className="grid grid-cols-3 gap-1">
+          <StatCard label="Gold Rate" value={short(worldEcon.goldRate)} color="text-hammer-gold" sub={`in ${windowLabel}`} />
+          <StatCard label="Troop Rate" value={short(worldEcon.troopRate)} color="text-hammer-blue" sub={`in ${windowLabel}`} />
+          <StatCard label="Active Flows" value={String(worldEcon.activeFlows)} color="text-hammer-green" />
         </div>
 
-        {/* Most Fed */}
-        <div className="bg-hammer-card border border-hammer-border p-8 flex flex-col gap-4">
-          <div className="text-hammer-red text-sm font-bold">Most Fed</div>
-          {rankings.receivers.length === 0 ? (
-            <div className="text-hammer-muted text-xs">No data.</div>
-          ) : (
-            rankings.receivers.map((r, i) => (
-              <div key={i} className="flex items-center justify-between text-xs">
-                <div className="flex items-center gap-4">
-                  <span className="text-hammer-muted">{i + 1}.</span>
-                  <span className={nameColor(r.name, playersById, myTeam, myAllies)}>
-                    {r.name}
-                  </span>
-                </div>
-                <span className="text-hammer-red">{short(r.total)}</span>
-              </div>
-            ))
-          )}
-        </div>
-      </div>
-
-      {/* Net Balance */}
-      <div className="bg-hammer-card border border-hammer-border p-8 flex flex-col gap-4">
-        <div className="text-hammer-green text-sm font-bold">Net Balance</div>
-        <div className="flex gap-8 text-xs text-hammer-muted">
-          <span>Positive = feeder</span>
-          <span>Negative = parasite</span>
-        </div>
-        {netBalance.balances.length === 0 ? (
-          <div className="text-hammer-muted text-xs">No data.</div>
-        ) : (
-          netBalance.balances.map((b, i) => {
-            const pct = Math.abs(b.net) / netBalance.maxAbs;
-            const barWidth = Math.max(2, Math.round(pct * 100));
-            const isPositive = b.net >= 0;
-            return (
-              <div key={i} className="flex items-center gap-4 text-xs">
-                <span
-                  className={`w-24 truncate ${nameColor(b.name, playersById, myTeam, myAllies)}`}
-                >
-                  {b.name}
-                </span>
-                <div className="flex-1 flex items-center gap-4">
-                  <div className="flex-1 h-2 bg-hammer-bg border border-hammer-border relative overflow-hidden">
-                    <div
-                      className={isPositive ? "bg-hammer-green" : "bg-hammer-red"}
-                      style={{
-                        position: "absolute",
-                        [isPositive ? "left" : "right"]: "50%",
-                        width: `${barWidth / 2}%`,
-                        top: 0,
-                        bottom: 0,
-                      }}
-                    />
+        {topFlows.length > 0 && (
+          <div className="mt-2">
+            <div className="text-2xs text-hammer-muted uppercase tracking-wider mb-1">Top Flows</div>
+            <div className="flex flex-col gap-0_5">
+              {topFlows.slice(0, 10).map((flow, i) => (
+                <div key={i} className="flex items-center gap-1 text-2xs">
+                  <span className="text-hammer-dim w-3 text-right shrink-0">{i + 1}.</span>
+                  <span className={nameColor(flow.sender, playersById, myTeam, myAllies)}>{flow.sender}</span>
+                  <span className="text-hammer-dim">{"\u2192"}</span>
+                  <span className={nameColor(flow.receiver, playersById, myTeam, myAllies)}>{flow.receiver}</span>
+                  <div className="flex gap-1 ml-auto shrink-0">
+                    {flow.gold > 0 && <span className="text-hammer-gold">{short(flow.gold)}g</span>}
+                    {flow.troops > 0 && <span className="text-hammer-blue">{short(flow.troops)}t</span>}
+                    <span className="text-hammer-dim">({flow.count}x)</span>
                   </div>
                 </div>
-                <span className={isPositive ? "text-hammer-green" : "text-hammer-red"}>
-                  {isPositive ? "+" : ""}{short(b.net)}
-                </span>
-              </div>
-            );
-          })
+              ))}
+            </div>
+          </div>
         )}
-      </div>
 
-      {/* Economy Pulse */}
-      <div className="bg-hammer-card border border-hammer-border p-8 flex flex-col gap-4">
-        <div className="text-hammer-green text-sm font-bold">Economy Pulse</div>
-        <div className="grid grid-cols-3 gap-4 text-xs">
-          <div className="flex flex-col items-center gap-4">
-            <span className="text-hammer-muted">Gold/min</span>
-            <span className="text-hammer-gold font-bold">{short(economyPulse.goldPerMin)}</span>
+        {powerRankings.length > 0 && (
+          <div className="mt-2">
+            <div className="text-2xs text-hammer-muted uppercase tracking-wider mb-1">Power Rankings</div>
+            <div className="flex flex-col gap-0_5">
+              {powerRankings.map((p) => {
+                const role = p.net > 0 ? "Feeder" : p.net < 0 ? "Receiver" : "Balanced";
+                const roleColor: "green" | "blue" | "muted" = p.net > 0 ? "green" : p.net < 0 ? "blue" : "muted";
+                return (
+                  <div key={p.name} className="flex items-center justify-between bg-hammer-raised rounded px-2 py-0_5 border border-hammer-border-subtle text-2xs">
+                    <div className="flex items-center gap-1 truncate mr-2">
+                      <span className={nameColor(p.name, playersById, myTeam, myAllies)}>{p.name}</span>
+                      <Badge label={role} color={roleColor} />
+                    </div>
+                    <div className="flex gap-2 shrink-0">
+                      <span className="text-hammer-green">{short(p.sent)}{"\u2191"}</span>
+                      <span className="text-hammer-red">{short(p.recv)}{"\u2193"}</span>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
           </div>
-          <div className="flex flex-col items-center gap-4">
-            <span className="text-hammer-muted">Troops/min</span>
-            <span className="text-hammer-blue font-bold">{short(economyPulse.troopsPerMin)}</span>
-          </div>
-          <div className="flex flex-col items-center gap-4">
-            <span className="text-hammer-muted">Transfers/min</span>
-            <span className="text-hammer-text font-bold">{economyPulse.transfersPerMin}</span>
-          </div>
-        </div>
-        <div className="text-xs text-hammer-muted">
-          Gold rates: {short(gps30)}/30s | {short(gpm60)}/60s | {short(gpm120)}/120s
-        </div>
-      </div>
-
-      {/* Live Feed */}
-      <div className="bg-hammer-card border border-hammer-border p-8 flex flex-col gap-4">
-        <div className="text-hammer-green text-sm font-bold">Live Feed</div>
-        {liveFeed.length === 0 ? (
-          <div className="text-hammer-muted text-xs">No transfers recorded yet.</div>
-        ) : (
-          liveFeed.map((t, i) => {
-            const sColor = nameColor(t.senderName, playersById, myTeam, myAllies);
-            const rColor = nameColor(t.receiverName, playersById, myTeam, myAllies);
-            return (
-              <div key={i} className="flex items-center gap-4 text-xs">
-                <span className="text-hammer-muted whitespace-nowrap">{timeAgo(t.ts)}</span>
-                <span className={sColor}>{t.senderName}</span>
-                <span className="text-hammer-muted">{"\u2192"}</span>
-                <span className={rColor}>{t.receiverName}</span>
-                <span className={t.type === "gold" ? "text-hammer-gold" : "text-hammer-blue"}>
-                  {short(t.amount)} {t.type}
-                </span>
-              </div>
-            );
-          })
         )}
-      </div>
+      </Section>
 
-      {/* Controls */}
-      <div className="flex justify-end">
-        <button
-          onClick={handleClearAll}
-          className="px-12 py-4 text-xs font-mono border border-hammer-red bg-hammer-red/10 text-hammer-red cursor-pointer hover:bg-hammer-red/20"
-        >
-          Clear All Data
-        </button>
-      </div>
+      {/* Section 5: Controls */}
+      <Section title="Controls">
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-1">
+            <span className="text-2xs text-hammer-muted mr-1">Window:</span>
+            {WINDOW_OPTIONS.map((w) => (
+              <PresetButton
+                key={w.ms}
+                label={w.label}
+                active={ciaWindowMs === w.ms}
+                onClick={() => setCIAWindow(w.ms)}
+              />
+            ))}
+          </div>
+          <button
+            onClick={handleClearAll}
+            className="px-2 py-0_5 text-2xs border border-hammer-red/40 bg-hammer-red/10 text-hammer-red rounded cursor-pointer hover:bg-hammer-red/20 transition-colors"
+          >
+            Clear Data
+          </button>
+        </div>
+      </Section>
     </div>
   );
 }

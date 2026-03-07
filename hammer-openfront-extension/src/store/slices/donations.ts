@@ -7,9 +7,11 @@ export interface FeedEntry {
   type: string;
   amount: number;
   ts: number;
+  isPort?: boolean;
+  donorTroops?: number;
 }
 
-const FEED_CAP = 200;
+const FEED_CAP = 5000;
 const RAW_CAP = 500;
 
 export interface DonationsSlice {
@@ -21,8 +23,8 @@ export interface DonationsSlice {
   rawMessages: unknown[];
   seen: Set<string>;
 
-  recordInbound: (name: string, type: string, amount: number) => void;
-  recordOutbound: (name: string, type: string, amount: number) => void;
+  recordInbound: (id: string, displayName: string, type: string, amount: number, donorTroops?: number) => void;
+  recordOutbound: (id: string, displayName: string, type: string, amount: number) => void;
   recordPort: (playerId: string, gold: number, timestamp: number) => void;
   addRawMessage: (msg: unknown) => void;
   clearSeen: () => void;
@@ -40,10 +42,10 @@ export const createDonationsSlice: StateCreator<DonationsSlice, [], [], Donation
   rawMessages: [],
   seen: new Set(),
 
-  recordInbound: (name, type, amount) =>
+  recordInbound: (id, displayName, type, amount, donorTroops) =>
     set((s) => {
       const next = new Map(s.inbound);
-      const rec = bump(next, name);
+      const rec = bump(next, id, displayName);
       if (type === "gold") {
         rec.gold += amount;
         rec.goldSends++;
@@ -53,15 +55,16 @@ export const createDonationsSlice: StateCreator<DonationsSlice, [], [], Donation
       }
       rec.count++;
       rec.last = new Date();
+      if (donorTroops != null) rec.lastDonorTroops = donorTroops;
 
-      const feedIn = [{ name, type, amount, ts: Date.now() }, ...s.feedIn].slice(0, FEED_CAP);
+      const feedIn = [{ name: displayName, type, amount, ts: Date.now(), donorTroops }, ...s.feedIn].slice(0, FEED_CAP);
       return { inbound: next, feedIn };
     }),
 
-  recordOutbound: (name, type, amount) =>
+  recordOutbound: (id, displayName, type, amount) =>
     set((s) => {
       const next = new Map(s.outbound);
-      const rec = bump(next, name);
+      const rec = bump(next, id, displayName);
       if (type === "gold") {
         rec.gold += amount;
         rec.goldSends++;
@@ -72,7 +75,7 @@ export const createDonationsSlice: StateCreator<DonationsSlice, [], [], Donation
       rec.count++;
       rec.last = new Date();
 
-      const feedOut = [{ name, type, amount, ts: Date.now() }, ...s.feedOut].slice(0, FEED_CAP);
+      const feedOut = [{ name: displayName, type, amount, ts: Date.now() }, ...s.feedOut].slice(0, FEED_CAP);
       return { outbound: next, feedOut };
     }),
 

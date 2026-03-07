@@ -1,7 +1,8 @@
 import { useStore } from "@store/index";
-import { useMyPlayer, useTeammates, useAllies } from "@ui/hooks/usePlayerHelpers";
-import { fullNum, short, comma, fmtDuration, num } from "@shared/utils";
-import { asSendGold, asSendTroops } from "@content/game/send";
+import { useMyPlayer } from "@ui/hooks/usePlayerHelpers";
+import { short, comma, dTroops, num } from "@shared/utils";
+import { handleQuickReciprocate } from "@content/automation/reciprocate-engine";
+import { Section, StatCard, PresetButton } from "@ui/components/ds";
 
 const PCT_OPTIONS = [10, 25, 50, 75, 100] as const;
 
@@ -28,8 +29,7 @@ export default function ReciprocateView() {
   const notifyDuration = useStore((s) => s.reciprocateNotifyDuration);
   const setNotifyDuration = useStore((s) => s.setReciprocateNotifyDuration);
   const history = useStore((s) => s.reciprocateHistory);
-  const addHistory = useStore((s) => s.addReciprocateHistory);
-
+  const pending = useStore((s) => s.reciprocatePending);
   const inbound = useStore((s) => s.inbound);
   const feedIn = useStore((s) => s.feedIn);
   const myTeam = useStore((s) => s.myTeam);
@@ -37,292 +37,280 @@ export default function ReciprocateView() {
   const playersById = useStore((s) => s.playersById);
 
   const me = useMyPlayer();
-  const teammates = useTeammates();
-  const allies = useAllies();
-
+  const myTroops = me ? dTroops(me.troops) : 0;
   const myGold = me ? num(me.gold) : 0;
 
-  // Build donor list from inbound Map, enriched with feedIn timestamps
+  // Build sent-back totals from reciprocate history
+  const sentBackByDonor = new Map<string, { troops: number; gold: number }>();
+  for (const entry of history) {
+    const existing = sentBackByDonor.get(entry.donorId) || { troops: 0, gold: 0 };
+    if (entry.troopsSent) existing.troops += entry.troopsSent;
+    if (entry.goldSent) existing.gold += entry.goldSent;
+    sentBackByDonor.set(entry.donorId, existing);
+  }
+
+  // Build donor list from inbound
   const donors = Array.from(inbound.entries())
-    .map(([name, rec]) => {
-      const lastFeed = feedIn.find((f) => f.name === name);
+    .map(([id, rec]) => {
+      const lastFeed = feedIn.find((f) => f.name === rec.displayName);
       const lastTs = lastFeed?.ts ?? rec.last?.getTime() ?? 0;
-      return { name, rec, lastTs };
+      const sentBack = sentBackByDonor.get(id);
+      return { id, name: rec.displayName, rec, lastTs, sentBack };
     })
     .sort((a, b) => b.lastTs - a.lastTs)
-    .slice(0, 10);
+    .slice(0, 15);
 
-  // Determine tag for a donor name
-  function getPlayerTag(name: string): { label: string; color: string } | null {
-    for (const p of playersById.values()) {
-      const pName = p.displayName || p.name || "";
-      if (pName === name) {
-        if (p.team != null && myTeam != null && p.team === myTeam) {
-          return { label: "Teammate", color: "text-hammer-blue" };
-        }
-        if (p.smallID != null && myAllies.has(p.smallID)) {
-          return { label: "Ally", color: "text-hammer-green" };
-        }
-        return null;
-      }
-    }
+  function getTag(playerId: string): { label: string; color: string } | null {
+    const p = playersById.get(playerId);
+    if (!p) return null;
+    if (p.team != null && myTeam != null && p.team === myTeam)
+      return { label: "TM", color: "text-hammer-blue" };
+    if (p.smallID != null && myAllies.has(p.smallID))
+      return { label: "AL", color: "text-hammer-green" };
     return null;
   }
 
-  function handleSendGold(donorName: string, pct: number) {
-    const amount = Math.floor((myGold * pct) / 100);
-    if (amount <= 0) return;
-    // Find player ID by name
-    for (const p of playersById.values()) {
-      const pName = p.displayName || p.name || "";
-      if (pName === donorName) {
-        const ok = asSendGold(p.id, amount);
-        if (ok) {
-          addHistory({
-            donorId: p.id,
-            donorName,
-            percentage: pct,
-            timestamp: Date.now(),
-            mode: "manual",
-            goldSent: amount,
-          });
-        }
-        return;
-      }
-    }
+  // Cross-resource: figure out what to send back based on what was received
+  function handleManualSend(donorId: string, donorName: string, pct: number, receivedType: "troops" | "gold") {
+    // received troops → send gold, received gold → send troops
+    const sendType = receivedType === "troops" ? "gold" : "troops";
+    handleQuickReciprocate(donorId, donorName, pct, null, sendType);
   }
 
-  const recentHistory = history.slice(0, 10);
+  const recentHistory = history.slice(0, 15);
 
   return (
-    <div className="flex flex-col gap-8 p-8">
+    <div>
       {/* Settings */}
-      <div className="bg-hammer-card border border-hammer-border p-8 flex flex-col gap-8">
-        <div className="text-hammer-green text-sm font-bold">Settings</div>
-
-        {/* Enabled toggle */}
-        <div className="flex items-center justify-between">
-          <span className="text-hammer-text text-xs">Reciprocate</span>
+      <Section title="Settings">
+        {/* Enable / Mode row */}
+        <div className="flex items-center gap-2 mb-1.5">
           <button
             onClick={toggleEnabled}
-            className={`px-8 py-4 text-xs font-mono border-none cursor-pointer ${
+            className={`px-2 py-0.5 text-xs font-mono font-bold border-none cursor-pointer rounded ${
               enabled
                 ? "bg-hammer-green/20 text-hammer-green"
                 : "bg-hammer-red/20 text-hammer-red"
             }`}
           >
-            {enabled ? "ON" : "OFF"}
+            {enabled ? "ENABLED" : "DISABLED"}
           </button>
-        </div>
-
-        {/* Mode */}
-        <div className="flex items-center justify-between">
-          <span className="text-hammer-text text-xs">Mode</span>
-          <div className="flex gap-4">
-            <button
-              onClick={() => setMode("manual")}
-              className={`px-8 py-4 text-xs font-mono border-none cursor-pointer ${
-                mode === "manual"
-                  ? "bg-hammer-blue/20 text-hammer-blue"
-                  : "bg-transparent text-hammer-muted hover:text-hammer-text"
-              }`}
-            >
-              Manual
-            </button>
-            <button
-              onClick={() => setMode("auto")}
-              className={`px-8 py-4 text-xs font-mono border-none cursor-pointer ${
-                mode === "auto"
-                  ? "bg-hammer-blue/20 text-hammer-blue"
-                  : "bg-transparent text-hammer-muted hover:text-hammer-text"
-              }`}
-            >
-              Auto
-            </button>
+          <div className="flex gap-1 ml-auto">
+            <PresetButton label="Manual" active={mode === "manual"} onClick={() => setMode("manual")} />
+            <PresetButton label="Auto" active={mode === "auto"} onClick={() => setMode("auto")} />
           </div>
         </div>
 
-        {/* Manual mode: notification duration */}
+        {/* Trigger options */}
+        <div className="flex items-center gap-2 mb-1.5">
+          <span className="text-2xs text-hammer-muted">Trigger on:</span>
+          <button
+            onClick={toggleOnTroops}
+            className={`px-1.5 py-0.5 text-2xs font-mono border-none cursor-pointer rounded ${
+              onTroops ? "bg-hammer-blue/20 text-hammer-blue" : "bg-transparent text-hammer-dim"
+            }`}
+          >
+            Troops {onTroops ? "ON" : "OFF"}
+          </button>
+          <button
+            onClick={toggleOnGold}
+            className={`px-1.5 py-0.5 text-2xs font-mono border-none cursor-pointer rounded ${
+              onGold ? "bg-hammer-gold/20 text-hammer-gold" : "bg-transparent text-hammer-dim"
+            }`}
+          >
+            Gold {onGold ? "ON" : "OFF"}
+          </button>
+        </div>
+
+        {/* Auto percentage */}
+        {mode === "auto" && (
+          <div className="flex items-center gap-1 mb-1.5">
+            <span className="text-2xs text-hammer-muted">Auto %:</span>
+            {PCT_OPTIONS.map((pct) => (
+              <PresetButton
+                key={pct}
+                label={`${pct}%`}
+                active={autoPct === pct}
+                onClick={() => setAutoPct(pct)}
+              />
+            ))}
+          </div>
+        )}
+
+        {/* Manual mode options */}
         {mode === "manual" && (
-          <div className="flex items-center justify-between">
-            <span className="text-hammer-text text-xs">Notify Duration (s)</span>
+          <div className="flex items-center gap-2 mb-1.5">
+            <button
+              onClick={togglePopups}
+              className={`px-1.5 py-0.5 text-2xs font-mono border-none cursor-pointer rounded ${
+                popupsEnabled ? "bg-hammer-green/20 text-hammer-green" : "bg-transparent text-hammer-dim"
+              }`}
+            >
+              Popups {popupsEnabled ? "ON" : "OFF"}
+            </button>
+            <span className="text-2xs text-hammer-muted">Duration:</span>
             <input
               type="number"
               min={5}
               max={300}
               value={notifyDuration}
               onChange={(e) => setNotifyDuration(Math.max(5, parseInt(e.target.value) || 30))}
-              className="w-16 bg-hammer-bg border border-hammer-border text-hammer-text text-xs px-4 py-4 font-mono"
+              className="w-10 bg-hammer-bg border border-hammer-border text-hammer-text text-2xs px-1 py-0.5 font-mono rounded"
             />
+            <span className="text-2xs text-hammer-dim">sec</span>
           </div>
         )}
 
-        {/* Auto mode: percentage */}
-        {mode === "auto" && (
-          <div className="flex items-center justify-between">
-            <span className="text-hammer-text text-xs">Auto Percentage</span>
-            <div className="flex gap-4">
-              {PCT_OPTIONS.map((pct) => (
-                <button
-                  key={pct}
-                  onClick={() => setAutoPct(pct)}
-                  className={`px-4 py-4 text-xs font-mono border-none cursor-pointer ${
-                    autoPct === pct
-                      ? "bg-hammer-gold/20 text-hammer-gold"
-                      : "bg-transparent text-hammer-muted hover:text-hammer-text"
-                  }`}
-                >
-                  {pct}%
-                </button>
-              ))}
-            </div>
-          </div>
-        )}
-
-        {/* Reciprocate on Troops */}
-        <div className="flex items-center justify-between">
-          <span className="text-hammer-text text-xs">Reciprocate on Troops</span>
-          <button
-            onClick={toggleOnTroops}
-            className={`px-8 py-4 text-xs font-mono border-none cursor-pointer ${
-              onTroops
-                ? "bg-hammer-green/20 text-hammer-green"
-                : "bg-hammer-red/20 text-hammer-red"
-            }`}
-          >
-            {onTroops ? "ON" : "OFF"}
-          </button>
+        {/* Cross-resource explanation */}
+        <div className="text-2xs text-hammer-dim mt-1 border-t border-hammer-border-subtle pt-1">
+          Cross-resource: receive troops → send gold back, receive gold → send troops back
         </div>
+      </Section>
 
-        {/* Reciprocate on Gold */}
-        <div className="flex items-center justify-between">
-          <span className="text-hammer-text text-xs">Reciprocate on Gold</span>
-          <button
-            onClick={toggleOnGold}
-            className={`px-8 py-4 text-xs font-mono border-none cursor-pointer ${
-              onGold
-                ? "bg-hammer-green/20 text-hammer-green"
-                : "bg-hammer-red/20 text-hammer-red"
-            }`}
-          >
-            {onGold ? "ON" : "OFF"}
-          </button>
+      {/* Resources */}
+      <Section title="My Resources">
+        <div className="grid grid-cols-2 gap-1">
+          <StatCard label="Troops" value={short(myTroops)} color="text-hammer-blue" />
+          <StatCard label="Gold" value={short(myGold)} color="text-hammer-gold" />
         </div>
+      </Section>
 
-        {/* Show Popups */}
-        <div className="flex items-center justify-between">
-          <span className="text-hammer-text text-xs">Show Popups</span>
-          <button
-            onClick={togglePopups}
-            className={`px-8 py-4 text-xs font-mono border-none cursor-pointer ${
-              popupsEnabled
-                ? "bg-hammer-green/20 text-hammer-green"
-                : "bg-hammer-red/20 text-hammer-red"
-            }`}
-          >
-            {popupsEnabled ? "ON" : "OFF"}
-          </button>
-        </div>
-      </div>
-
-      {/* Your Gold */}
-      <div className="bg-hammer-card border border-hammer-border p-8">
-        <span className="text-hammer-muted text-xs">Your Gold: </span>
-        <span className="text-hammer-gold text-xs font-bold">{fullNum(myGold)}</span>
-      </div>
-
-      {/* Recent Donors */}
-      <div className="bg-hammer-card border border-hammer-border p-8 flex flex-col gap-8">
-        <div className="text-hammer-green text-sm font-bold">Recent Donors</div>
-
-        {donors.length === 0 ? (
-          <div className="text-hammer-muted text-xs">No donations received yet.</div>
-        ) : (
-          donors.map(({ name, rec, lastTs }) => {
-            const tag = getPlayerTag(name);
-            return (
-              <div
-                key={name}
-                className="bg-hammer-bg border border-hammer-border p-8 flex flex-col gap-4"
-              >
-                <div className="flex items-center justify-between">
-                  <div className="flex items-center gap-4">
-                    <span className="text-hammer-text text-xs font-bold">{name}</span>
-                    {tag && (
-                      <span className={`text-xs ${tag.color}`}>[{tag.label}]</span>
-                    )}
-                  </div>
-                  {lastTs > 0 && (
-                    <span className="text-hammer-muted text-xs">{timeAgo(lastTs)}</span>
-                  )}
-                </div>
-
-                <div className="flex gap-8 text-xs">
-                  <span className="text-hammer-blue">
-                    Troops: {comma(rec.troops)} ({rec.troopsSends})
+      {/* Pending Queue (auto mode) */}
+      {pending.length > 0 && (
+        <Section title="Queue" count={pending.length}>
+          <div className="flex flex-col gap-0.5">
+            {pending.map((item, i) => (
+              <div key={i} className="flex items-center justify-between bg-hammer-raised rounded px-2 py-0.5 border border-hammer-border-subtle text-2xs">
+                <span className="text-hammer-text">{item.donorName}</span>
+                <div className="flex items-center gap-2">
+                  <span className={item.receivedType === "troops" ? "text-hammer-blue" : "text-hammer-gold"}>
+                    {short(item.amountReceived)} {item.receivedType}
                   </span>
-                  <span className="text-hammer-gold">
-                    Gold: {comma(rec.gold)} ({rec.goldSends})
-                  </span>
-                </div>
-
-                <div className="flex items-center gap-4 flex-wrap">
-                  {PCT_OPTIONS.map((pct) => {
-                    const goldAmt = Math.floor((myGold * pct) / 100);
-                    return (
-                      <button
-                        key={pct}
-                        onClick={() => handleSendGold(name, pct)}
-                        className="px-4 py-4 text-xs font-mono border border-hammer-border bg-hammer-bg text-hammer-gold cursor-pointer hover:bg-hammer-gold/10"
-                        title={`Send ${pct}% of your gold (${comma(goldAmt)})`}
-                      >
-                        {pct}% ({short(goldAmt)})
-                      </button>
-                    );
-                  })}
+                  <span className="text-hammer-dim">{timeAgo(item.addedAt)}</span>
                 </div>
               </div>
-            );
-          })
-        )}
-      </div>
+            ))}
+          </div>
+        </Section>
+      )}
 
-      {/* Recent Reciprocations */}
-      <div className="bg-hammer-card border border-hammer-border p-8 flex flex-col gap-4">
-        <div className="flex items-center justify-between">
-          <div className="text-hammer-green text-sm font-bold">Recent Reciprocations</div>
-          {recentHistory.length > 0 && (
+      {/* Recent Donors — manual send buttons */}
+      <Section title="Recent Donors" count={donors.length}>
+        {donors.length === 0 ? (
+          <div className="text-hammer-dim text-2xs">No donations received yet.</div>
+        ) : (
+          <div className="flex flex-col gap-1">
+            {donors.map(({ id, name, rec, lastTs, sentBack }) => {
+              const tag = getTag(id);
+              // Determine what they last sent to show appropriate send-back buttons
+              const lastReceivedType: "troops" | "gold" = rec.troops > rec.gold ? "troops" : "gold";
+              const sendBackType = lastReceivedType === "troops" ? "gold" : "troops";
+              const sendBackResource = sendBackType === "troops" ? myTroops : myGold;
+
+              return (
+                <div key={id} className="bg-hammer-raised rounded border border-hammer-border-subtle p-2">
+                  {/* Name + stats row */}
+                  <div className="flex items-center justify-between mb-1">
+                    <div className="flex items-center gap-1">
+                      <span className="text-xs text-hammer-text font-bold">{name}</span>
+                      {tag && <span className={`text-2xs ${tag.color}`}>[{tag.label}]</span>}
+                    </div>
+                    {lastTs > 0 && <span className="text-2xs text-hammer-dim">{timeAgo(lastTs)}</span>}
+                  </div>
+
+                  {/* What they sent */}
+                  <div className="flex gap-3 text-2xs mb-1.5">
+                    {rec.troops > 0 && (
+                      <span className="text-hammer-blue">{comma(rec.troops)} troops ({rec.troopsSends}x)</span>
+                    )}
+                    {rec.gold > 0 && (
+                      <span className="text-hammer-gold">{comma(rec.gold)} gold ({rec.goldSends}x)</span>
+                    )}
+                  </div>
+
+                  {/* What you sent back */}
+                  {sentBack && (sentBack.troops > 0 || sentBack.gold > 0) && (
+                    <div className="flex gap-3 text-2xs mb-1.5">
+                      <span className="text-hammer-dim">Sent back:</span>
+                      {sentBack.troops > 0 && (
+                        <span className="text-hammer-blue">{comma(sentBack.troops)} troops</span>
+                      )}
+                      {sentBack.gold > 0 && (
+                        <span className="text-hammer-gold">{comma(sentBack.gold)} gold</span>
+                      )}
+                    </div>
+                  )}
+
+                  {/* Send back buttons */}
+                  <div className="flex items-center gap-1">
+                    <span className="text-2xs text-hammer-dim mr-1">
+                      Send {sendBackType}:
+                    </span>
+                    {PCT_OPTIONS.map((pct) => {
+                      const amt = Math.floor((sendBackResource * pct) / 100);
+                      return (
+                        <button
+                          key={pct}
+                          onClick={() => handleManualSend(id, name, pct, lastReceivedType)}
+                          className={`px-1.5 py-0.5 text-2xs font-mono border border-hammer-border bg-hammer-bg cursor-pointer hover:border-hammer-green hover:text-hammer-green transition-colors rounded ${
+                            sendBackType === "troops" ? "text-hammer-blue" : "text-hammer-gold"
+                          }`}
+                          title={`Send ${pct}% of your ${sendBackType} (${comma(amt)})`}
+                        >
+                          {pct}%
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </Section>
+
+      {/* History */}
+      <Section title="History" count={recentHistory.length}>
+        {recentHistory.length === 0 ? (
+          <div className="text-hammer-dim text-2xs">No reciprocations yet.</div>
+        ) : (
+          <>
+            <div className="flex flex-col gap-0.5">
+              {recentHistory.map((entry, i) => (
+                <div key={i} className="flex items-center justify-between text-2xs bg-hammer-raised rounded px-2 py-0.5 border border-hammer-border-subtle">
+                  <div className="flex items-center gap-1.5">
+                    <span className="text-hammer-dim">{timeAgo(entry.timestamp)}</span>
+                    <span className="text-hammer-text">{entry.donorName}</span>
+                    <span className={entry.mode === "auto" ? "text-hammer-green" : "text-hammer-blue"}>
+                      [{entry.mode}]
+                    </span>
+                  </div>
+                  <div className="flex gap-2">
+                    {entry.troopsSent != null && entry.troopsSent > 0 && (
+                      <span className="text-hammer-blue">{short(entry.troopsSent)}t</span>
+                    )}
+                    {entry.goldSent != null && entry.goldSent > 0 && (
+                      <span className="text-hammer-gold">{short(entry.goldSent)}g</span>
+                    )}
+                    <span className="text-hammer-dim">{entry.percentage}%</span>
+                  </div>
+                </div>
+              ))}
+            </div>
+            {history.length > 15 && (
+              <div className="text-2xs text-hammer-dim mt-1">
+                Showing 15 of {history.length}
+              </div>
+            )}
             <button
               onClick={() => useStore.setState({ reciprocateHistory: [] })}
-              className="px-8 py-4 text-xs font-mono border border-hammer-border bg-hammer-bg text-hammer-red cursor-pointer hover:bg-hammer-red/10"
+              className="mt-1 px-2 py-0.5 text-2xs border border-hammer-red/40 bg-hammer-red/10 text-hammer-red rounded cursor-pointer hover:bg-hammer-red/20 transition-colors"
             >
               Clear History
             </button>
-          )}
-        </div>
-
-        {recentHistory.length === 0 ? (
-          <div className="text-hammer-muted text-xs">No reciprocations yet.</div>
-        ) : (
-          recentHistory.map((entry, i) => (
-            <div key={i} className="flex items-center justify-between text-xs">
-              <div className="flex items-center gap-4">
-                <span className="text-hammer-muted">{timeAgo(entry.timestamp)}</span>
-                <span className="text-hammer-text">{entry.donorName}</span>
-                <span className="text-hammer-gold">{entry.percentage}%</span>
-              </div>
-              <div className="flex gap-4">
-                {entry.goldSent != null && entry.goldSent > 0 && (
-                  <span className="text-hammer-gold">{short(entry.goldSent)} gold</span>
-                )}
-                {entry.troopsSent != null && entry.troopsSent > 0 && (
-                  <span className="text-hammer-blue">{short(entry.troopsSent)} troops</span>
-                )}
-              </div>
-            </div>
-          ))
+          </>
         )}
-      </div>
+      </Section>
     </div>
   );
 }

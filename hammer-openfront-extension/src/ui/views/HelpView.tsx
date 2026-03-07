@@ -1,109 +1,119 @@
+import { useStore } from "@store/index";
+import { Section } from "@ui/components/ds";
+
 const TABS_HELP = [
-  {
-    title: "Summary",
-    description:
-      "Overview of your game state: your player stats, team composition, alliance status, and a quick glance at key metrics. This is the default landing tab.",
-  },
-  {
-    title: "Stats",
-    description:
-      "Detailed statistics for all players in the game. View troops, gold, tiles owned, and other metrics. Players are sorted and color-coded by relationship (teammate, ally, other).",
-  },
-  {
-    title: "Ports",
-    description:
-      "Tracks gold received from trade ports. Shows total gold earned, trade frequency, average interval between trades, and estimated gold-per-minute for each port source.",
-  },
-  {
-    title: "Feed",
-    description:
-      "Monitors all inbound and outbound resource donations (gold and troops). See who is sending you resources and who you are sending to, with totals and individual send counts.",
-  },
-  {
-    title: "Alliances",
-    description:
-      "Manage your alliance relationships. View current allies, send alliance requests, and track alliance status changes throughout the game.",
-  },
-  {
-    title: "Auto Troops",
-    description:
-      "Configure automatic troop sending. Set a target player and amount to automatically send troops at regular intervals. Supports percentage-based or fixed-amount modes.",
-  },
-  {
-    title: "Auto Gold",
-    description:
-      "Configure automatic gold sending. Similar to Auto Troops but for gold. Set target, amount, and interval for automated gold transfers.",
-  },
-  {
-    title: "Reciprocate",
-    description:
-      "Automatic or manual reciprocation of donations. When someone sends you resources, this feature helps you send back a percentage. Supports both manual (with notifications) and auto modes.",
-  },
-  {
-    title: "Comms",
-    description:
-      "Communication center for sending emojis and quick chat messages to other players. Select individual targets or groups (team, allies, all). Includes a grid of emoji options and categorized quick chat phrases.",
-  },
-  {
-    title: "CIA",
-    description:
-      "Server-wide intelligence tracking. Monitors all resource transfers between any players, detects betrayals (teammates feeding enemies), ranks the most generous and most fed players, and provides a live economy pulse.",
-  },
+  { title: "Summary", desc: "Your player stats, donations, port income, and session totals." },
+  { title: "Alliances", desc: "Per-player cards with emoji, quickchat, and alliance actions." },
+  { title: "AutoTroops", desc: "Configure automatic troop sending to teammates and allies." },
+  { title: "AutoGold", desc: "Configure automatic gold sending with ratio and threshold." },
+  { title: "Reciprocate", desc: "Auto or manual reciprocation when someone sends you resources." },
+  { title: "Comms", desc: "Emoji picker and categorized quickchat for any player." },
+  { title: "CIA", desc: "Server-wide intelligence: economy rates, flows, alerts, live feed." },
 ];
 
-const SHORTCUTS = [
-  { keys: "ALT + M", description: "Set mouse target for auto-send" },
-  { keys: "ALT + F", description: "Toggle auto-feed on/off" },
+const HOTKEYS = [
+  {
+    keys: ["ALT", "M"],
+    label: "Set mouse target",
+    detail: "Sets the player under your cursor as auto-send target.",
+  },
+  {
+    keys: ["ALT", "F"],
+    label: "Toggle auto-feed",
+    detail: "Quickly enable/disable Auto Troops and Auto Gold.",
+  },
 ];
 
 const TIPS = [
   "Use Auto Troops + Auto Gold together for fully automated resource management.",
-  "CIA tab reveals hidden alliances -- watch for players secretly feeding each other.",
-  "Reciprocate in Auto mode to instantly return a percentage of any donation received.",
-  "The Feed tab helps you identify who your biggest supporters and dependents are.",
+  "CIA tab reveals hidden alliances — watch for players secretly feeding each other.",
+  "Reciprocate in Auto mode to instantly return a percentage of any donation.",
   "Use Comms to coordinate attacks and defenses with your team quickly.",
-  "Port tracking helps you understand your passive income rate over time.",
   "Drag the panel header to reposition, or resize using the bottom-right corner.",
 ];
 
 export default function HelpView() {
+  const playerDataReady = useStore((s) => s.playerDataReady);
+  const currentClientID = useStore((s) => s.currentClientID);
+  const playerSummary = useStore((s) => s.playerSummary);
+  const mySmallID = useStore((s) => s.mySmallID);
+  const isConnected = currentClientID != null && currentClientID !== "";
+
   return (
-    <div className="flex flex-col gap-8 p-8">
-      {/* Tab explanations */}
-      <div className="text-hammer-green text-sm font-bold">Tab Guide</div>
-      {TABS_HELP.map((tab) => (
-        <div
-          key={tab.title}
-          className="bg-hammer-card border border-hammer-border p-8 flex flex-col gap-4"
-        >
-          <div className="text-hammer-blue text-xs font-bold">{tab.title}</div>
-          <div className="text-hammer-text text-xs leading-relaxed">{tab.description}</div>
+    <div>
+      <Section title="Tabs">
+        <div className="flex flex-col gap-0_5">
+          {TABS_HELP.map((t) => (
+            <div key={t.title} className="flex gap-2 text-2xs py-0_5">
+              <span className="text-hammer-blue font-semibold shrink-0 w-16">{t.title}</span>
+              <span className="text-hammer-muted">{t.desc}</span>
+            </div>
+          ))}
         </div>
-      ))}
+      </Section>
 
-      {/* Keyboard Shortcuts */}
-      <div className="bg-hammer-card border border-hammer-border p-8 flex flex-col gap-8">
-        <div className="text-hammer-green text-sm font-bold">Keyboard Shortcuts</div>
-        {SHORTCUTS.map((sc) => (
-          <div key={sc.keys} className="flex items-center gap-8 text-xs">
-            <span className="bg-hammer-bg border border-hammer-border px-8 py-4 text-hammer-gold font-mono font-bold">
-              {sc.keys}
+      <Section title="Keyboard Shortcuts">
+        <div className="flex flex-col gap-1">
+          {HOTKEYS.map((hk) => (
+            <div key={hk.keys.join("")} className="flex flex-col gap-0_5">
+              <div className="flex items-center gap-2 text-xs">
+                <div className="flex items-center gap-1">
+                  {hk.keys.map((key, i) => (
+                    <span key={i} className="flex items-center gap-1">
+                      {i > 0 && <span className="text-hammer-dim text-2xs">+</span>}
+                      <span className="bg-hammer-bg border border-hammer-border px-1_5 py-0_5 text-hammer-gold text-2xs font-semibold rounded">
+                        {key}
+                      </span>
+                    </span>
+                  ))}
+                </div>
+                <span className="text-hammer-text text-2xs font-medium">{hk.label}</span>
+              </div>
+              <div className="text-hammer-dim text-2xs ml-4">{hk.detail}</div>
+            </div>
+          ))}
+        </div>
+      </Section>
+
+      <Section title="Tips">
+        <div className="flex flex-col gap-0_5">
+          {TIPS.map((tip, i) => (
+            <div key={i} className="flex items-start gap-1 text-2xs">
+              <span className="text-hammer-gold shrink-0">*</span>
+              <span className="text-hammer-muted">{tip}</span>
+            </div>
+          ))}
+        </div>
+      </Section>
+
+      <Section title="System">
+        <div className="flex flex-col gap-0_5 text-2xs">
+          <div className="flex items-center justify-between">
+            <span className="text-hammer-muted">Version</span>
+            <span className="text-hammer-text">v11.0</span>
+          </div>
+          <div className="flex items-center justify-between">
+            <span className="text-hammer-muted">Player Data</span>
+            <span className={playerDataReady ? "text-hammer-green" : "text-hammer-red"}>
+              {playerDataReady ? "Ready" : "Not Ready"}
             </span>
-            <span className="text-hammer-text">{sc.description}</span>
           </div>
-        ))}
-      </div>
-
-      {/* Tips */}
-      <div className="bg-hammer-card border border-hammer-border p-8 flex flex-col gap-4">
-        <div className="text-hammer-green text-sm font-bold">Tips</div>
-        {TIPS.map((tip, i) => (
-          <div key={i} className="flex items-start gap-4 text-xs">
-            <span className="text-hammer-gold">*</span>
-            <span className="text-hammer-text leading-relaxed">{tip}</span>
+          <div className="flex items-center justify-between">
+            <span className="text-hammer-muted">Connection</span>
+            <span className={isConnected ? "text-hammer-green" : "text-hammer-red"}>
+              {isConnected ? "Connected" : "Disconnected"}
+            </span>
           </div>
-        ))}
-      </div>
+          <div className="flex items-center justify-between">
+            <span className="text-hammer-muted">Players</span>
+            <span className="text-hammer-blue">{playerSummary.count}</span>
+          </div>
+          <div className="flex items-center justify-between">
+            <span className="text-hammer-muted">Your ID</span>
+            <span className="text-hammer-gold">{mySmallID ?? "N/A"}</span>
+          </div>
+        </div>
+      </Section>
     </div>
   );
 }

@@ -1,8 +1,9 @@
 import type { DonationRecord, PortRecord } from "../types";
 
-export function bump(map: Map<string, DonationRecord>, key: string): DonationRecord {
+export function bump(map: Map<string, DonationRecord>, key: string, displayName?: string): DonationRecord {
   if (!map.has(key))
     map.set(key, {
+      displayName: displayName || key,
       gold: 0,
       troops: 0,
       count: 0,
@@ -11,7 +12,9 @@ export function bump(map: Map<string, DonationRecord>, key: string): DonationRec
       last: null,
       lastDonorTroops: 0,
     });
-  return map.get(key)!;
+  const rec = map.get(key)!;
+  if (displayName) rec.displayName = displayName;
+  return rec;
 }
 
 export function bumpPorts(ports: Map<string, PortRecord>, playerId: string, gold: number, t: number): void {

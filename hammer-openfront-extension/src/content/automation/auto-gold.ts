@@ -18,6 +18,7 @@ import {
 import { short } from "@shared/utils";
 import { asSendGold } from "../game/send";
 import { registerInterval } from "../cleanup";
+import { record } from "../../recorder";
 
 // ---------- Module-level state ----------
 
@@ -92,9 +93,11 @@ function asGoldTick(): void {
   const me = readMyPlayer(s.lastPlayers, s.playersById, s.currentClientID, s.mySmallID);
   if (!me) return;
 
-  const gold = Number(me.gold || 0n);
-  const toSend = Math.max(1, Math.floor(gold * (s.asGoldRatio / 100)));
-  if (toSend <= 0) return;
+  let gold = Number(me.gold || 0n);
+  if (gold <= 0) {
+    record("auto-g", "skipped", { reason: "no-gold" });
+    return;
+  }
 
   for (const target of targets) {
     if (!useStore.getState().asGoldRunning) return;
@@ -108,7 +111,17 @@ function asGoldTick(): void {
     useStore.getState().updateAsGoldSendTimes(target.id, last, nextSend);
 
     if (now >= nextSend) {
+      // Recompute each iteration (gold decreases after each send)
+      const toSend = Math.max(1, Math.floor(gold * (s.asGoldRatio / 100)));
+      if (toSend <= 0 || gold < toSend) {
+        record("auto-g", "skipped", { target: target.name, reason: "insufficient", gold });
+        log(`[AUTO-GOLD] Skipping ${target.name}: insufficient gold (${gold})`);
+        continue;
+      }
+
       if (asSendGold(target.id, toSend)) {
+        record("auto-g", "sent", { target: target.name, amount: toSend });
+        gold -= toSend; // Track locally so next target sees reduced amount
         useStore.getState().updateAsGoldSendTimes(target.id, now, now + cooldownMs);
         useStore.getState().addAsGoldLog({
           ts: Date.now(),
@@ -116,6 +129,7 @@ function asGoldTick(): void {
           amount: toSend,
         });
       } else {
+        record("auto-g", "error", { target: target.name, reason: "send-failed" });
         log(`[AUTO-GOLD] Send failed to ${target.name}`);
       }
     }

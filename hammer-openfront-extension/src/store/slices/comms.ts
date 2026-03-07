@@ -22,6 +22,7 @@ export interface CommsSlice {
   commsRecentSent: CommsRecentEntry[];
   allianceCommsExpanded: Map<string, boolean>;
 
+  setCommsTargets: (targets: Set<string>) => void;
   addCommsTarget: (id: string) => void;
   removeCommsTarget: (id: string) => void;
   clearCommsTargets: () => void;
@@ -39,6 +40,8 @@ export const createCommsSlice: StateCreator<CommsSlice, [], [], CommsSlice> = (s
   commsPendingQC: null,
   commsRecentSent: [],
   allianceCommsExpanded: new Map(),
+
+  setCommsTargets: (targets) => set({ commsTargets: targets }),
 
   addCommsTarget: (id) =>
     set((s) => {

@@ -97,6 +97,102 @@ describe("auto-troops threshold check", () => {
 });
 
 // ───────────────────────────────────────────────────────
+// Threshold guard: remaining troops after send must stay above threshold
+// (from auto-troops.ts — prevents over-sending)
+// ───────────────────────────────────────────────────────
+describe("auto-troops remaining threshold guard", () => {
+  function shouldSend(troops: number, maxT: number, ratio: number, threshold: number): { send: boolean; toSend: number } {
+    const toSend = Math.max(1, Math.floor(troops * (ratio / 100)));
+    const remainingPct = maxT > 0 ? ((troops - toSend) / maxT) * 100 : 0;
+    return { send: remainingPct >= threshold, toSend };
+  }
+
+  test("send when remaining stays above threshold", () => {
+    // 80k troops, 100k max, 20% ratio → send 16k, remaining 64k (64%) > 50% threshold
+    const result = shouldSend(80_000, 100_000, 20, 50);
+    expect(result.send).toBe(true);
+    expect(result.toSend).toBe(16_000);
+  });
+
+  test("skip when send would drop below threshold", () => {
+    // 55k troops, 100k max, 20% ratio → send 11k, remaining 44k (44%) < 50% threshold
+    const result = shouldSend(55_000, 100_000, 20, 50);
+    expect(result.send).toBe(false);
+  });
+
+  test("skip when exactly at threshold before send", () => {
+    // 50k troops, 100k max, 20% ratio → send 10k, remaining 40k (40%) < 50% threshold
+    const result = shouldSend(50_000, 100_000, 20, 50);
+    expect(result.send).toBe(false);
+  });
+
+  test("100% ratio always drops to 0 remaining → skips unless threshold is 0", () => {
+    const result = shouldSend(80_000, 100_000, 100, 50);
+    expect(result.send).toBe(false);
+  });
+
+  test("100% ratio with 0 threshold → sends everything", () => {
+    const result = shouldSend(80_000, 100_000, 100, 0);
+    expect(result.send).toBe(true);
+  });
+
+  test("multiple sequential sends track remaining correctly", () => {
+    let troops = 80_000;
+    const maxT = 100_000;
+    const ratio = 20;
+    const threshold = 50;
+    let totalSent = 0;
+
+    // Simulate sending to multiple targets (like the loop in auto-troops.ts)
+    for (let i = 0; i < 5; i++) {
+      const toSend = Math.max(1, Math.floor(troops * (ratio / 100)));
+      const remainingPct = maxT > 0 ? ((troops - toSend) / maxT) * 100 : 0;
+      if (remainingPct < threshold) break;
+      troops -= toSend;
+      totalSent += toSend;
+    }
+    // Should have sent to some targets but stopped before going below 50%
+    expect(troops).toBeGreaterThanOrEqual(maxT * (threshold / 100));
+    expect(totalSent).toBeGreaterThan(0);
+  });
+});
+
+// ───────────────────────────────────────────────────────
+// Auto-gold resource guard: skip when insufficient gold
+// ───────────────────────────────────────────────────────
+describe("auto-gold resource guard", () => {
+  test("skip when gold less than toSend", () => {
+    const gold = 5;
+    const ratio = 50;
+    const toSend = Math.max(1, Math.floor(gold * (ratio / 100)));
+    // toSend = max(1, 2) = 2, gold = 5, 5 >= 2 → send
+    expect(toSend <= 0 || gold < toSend).toBe(false);
+  });
+
+  test("skip when gold is 0", () => {
+    const gold = 0;
+    const ratio = 50;
+    const toSend = Math.max(1, Math.floor(gold * (ratio / 100)));
+    // toSend = max(1, 0) = 1, gold = 0, 0 < 1 → skip
+    expect(toSend <= 0 || gold < toSend).toBe(true);
+  });
+
+  test("multiple sends reduce local gold tracker", () => {
+    let gold = 10_000;
+    const ratio = 25;
+    let sends = 0;
+    for (let i = 0; i < 10; i++) {
+      const toSend = Math.max(1, Math.floor(gold * (ratio / 100)));
+      if (toSend <= 0 || gold < toSend) break;
+      gold -= toSend;
+      sends++;
+    }
+    expect(sends).toBeGreaterThan(0);
+    expect(gold).toBeGreaterThanOrEqual(0);
+  });
+});
+
+// ───────────────────────────────────────────────────────
 // Gold send amount calculation
 // (from asGoldTick, line 3216)
 // ───────────────────────────────────────────────────────

@@ -12,6 +12,7 @@ import { useStore } from "@store/index";
 import type { PlayerData } from "@shared/types";
 import { serialize } from "@shared/serialize";
 import { processDisplayMessage, drainPendingMessages } from "./game/message-processor";
+import { record } from "../recorder";
 
 // ---------------------------------------------------------------------------
 // Hook status (for diagnostics UI)
@@ -48,6 +49,8 @@ function sendSnapshot(): void {
 function startDashboardSync(port: chrome.runtime.Port): void {
   dashboardPort = port;
 
+  record("bridge", "dashboard.connect");
+
   // Send initial snapshot
   sendSnapshot();
 
@@ -60,6 +63,7 @@ function startDashboardSync(port: chrome.runtime.Port): void {
       clearInterval(syncTimer);
       syncTimer = null;
     }
+    record("bridge", "dashboard.disconnect");
     console.log("[Hammer:Bridge] Dashboard disconnected");
   });
 
@@ -76,6 +80,11 @@ function startDashboardSync(port: chrome.runtime.Port): void {
         fn(...(msg.args || []));
       }
     }
+    if (msg.type === "sync-local" && msg.data) {
+      // Dashboard pushes LOCAL_KEY changes so automation stays in sync
+      record("bridge", "sync-local", { keys: Object.keys(msg.data) });
+      useStore.setState(msg.data);
+    }
   });
 
   console.log("[Hammer:Bridge] Dashboard connected, sync started");
@@ -85,7 +94,15 @@ function startDashboardSync(port: chrome.runtime.Port): void {
 // installBridge — start listening for messages from MAIN world
 // ---------------------------------------------------------------------------
 
+// Track current listener for cleanup on re-install (extension reload)
+let currentBridgeListener: ((e: MessageEvent) => void) | null = null;
+
 export function installBridge(): void {
+  // Remove previous listener if re-installing after extension reload
+  if (currentBridgeListener) {
+    window.removeEventListener("message", currentBridgeListener);
+  }
+  currentBridgeListener = onBridgeMessage;
   window.addEventListener("message", onBridgeMessage);
 
   // Register with background so dashboard can find this tab
@@ -211,6 +228,7 @@ function handleBootstrap(payload: {
   clientID?: string | null;
 }): void {
   if (!payload?.players?.length) return;
+  record("bridge", "bootstrap", { playerCount: payload.players.length, source: payload.source });
 
   const store = useStore.getState();
 
@@ -296,6 +314,10 @@ function handleStatus(payload: {
 }): void {
   if (payload?.hook) {
     hookStatus[payload.hook] = !!payload.found;
+    record("hook", payload.hook + (payload.found ? ".found" : ".missing"), {
+      found: payload.found,
+      ...(payload.classes ? { classes: payload.classes } : {}),
+    });
   }
   if (payload?.classes) {
     discoveredEventClasses = payload.classes;

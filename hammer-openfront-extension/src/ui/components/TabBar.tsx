@@ -1,24 +1,16 @@
 import { useStore } from "@store/index";
 
-const TABS = [
-  "summary",
-  "stats",
-  "ports",
-  "feed",
-  "alliances",
-  "autotroops",
-  "autogold",
-  "reciprocate",
-  "comms",
-  "cia",
-  "help",
-  "hotkeys",
-  "about",
-] as const;
-
-function capitalize(s: string): string {
-  return s.charAt(0).toUpperCase() + s.slice(1);
-}
+const TABS: { id: string; label: string }[] = [
+  { id: "summary", label: "Summary" },
+  { id: "alliances", label: "Alliances" },
+  { id: "autotroops", label: "AutoTroops" },
+  { id: "autogold", label: "AutoGold" },
+  { id: "reciprocate", label: "Reciprocate" },
+  { id: "comms", label: "Comms" },
+  { id: "cia", label: "CIA" },
+  { id: "recorder", label: "Rec" },
+  { id: "help", label: "Help" },
+];
 
 export default function TabBar() {
   const view = useStore((s) => s.view);
@@ -33,19 +25,19 @@ export default function TabBar() {
       style={{ flexShrink: 0 }}
     >
       {TABS.map((tab) => {
-        const isActive = view === tab;
+        const isActive = view === tab.id;
         return (
           <button
-            key={tab}
-            onClick={() => setView(tab)}
-            className={`px-2 py-1 text-xs font-mono border-none cursor-pointer transition-colors ${
+            key={tab.id}
+            onClick={() => setView(tab.id)}
+            className={`px-2 py-1 text-xs border-none cursor-pointer transition-colors ${
               isActive
-                ? "bg-hammer-green/20 text-hammer-green"
+                ? "bg-hammer-green/20 text-hammer-green font-medium"
                 : "bg-transparent text-hammer-muted hover:text-hammer-text hover:bg-hammer-surface"
             }`}
             style={{ outline: "none" }}
           >
-            {capitalize(tab)}
+            {tab.label}
           </button>
         );
       })}

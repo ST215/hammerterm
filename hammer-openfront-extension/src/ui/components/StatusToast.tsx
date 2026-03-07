@@ -25,15 +25,16 @@ export default function StatusToast() {
 
   return (
     <div
-      className="fixed font-mono text-sm text-hammer-green pointer-events-none"
+      className="fixed font-mono text-base text-hammer-green pointer-events-none font-bold"
       style={{
         top: "50%",
         left: "50%",
         transform: "translate(-50%, -50%)",
-        backgroundColor: "rgba(0, 0, 0, 0.9)",
-        padding: "8px 16px",
-        borderRadius: "4px",
+        backgroundColor: "rgba(0, 0, 0, 0.92)",
+        padding: "12px 24px",
+        borderRadius: "6px",
         zIndex: 2147483647,
+        boxShadow: "0 4px 20px rgba(0,0,0,0.5)",
       }}
     >
       {msg.text}

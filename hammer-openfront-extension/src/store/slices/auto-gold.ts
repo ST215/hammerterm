@@ -59,15 +59,29 @@ export const createAutoGoldSlice: StateCreator<AutoGoldSlice, [], [], AutoGoldSl
   setAsGoldCooldown: (sec) => set({ asGoldCooldownSec: sec }),
 
   toggleAsGoldAllTeamMode: () =>
-    set((s) => ({ asGoldAllTeamMode: !s.asGoldAllTeamMode })),
+    set((s) => {
+      const next = !s.asGoldAllTeamMode;
+      return next
+        ? { asGoldAllTeamMode: true, asGoldTargets: [] }
+        : { asGoldAllTeamMode: false };
+    }),
 
   toggleAsGoldAllAlliesMode: () =>
-    set((s) => ({ asGoldAllAlliesMode: !s.asGoldAllAlliesMode })),
+    set((s) => {
+      const next = !s.asGoldAllAlliesMode;
+      return next
+        ? { asGoldAllAlliesMode: true, asGoldTargets: [] }
+        : { asGoldAllAlliesMode: false };
+    }),
 
   addAsGoldTarget: (id, name) =>
     set((s) => {
       if (s.asGoldTargets.some((t) => t.id === id)) return s;
-      return { asGoldTargets: [...s.asGoldTargets, { id, name }] };
+      return {
+        asGoldTargets: [...s.asGoldTargets, { id, name }],
+        asGoldAllTeamMode: false,
+        asGoldAllAlliesMode: false,
+      };
     }),
 
   removeAsGoldTarget: (id) =>

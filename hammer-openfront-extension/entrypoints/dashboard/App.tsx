@@ -3,6 +3,33 @@ import { useStore } from "@store/index";
 import { deserialize } from "@shared/serialize";
 import HammerApp from "@ui/components/App";
 
+// Keys that are local to the dashboard UI — never overwritten by snapshots.
+// These let the user navigate tabs, select comms targets, etc. without
+// the 500ms sync clobbering their interactions.
+const LOCAL_KEYS = new Set([
+  // UI navigation
+  "view", "paused", "minimized", "sizeIdx", "displayMode", "uiVisible",
+  // Comms selections (user picks targets in dashboard)
+  "commsTargets", "commsGroupMode", "commsOthersExpanded",
+  "commsPendingQC", "commsRecentSent", "allianceCommsExpanded",
+  // Reciprocate config
+  "reciprocateMode", "reciprocateAutoPct", "reciprocateNotifyDuration",
+  "reciprocateEnabled", "reciprocateOnGold", "reciprocateOnTroops",
+  "reciprocatePopupsEnabled",
+  // Auto-troops config
+  "asTroopsRunning", "asTroopsTargets", "asTroopsRatio",
+  "asTroopsThreshold", "asTroopsCooldownSec",
+  "asTroopsAllTeamMode", "asTroopsAllAlliesMode",
+  // Auto-gold config
+  "asGoldRunning", "asGoldTargets", "asGoldRatio",
+  "asGoldThreshold", "asGoldCooldownSec",
+  "asGoldAllTeamMode", "asGoldAllAlliesMode",
+  // CIA user preferences
+  "ciaWindowMs", "ciaFeedFilter",
+  // Recorder
+  "recorderOn", "recorderEventCount",
+]);
+
 export default function DashboardApp() {
   const [connected, setConnected] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -10,10 +37,18 @@ export default function DashboardApp() {
   useEffect(() => {
     let port: chrome.runtime.Port | null = null;
     let disposed = false;
+    let unsub: (() => void) | null = null;
+
+    // Intercept sendToMainWorld calls (window.postMessage with __hammer flag)
+    // and forward them through the port to the content script
+    function interceptPostMessage(e: MessageEvent) {
+      if (!e.data?.__hammer || e.data.type !== "send" || !port) return;
+      port.postMessage({ type: "command", payload: e.data.payload });
+    }
+    window.addEventListener("message", interceptPostMessage);
 
     async function connect() {
       try {
-        // Ask background for the game tab ID
         const response = await chrome.runtime.sendMessage({
           type: "GET_GAME_TAB",
         });
@@ -25,7 +60,6 @@ export default function DashboardApp() {
           return;
         }
 
-        // Connect directly to the content script
         port = chrome.tabs.connect(response.tabId, {
           name: "hammer-dashboard",
         });
@@ -33,10 +67,10 @@ export default function DashboardApp() {
         port.onMessage.addListener((msg) => {
           if (msg.type === "snapshot" && msg.data) {
             const data = deserialize(msg.data);
-            // Apply data fields to local store, skip functions
+            // Apply only game-data fields, skip local UI keys and functions
             const patch: Record<string, any> = {};
             for (const [key, val] of Object.entries(data)) {
-              if (typeof val !== "function") {
+              if (typeof val !== "function" && !LOCAL_KEYS.has(key)) {
                 patch[key] = val;
               }
             }
@@ -49,6 +83,20 @@ export default function DashboardApp() {
           if (!disposed) {
             setConnected(false);
             setError("Connection to game tab lost. Close and reopen.");
+          }
+        });
+
+        // Reverse sync: push LOCAL_KEY changes back to the content script
+        unsub = useStore.subscribe((state, prev) => {
+          if (!port) return;
+          const changes: Record<string, unknown> = {};
+          for (const key of LOCAL_KEYS) {
+            if ((state as any)[key] !== (prev as any)[key]) {
+              changes[key] = (state as any)[key];
+            }
+          }
+          if (Object.keys(changes).length > 0) {
+            port.postMessage({ type: "sync-local", data: changes });
           }
         });
 
@@ -65,13 +113,11 @@ export default function DashboardApp() {
 
     return () => {
       disposed = true;
+      unsub?.();
+      window.removeEventListener("message", interceptPostMessage);
       port?.disconnect();
     };
   }, []);
-
-  // Override store actions to send commands through port to content script
-  // (The dashboard's local store actions work for UI-only state like view/tab,
-  //  but game commands need to go through the content script)
 
   if (error) {
     return (

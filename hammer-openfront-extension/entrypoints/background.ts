@@ -136,6 +136,32 @@ export default defineBackground(() => {
     );
   }
 
+  // Inject content scripts into existing game tabs on install/update
+  chrome.runtime.onInstalled.addListener(async () => {
+    try {
+      const tabs = await chrome.tabs.query({
+        url: ["*://openfront.io/*", "*://*.openfront.io/*"],
+      });
+      for (const tab of tabs) {
+        if (!tab.id) continue;
+        try {
+          await chrome.scripting.executeScript({
+            target: { tabId: tab.id },
+            files: ["content-scripts/hooks.js"],
+            world: "MAIN" as chrome.scripting.ExecutionWorld,
+          });
+          await chrome.scripting.executeScript({
+            target: { tabId: tab.id },
+            files: ["content-scripts/openfront.js"],
+          });
+          console.log("[Hammer] Injected into existing game tab:", tab.id);
+        } catch (err) {
+          console.warn("[Hammer] Injection failed for tab", tab.id, err);
+        }
+      }
+    } catch {}
+  });
+
   // Clean up tracked window ID when windows are closed
   chrome.windows.onRemoved.addListener((windowId) => {
     if (windowId === dashboardWindowId) {

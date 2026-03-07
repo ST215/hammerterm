@@ -61,15 +61,30 @@ export const createAutoTroopsSlice: StateCreator<AutoTroopsSlice, [], [], AutoTr
   setAsTroopsCooldown: (sec) => set({ asTroopsCooldownSec: sec }),
 
   toggleAsTroopsAllTeamMode: () =>
-    set((s) => ({ asTroopsAllTeamMode: !s.asTroopsAllTeamMode })),
+    set((s) => {
+      const next = !s.asTroopsAllTeamMode;
+      // When enabling, clear manual targets (they overlap with group mode)
+      return next
+        ? { asTroopsAllTeamMode: true, asTroopsTargets: [] }
+        : { asTroopsAllTeamMode: false };
+    }),
 
   toggleAsTroopsAllAlliesMode: () =>
-    set((s) => ({ asTroopsAllAlliesMode: !s.asTroopsAllAlliesMode })),
+    set((s) => {
+      const next = !s.asTroopsAllAlliesMode;
+      return next
+        ? { asTroopsAllAlliesMode: true, asTroopsTargets: [] }
+        : { asTroopsAllAlliesMode: false };
+    }),
 
   addAsTroopsTarget: (id, name) =>
     set((s) => {
       if (s.asTroopsTargets.some((t) => t.id === id)) return s;
-      return { asTroopsTargets: [...s.asTroopsTargets, { id, name }] };
+      return {
+        asTroopsTargets: [...s.asTroopsTargets, { id, name }],
+        asTroopsAllTeamMode: false,
+        asTroopsAllAlliesMode: false,
+      };
     }),
 
   removeAsTroopsTarget: (id) =>

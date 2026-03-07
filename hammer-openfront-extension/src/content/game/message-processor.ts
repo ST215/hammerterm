@@ -11,10 +11,15 @@ import { MessageType } from "@shared/constants";
 import { parseAmt, num } from "@shared/utils";
 import { trackCIAEvent } from "@shared/logic/cia";
 import { findPlayer } from "@shared/logic/player-helpers";
+import { record } from "../../recorder";
 
 // ---------- Module-level state ----------
 
 const pendingMessages: unknown[] = [];
+
+/** Per-donor dedup: "donorName:messageType" -> last processed timestamp */
+const recentDonors = new Map<string, number>();
+const DEDUP_WINDOW_MS = 500;
 
 // ---------- Helpers ----------
 
@@ -51,7 +56,11 @@ export function processDisplayMessage(msg: unknown): void {
 
   // CIA: Track ALL transfers server-wide (before self-filter)
   const { ciaState, playersBySmallId, mySmallID, myTeam, playersById, myAllies } = useStore.getState();
-  trackCIAEvent(ciaState, mt, pid, params as { name?: string; troops?: unknown; gold?: unknown }, raw as { goldAmount?: unknown }, playersBySmallId, mySmallID, myTeam, playersById, myAllies);
+  const tracked = trackCIAEvent(ciaState, mt, pid, params as { name?: string; troops?: unknown; gold?: unknown }, raw as { goldAmount?: unknown }, playersBySmallId, mySmallID, myTeam, playersById, myAllies);
+  // trackCIAEvent mutates ciaState in place — create a new reference so Zustand detects the change
+  if (tracked) {
+    useStore.setState({ ciaState: { ...ciaState } });
+  }
 
   // Only process messages directed at us
   if (pid !== mySmallID) {
@@ -91,6 +100,15 @@ function handleReceivedTroops(
   const amt = parseAmt(params.troops);
   if (!name || amt <= 0) return;
 
+  // Per-donor dedup: skip if same donor sent same type within 500ms
+  const donorKey = `${name}:troops`;
+  const lastProcessed = recentDonors.get(donorKey) || 0;
+  if (Date.now() - lastProcessed < DEDUP_WINDOW_MS) {
+    record("msg", "deduped", { from: name, type: "troops", amt });
+    return;
+  }
+  recentDonors.set(donorKey, Date.now());
+
   const { playersById } = useStore.getState();
   const from = findPlayer(name, playersById);
   if (!from) return;
@@ -99,8 +117,18 @@ function handleReceivedTroops(
   const donorTroopSnapshot = donorPlayer ? Number(donorPlayer.troops || 0) : 0;
 
   // Update inbound donations
-  useStore.getState().recordInbound(from.id, "troops", amt);
+  useStore.getState().recordInbound(from.id, name, "troops", amt, donorTroopSnapshot);
 
+  // Donation toast (always, regardless of reciprocate settings)
+  useStore.getState().addDonationToast({
+    id: Date.now() + Math.random(),
+    donorName: name,
+    type: "troops",
+    amount: amt,
+    timestamp: Date.now(),
+  });
+
+  record("msg", "received.troops", { from: name, amt });
   log("[RECEIVED] Troops from", name, ":", amt);
 
   // Trigger reciprocation when enabled
@@ -113,7 +141,7 @@ function handleReceivedTroops(
       });
     } else if (s.reciprocatePopupsEnabled) {
       s.addReciprocateNotification({
-        id: Date.now(),
+        id: Date.now() + Math.random(),
         donorId: from.id,
         donorName: name,
         troops: amt,
@@ -134,7 +162,8 @@ function handleSentTroops(params: Record<string, unknown>): void {
   const to = findPlayer(name, playersById);
   if (!to) return;
 
-  useStore.getState().recordOutbound(to.id, "troops", amt);
+  record("msg", "sent.troops", { to: name, amt });
+  useStore.getState().recordOutbound(to.id, name!, "troops", amt);
 }
 
 function handleReceivedGoldTrade(
@@ -161,6 +190,15 @@ function handleReceivedGold(
   const amt = raw.goldAmount ? num(raw.goldAmount) : parseAmt(params.gold);
   if (!name || amt <= 0) return;
 
+  // Per-donor dedup: skip if same donor sent same type within 500ms
+  const donorKey = `${name}:gold`;
+  const lastProcessed = recentDonors.get(donorKey) || 0;
+  if (Date.now() - lastProcessed < DEDUP_WINDOW_MS) {
+    record("msg", "deduped", { from: name, type: "gold", amt });
+    return;
+  }
+  recentDonors.set(donorKey, Date.now());
+
   const { playersById } = useStore.getState();
   const from = findPlayer(name, playersById);
   if (!from) return;
@@ -168,8 +206,18 @@ function handleReceivedGold(
   const donorPlayer = playersById.get(from.id);
   const donorTroopSnapshot = donorPlayer ? Number(donorPlayer.troops || 0) : 0;
 
-  useStore.getState().recordInbound(from.id, "gold", amt);
+  useStore.getState().recordInbound(from.id, name!, "gold", amt, donorTroopSnapshot);
 
+  // Donation toast (always, regardless of reciprocate settings)
+  useStore.getState().addDonationToast({
+    id: Date.now() + Math.random(),
+    donorName: name!,
+    type: "gold",
+    amount: amt,
+    timestamp: Date.now(),
+  });
+
+  record("msg", "received.gold", { from: name, amt });
   log("[RECEIVED] Gold from", name, ":", amt);
 
   // Trigger reciprocation on gold received
@@ -181,7 +229,7 @@ function handleReceivedGold(
       });
     } else if (s.reciprocatePopupsEnabled) {
       s.addReciprocateNotification({
-        id: Date.now(),
+        id: Date.now() + Math.random(),
         donorId: from.id,
         donorName: name,
         troops: 0,
@@ -205,7 +253,8 @@ function handleSentGold(
   const to = findPlayer(name, playersById);
   if (!to) return;
 
-  useStore.getState().recordOutbound(to.id, "gold", amt);
+  record("msg", "sent.gold", { to: name, amt });
+  useStore.getState().recordOutbound(to.id, name!, "gold", amt);
 }
 
 // ---------- Drain buffered messages ----------

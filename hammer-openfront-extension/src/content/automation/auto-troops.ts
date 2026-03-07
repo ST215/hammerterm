@@ -19,6 +19,7 @@ import { estimateMaxTroops } from "@shared/logic/city";
 import { dTroops, short } from "@shared/utils";
 import { asSendTroops } from "../game/send";
 import { registerInterval } from "../cleanup";
+import { record } from "../../recorder";
 
 // ---------- Module-level state ----------
 
@@ -99,16 +100,17 @@ function asTroopsTick(): void {
   const me = readMyPlayer(s.lastPlayers, s.playersById, s.currentClientID, s.mySmallID);
   if (!me) return;
 
-  const troops = Number(me.troops || 0);
+  let troops = Number(me.troops || 0);
   // TODO: cityLevelSumByOwner is tracked by the worker hook (not yet wired).
   // For now pass an empty map; max troop estimates will be base-only.
   const cityLevelSumByOwner = new Map<number, number>();
   const maxT = estimateMaxTroops(me.tilesOwned ?? 0, me.smallID ?? 0, cityLevelSumByOwner);
   const troopPct = maxT > 0 ? (troops / maxT) * 100 : 0;
 
-  if (!maxT || troopPct < s.asTroopsThreshold) return;
-
-  const toSend = Math.max(1, Math.floor(troops * (s.asTroopsRatio / 100)));
+  if (!maxT || troopPct < s.asTroopsThreshold) {
+    record("auto-t", "skipped", { reason: "threshold", troopPct: Math.round(troopPct) });
+    return;
+  }
 
   for (const target of targets) {
     if (!useStore.getState().asTroopsRunning) return;
@@ -122,7 +124,19 @@ function asTroopsTick(): void {
     useStore.getState().updateAsTroopsSendTimes(target.id, last, nextSend);
 
     if (now >= nextSend) {
+      // Recompute amount each iteration (troops decrease after each send)
+      const toSend = Math.max(1, Math.floor(troops * (s.asTroopsRatio / 100)));
+      // Don't send if remaining troops would drop below threshold
+      const remainingPct = maxT > 0 ? ((troops - toSend) / maxT) * 100 : 0;
+      if (remainingPct < s.asTroopsThreshold) {
+        record("auto-t", "skipped", { target: target.name, reason: "below-threshold", remainingPct: Math.round(remainingPct) });
+        log(`[AUTO-TROOPS] Skipping ${target.name}: would drop below threshold (${remainingPct.toFixed(0)}%)`);
+        continue;
+      }
+
       if (asSendTroops(target.id, toSend)) {
+        record("auto-t", "sent", { target: target.name, amount: toSend });
+        troops -= toSend; // Track locally so next target sees reduced amount
         useStore.getState().updateAsTroopsSendTimes(target.id, now, now + cooldownMs);
         useStore.getState().addAsTroopsLog({
           ts: Date.now(),
@@ -130,6 +144,7 @@ function asTroopsTick(): void {
           amount: toSend,
         });
       } else {
+        record("auto-t", "error", { target: target.name, reason: "send-failed" });
         log(`[AUTO-TROOPS] Send failed to ${target.name}`);
       }
     }

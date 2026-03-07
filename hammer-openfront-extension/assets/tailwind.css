@@ -1,5 +1,28 @@
 @import "tailwindcss";
 
+/* IBM Plex Mono — bundled via Vite for shadow DOM compatibility */
+@font-face {
+  font-family: 'IBM Plex Mono';
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url('./fonts/IBMPlexMono-Regular.woff2') format('woff2');
+}
+@font-face {
+  font-family: 'IBM Plex Mono';
+  font-style: normal;
+  font-weight: 500;
+  font-display: swap;
+  src: url('./fonts/IBMPlexMono-Medium.woff2') format('woff2');
+}
+@font-face {
+  font-family: 'IBM Plex Mono';
+  font-style: normal;
+  font-weight: 600;
+  font-display: swap;
+  src: url('./fonts/IBMPlexMono-SemiBold.woff2') format('woff2');
+}
+
 @theme inline {
   /* Pixel-based spacing — avoids rem dependency on host page font-size in shadow DOM */
   --spacing-0_5: 2px;
@@ -25,17 +48,36 @@
   --text-xl: 15px;
   --text-2xl: 18px;
 
-  /* Hammer terminal color palette */
+  /* Font family */
+  --font-sans: 'IBM Plex Mono', ui-monospace, monospace;
+  --font-mono: 'IBM Plex Mono', ui-monospace, monospace;
+
+  /* Font weights */
+  --font-weight-normal: 400;
+  --font-weight-medium: 500;
+  --font-weight-semibold: 600;
+
+  /* Hammer color palette — core */
   --color-hammer-bg: #0b1220;
   --color-hammer-surface: #0d1520;
   --color-hammer-border: #1a3050;
   --color-hammer-text: #c8d6e5;
   --color-hammer-muted: #5a7a9a;
+  --color-hammer-header: #0a0f1a;
+
+  /* Elevation layers */
+  --color-hammer-raised: #111d2e;
+  --color-hammer-overlay: #162236;
+  --color-hammer-border-subtle: #142640;
+  --color-hammer-border-strong: #2a4a70;
+  --color-hammer-dim: #3a5a7a;
+
+  /* Semantic accents */
   --color-hammer-green: #7ff2a3;
   --color-hammer-blue: #7bb8ff;
   --color-hammer-gold: #ffcf5d;
   --color-hammer-red: #ff6b6b;
   --color-hammer-purple: #b088f9;
   --color-hammer-cyan: #4ecdc4;
-  --color-hammer-header: #0a0f1a;
+  --color-hammer-warn: #f0a040;
 }

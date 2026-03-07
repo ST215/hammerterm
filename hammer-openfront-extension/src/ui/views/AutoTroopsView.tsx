@@ -1,7 +1,8 @@
 import { useState, useCallback, useEffect, useMemo } from "react";
 import { useStore } from "@store/index";
 import { useMyPlayer, useTeammates, useAllies } from "@ui/hooks/usePlayerHelpers";
-import { short, comma, fmtSec, fmtDuration } from "@shared/utils";
+import { short, comma, fmtSec, fmtDuration, dTroops } from "@shared/utils";
+import { asTroopsStart, asTroopsStop } from "@content/automation/auto-troops";
 import type { AutoTroopsLogEntry, AutoTroopsTarget } from "@store/slices/auto-troops";
 
 const RATIO_PRESETS = [5, 10, 15, 20, 25, 33, 50, 75, 100];
@@ -87,6 +88,7 @@ function CountdownTimer({ nextSend }: { nextSend: number }) {
 export default function AutoTroopsView() {
   const running = useStore((s) => s.asTroopsRunning);
   const targets = useStore((s) => s.asTroopsTargets);
+  const playersById = useStore((s) => s.playersById);
   const ratio = useStore((s) => s.asTroopsRatio);
   const threshold = useStore((s) => s.asTroopsThreshold);
   const cooldownSec = useStore((s) => s.asTroopsCooldownSec);
@@ -96,7 +98,6 @@ export default function AutoTroopsView() {
   const allTeamMode = useStore((s) => s.asTroopsAllTeamMode);
   const allAlliesMode = useStore((s) => s.asTroopsAllAlliesMode);
 
-  const setRunning = useStore((s) => s.setAsTroopsRunning);
   const setRatio = useStore((s) => s.setAsTroopsRatio);
   const setThreshold = useStore((s) => s.setAsTroopsThreshold);
   const setCooldown = useStore((s) => s.setAsTroopsCooldown);
@@ -109,7 +110,7 @@ export default function AutoTroopsView() {
   const teammates = useTeammates();
   const allies = useAllies();
 
-  const myTroops = me?.troops ?? 0;
+  const myTroops = dTroops(me?.troops);
   const [customRatio, setCustomRatio] = useState("");
   const [customCooldown, setCustomCooldown] = useState(String(cooldownSec));
 
@@ -219,6 +220,24 @@ export default function AutoTroopsView() {
           {belowThreshold && myTroops > 0 && (
             <div className="mt-1 text-2xs text-hammer-red bg-hammer-red/10 rounded px-1 py-0_5">
               Below threshold -- send will be skipped
+            </div>
+          )}
+
+          {/* Recharge Bar */}
+          {running && (
+            <div className="mt-1">
+              <div className="flex items-center justify-between text-2xs mb-0_5">
+                <span className="text-hammer-muted">Send Ready</span>
+                <span className={belowThreshold ? "text-hammer-red" : "text-hammer-green"}>
+                  {belowThreshold ? "Recharging..." : "Ready"}
+                </span>
+              </div>
+              <div className="w-full bg-hammer-bg rounded h-1_5 overflow-hidden">
+                <div
+                  className={`h-full rounded transition-all ${belowThreshold ? "bg-hammer-gold" : "bg-hammer-green"}`}
+                  style={{ width: `${Math.min(100, belowThreshold ? ((myTroops - sendAmount) / (myTroops * threshold / 100 || 1)) * 100 : 100)}%` }}
+                />
+              </div>
             </div>
           )}
         </div>
@@ -376,7 +395,7 @@ export default function AutoTroopsView() {
       <Section title="Controls">
         <div className="flex gap-1">
           <button
-            onClick={() => setRunning(!running)}
+            onClick={() => running ? asTroopsStop() : asTroopsStart()}
             className={`flex-1 py-1 rounded text-xs font-bold border transition-colors cursor-pointer ${
               running
                 ? "bg-hammer-red/20 border-hammer-red text-hammer-red hover:bg-hammer-red/30"
@@ -397,7 +416,8 @@ export default function AutoTroopsView() {
             <div className="flex flex-col gap-0_5">
               {Object.entries(nextSend).map(([targetId, ns]) => {
                 const target = targets.find((t) => t.id === targetId);
-                const targetName = target?.name ?? targetId;
+                const player = playersById.get(targetId);
+                const targetName = target?.name || player?.displayName || player?.name || targetId;
                 return (
                   <div
                     key={targetId}

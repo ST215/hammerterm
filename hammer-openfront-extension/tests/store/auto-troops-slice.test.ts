@@ -84,6 +84,56 @@ describe("AutoTroopsSlice", () => {
     expect(store.getState().asTroopsLog[0].target).toBe("Alice");
   });
 
+  // ───────────────────────────────────────────────────────
+  // Target selection mode transitions
+  // ───────────────────────────────────────────────────────
+  test("toggleAllTeamMode ON clears manual targets", () => {
+    const store = createTestStore();
+    store.getState().addAsTroopsTarget("p1", "Alice");
+    store.getState().addAsTroopsTarget("p2", "Bob");
+    expect(store.getState().asTroopsTargets.length).toBe(2);
+
+    store.getState().toggleAsTroopsAllTeamMode();
+    expect(store.getState().asTroopsAllTeamMode).toBe(true);
+    expect(store.getState().asTroopsTargets.length).toBe(0);
+  });
+
+  test("toggleAllTeamMode OFF preserves empty targets", () => {
+    const store = createTestStore();
+    store.getState().toggleAsTroopsAllTeamMode(); // ON
+    store.getState().toggleAsTroopsAllTeamMode(); // OFF
+    expect(store.getState().asTroopsAllTeamMode).toBe(false);
+    expect(store.getState().asTroopsTargets.length).toBe(0);
+  });
+
+  test("toggleAllAlliesMode ON clears manual targets", () => {
+    const store = createTestStore();
+    store.getState().addAsTroopsTarget("p1", "Alice");
+    store.getState().toggleAsTroopsAllAlliesMode();
+    expect(store.getState().asTroopsAllAlliesMode).toBe(true);
+    expect(store.getState().asTroopsTargets.length).toBe(0);
+  });
+
+  test("addTarget clears group modes", () => {
+    const store = createTestStore();
+    store.getState().toggleAsTroopsAllTeamMode();
+    store.getState().toggleAsTroopsAllAlliesMode();
+    expect(store.getState().asTroopsAllTeamMode).toBe(true);
+    expect(store.getState().asTroopsAllAlliesMode).toBe(true);
+
+    store.getState().addAsTroopsTarget("p1", "Alice");
+    expect(store.getState().asTroopsAllTeamMode).toBe(false);
+    expect(store.getState().asTroopsAllAlliesMode).toBe(false);
+    expect(store.getState().asTroopsTargets.length).toBe(1);
+  });
+
+  test("addTarget does not duplicate existing target", () => {
+    const store = createTestStore();
+    store.getState().addAsTroopsTarget("p1", "Alice");
+    store.getState().addAsTroopsTarget("p1", "Alice");
+    expect(store.getState().asTroopsTargets.length).toBe(1);
+  });
+
   test("asTroopsLog capped at 50", () => {
     const store = createTestStore();
     for (let i = 0; i < 60; i++) {

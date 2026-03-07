@@ -17,6 +17,14 @@ export default defineContentScript({
   world: "MAIN",
 
   main() {
+    // If hooks from a previous extension context are still alive, resync and skip
+    const prev = (window as any).__HAMMER_MAIN__;
+    if (prev?.version) {
+      console.log("[Hammer:Main] Previous hooks found, re-syncing");
+      prev.resync?.();
+      return;
+    }
+
     console.log("[Hammer:Main] Main world hooks loading");
 
     // ---------------------------------------------------------------
@@ -105,6 +113,50 @@ export default defineContentScript({
     }
 
     // ============================
+    // WORKER HELPERS
+    // ============================
+
+    function processTileUpdates(packed: any[]) {
+      const serialized: string[] = [];
+      for (const tu of packed) {
+        try {
+          const big = typeof tu === "bigint" ? tu : BigInt(String(tu));
+          const ref = Number(big >> 16n);
+          const state = Number(big & 0xffffn);
+          const ownerSmall = state & 0x0fff;
+          tileOwnerByRef.set(ref, ownerSmall);
+          serialized.push(big.toString());
+        } catch {}
+      }
+      if (serialized.length > 0) {
+        emit("tiles", { packed: serialized });
+      }
+    }
+
+    function processGameUpdate(gameUpdate: any) {
+      try {
+        const updates = gameUpdate.updates;
+
+        // Player updates
+        const players = updates?.[GUT_PLAYER];
+        if (players?.length) {
+          emit("players", {
+            players: players.filter(Boolean),
+            tick: gameUpdate.tick,
+          });
+        }
+
+        // Packed tile updates
+        const packed = gameUpdate.packedTileUpdates;
+        if (packed?.length) {
+          processTileUpdates(packed);
+        }
+      } catch (err) {
+        console.warn("[Hammer:Main] Worker message error:", err);
+      }
+    }
+
+    // ============================
     // WORKER HOOK
     // ============================
 
@@ -127,40 +179,18 @@ export default defineContentScript({
 
       w.addEventListener("message", (e: MessageEvent) => {
         const msg = e.data;
-        if (!msg || msg.type !== "game_update" || !msg.gameUpdate) return;
-        try {
-          const updates = msg.gameUpdate.updates;
+        if (!msg) return;
 
-          // Player updates
-          const players = updates?.[GUT_PLAYER];
-          if (players?.length) {
-            emit("players", {
-              players: players.filter(Boolean),
-              tick: msg.gameUpdate.tick,
-            });
-          }
-
-          // Packed tile updates (keep locally + forward)
-          const packed = msg.gameUpdate.packedTileUpdates;
-          if (packed?.length) {
-            const serialized: string[] = [];
-            for (const tu of packed) {
-              try {
-                const big =
-                  typeof tu === "bigint" ? tu : BigInt(String(tu));
-                const ref = Number(big >> 16n);
-                const state = Number(big & 0xffffn);
-                const ownerSmall = state & 0x0fff;
-                tileOwnerByRef.set(ref, ownerSmall);
-                serialized.push(big.toString());
-              } catch {}
-            }
-            if (serialized.length > 0) {
-              emit("tiles", { packed: serialized });
+        if (msg.type === "game_update" && msg.gameUpdate) {
+          processGameUpdate(msg.gameUpdate);
+        } else if (msg.type === "game_update_batch") {
+          // New batched format: gameUpdates[] array
+          const batchUpdates = msg.gameUpdates;
+          if (Array.isArray(batchUpdates)) {
+            for (const gu of batchUpdates) {
+              if (gu) processGameUpdate(gu);
             }
           }
-        } catch (err) {
-          console.warn("[Hammer:Main] Worker message error:", err);
         }
       });
 
@@ -234,6 +264,15 @@ export default defineContentScript({
           }, delay),
         );
       }
+      // Slow poll for Worker too — game may start later
+      const wkInterval = setInterval(() => {
+        if (foundWorker) {
+          clearInterval(wkInterval);
+          return;
+        }
+        deepFindWorker();
+      }, 3000);
+      intervalIds.push(wkInterval);
     }
 
     // ============================
@@ -370,7 +409,6 @@ export default defineContentScript({
     // ============================
 
     let gvAttempts = 0;
-    const MAX_GV = 200;
 
     function hookGameView(): boolean {
       const ed = document.querySelector("events-display") as any;
@@ -426,23 +464,35 @@ export default defineContentScript({
       return true;
     }
 
+    // Never give up — game objects appear only after joining a match,
+    // which can be minutes after page load (lobby/queue wait).
+    // Fast poll for 20s, then slow poll every 2s indefinitely.
     const gvInterval = setInterval(() => {
       if (gameViewHooked) {
         clearInterval(gvInterval);
         return;
       }
-      if (++gvAttempts >= MAX_GV) {
-        clearInterval(gvInterval);
-        console.warn(
-          "[Hammer:Main] Failed to hook GameView after",
-          MAX_GV,
-          "attempts",
-        );
-        return;
-      }
+      gvAttempts++;
       hookGameView();
     }, 100);
     intervalIds.push(gvInterval);
+
+    // After 20s of fast polling, switch to slow polling
+    timeoutIds.push(
+      setTimeout(() => {
+        if (gameViewHooked) return;
+        clearInterval(gvInterval);
+        const slowGvInterval = setInterval(() => {
+          if (gameViewHooked) {
+            clearInterval(slowGvInterval);
+            return;
+          }
+          gvAttempts++;
+          hookGameView();
+        }, 2000);
+        intervalIds.push(slowGvInterval);
+      }, 20_000),
+    );
 
     // Try immediately + early delays
     hookGameView();
@@ -455,7 +505,6 @@ export default defineContentScript({
     // ============================
 
     let ebAttempts = 0;
-    const MAX_EB = 50;
 
     function probeClass(EventClass: any): any {
       const result: any = {
@@ -540,7 +589,10 @@ export default defineContentScript({
               "[Hammer:Main] Found EventBus via",
               selector,
             );
-            setTimeout(discoverEventClasses, 100);
+            // Retry discovery at increasing delays — game may not have registered listeners yet
+            for (const delay of [100, 500, 1000, 2000, 5000]) {
+              timeoutIds.push(setTimeout(discoverEventClasses, delay));
+            }
             return true;
           }
         } catch {}
@@ -560,7 +612,9 @@ export default defineContentScript({
             console.log(
               `[Hammer:Main] Found EventBus at window.${prop}`,
             );
-            setTimeout(discoverEventClasses, 100);
+            for (const delay of [100, 500, 1000, 2000, 5000]) {
+              timeoutIds.push(setTimeout(discoverEventClasses, delay));
+            }
             return true;
           }
         } catch {}
@@ -569,19 +623,27 @@ export default defineContentScript({
       return false;
     }
 
+    // Never give up — EventBus only exists after game starts.
+    // Fast poll for 10s, then slow poll every 2s indefinitely.
     const ebInterval = setInterval(() => {
-      if (findEventBus() || ebAttempts >= MAX_EB) {
+      if (findEventBus()) {
         clearInterval(ebInterval);
-        if (!eventBus && ebAttempts >= MAX_EB) {
-          console.warn(
-            "[Hammer:Main] EventBus not found after",
-            MAX_EB,
-            "attempts",
-          );
-        }
       }
     }, 200);
     intervalIds.push(ebInterval);
+
+    timeoutIds.push(
+      setTimeout(() => {
+        if (eventBus) return;
+        clearInterval(ebInterval);
+        const slowEbInterval = setInterval(() => {
+          if (findEventBus()) {
+            clearInterval(slowEbInterval);
+          }
+        }, 2000);
+        intervalIds.push(slowEbInterval);
+      }, 10_000),
+    );
 
     // ============================
     // BOOTSTRAP
@@ -675,6 +737,7 @@ export default defineContentScript({
 
     function scheduleBootstrap() {
       if (bootstrap()) return;
+      // Fast retries first
       for (const delay of [200, 500, 1000, 2000, 4000]) {
         timeoutIds.push(
           setTimeout(() => {
@@ -682,6 +745,15 @@ export default defineContentScript({
           }, delay),
         );
       }
+      // Then slow poll every 3s until game is found
+      const bsInterval = setInterval(() => {
+        if (bootstrapDone) {
+          clearInterval(bsInterval);
+          return;
+        }
+        bootstrap();
+      }, 3000);
+      intervalIds.push(bsInterval);
     }
 
     // ============================
@@ -727,49 +799,86 @@ export default defineContentScript({
     // ============================
 
     function getPlayerView(playerId: string): any {
-      // multiplayer
+      // multiplayer: try game-view element
       try {
         const gv = document.querySelector("game-view") as any;
-        if (gv?.clientGameRunner?.gameView?.players) {
-          const players = gv.clientGameRunner.gameView.players;
-          if (players.get) {
-            const pv = players.get(playerId);
+        const gameView = gv?.clientGameRunner?.gameView;
+        if (gameView) {
+          // Try direct Map lookup via player(id) method
+          if (typeof gameView.player === "function") {
+            try {
+              const pv = gameView.player(playerId);
+              if (pv) return pv;
+            } catch {}
+          }
+          // Try _players Map directly
+          if (gameView._players?.get) {
+            const pv = gameView._players.get(playerId);
             if (pv) return pv;
           }
-          if (Array.isArray(players)) {
-            return (
-              players.find(
-                (p: any) => p && p.id && p.id() === playerId,
-              ) ?? null
-            );
-          }
-          for (const p of players) {
-            if (p && p.id && p.id() === playerId) return p;
+          // Try players() method
+          if (typeof gameView.players === "function") {
+            const arr = gameView.players();
+            if (Array.isArray(arr)) {
+              const found = arr.find(
+                (p: any) => p && typeof p.id === "function" && p.id() === playerId,
+              );
+              if (found) return found;
+            }
           }
         }
-      } catch {}
+      } catch (err) {
+        console.warn("[Hammer:Main] getPlayerView multiplayer error:", err);
+      }
 
-      // singleplayer
+      // singleplayer: try events-display element
       try {
         const ed = document.querySelector("events-display") as any;
-        if (ed?.game?.players) {
-          const players = ed.game.players();
-          if (Array.isArray(players)) {
-            return (
-              players.find(
-                (p: any) => p && p.id && p.id() === playerId,
-              ) ?? null
-            );
+        const game = ed?.game;
+        if (game) {
+          // Try direct Map lookup via player(id) method
+          if (typeof game.player === "function") {
+            try {
+              const pv = game.player(playerId);
+              if (pv) return pv;
+            } catch {}
+          }
+          // Try _players Map directly
+          if (game._players?.get) {
+            const pv = game._players.get(playerId);
+            if (pv) return pv;
+          }
+          // Try players() method
+          if (typeof game.players === "function") {
+            const arr = game.players();
+            if (Array.isArray(arr)) {
+              const found = arr.find(
+                (p: any) => p && typeof p.id === "function" && p.id() === playerId,
+              );
+              if (found) return found;
+            }
           }
         }
-      } catch {}
+      } catch (err) {
+        console.warn("[Hammer:Main] getPlayerView singleplayer error:", err);
+      }
 
+      console.warn("[Hammer:Main] getPlayerView: no PlayerView found for", playerId);
       return null;
+    }
+
+    function ensureEventClasses() {
+      if (eventBus && Object.keys(eventClasses).length === 0) {
+        discoverEventClasses();
+      }
     }
 
     function handleSendCommand(data: any) {
       const { action, targetId, amount, recipientId, emojiIndex, key, targetPlayerId } =
         data;
+
+      // Retry discovery if classes are missing (they may not have been ready on first attempt)
+      ensureEventClasses();
 
       if (action === "troops") {
         if (eventBus && eventClasses.troops) {
@@ -783,8 +892,14 @@ export default defineContentScript({
               eventBus.emit(evt);
               emit("send-result", { action, success: true, method: "eventbus" });
               return;
-            } catch {}
+            } catch (err) {
+              console.warn("[Hammer:Main] Troops EventBus emit failed:", err);
+            }
+          } else {
+            console.warn("[Hammer:Main] getPlayerView returned null for:", targetId);
           }
+        } else {
+          console.warn("[Hammer:Main] Troops send: eventBus=", !!eventBus, "eventClasses.troops=", !!eventClasses.troops);
         }
         if (
           gameSocket &&
@@ -818,8 +933,14 @@ export default defineContentScript({
               eventBus.emit(evt);
               emit("send-result", { action, success: true, method: "eventbus" });
               return;
-            } catch {}
+            } catch (err) {
+              console.warn("[Hammer:Main] Gold EventBus emit failed:", err);
+            }
+          } else {
+            console.warn("[Hammer:Main] getPlayerView returned null for:", targetId);
           }
+        } else {
+          console.warn("[Hammer:Main] Gold send: eventBus=", !!eventBus, "eventClasses.gold=", !!eventClasses.gold);
         }
         if (
           gameSocket &&
@@ -853,7 +974,9 @@ export default defineContentScript({
               const evt = new eventClasses.emoji(pv, emojiIndex);
               eventBus.emit(evt);
               return;
-            } catch {}
+            } catch (err) {
+              console.warn("[Hammer:Main] Emoji EventBus emit failed:", err);
+            }
           }
         }
         if (
@@ -888,7 +1011,9 @@ export default defineContentScript({
               const evt = new eventClasses.quickchat(...args);
               eventBus.emit(evt);
               return;
-            } catch {}
+            } catch (err) {
+              console.warn("[Hammer:Main] QuickChat EventBus emit failed:", err);
+            }
           }
         }
         if (
@@ -1007,6 +1132,19 @@ export default defineContentScript({
     // ============================
 
     (window as any).__HAMMER_MAIN__ = {
+      resync() {
+        // Re-send all data to a newly connected bridge
+        bootstrapDone = false;
+        bootstrap();
+        refreshPlayers();
+        emit("status", { hook: "worker", found: foundWorker });
+        emit("status", { hook: "websocket", found: foundWebSocket });
+        emit("status", { hook: "gameview", found: gameViewHooked });
+        if (eventBus) {
+          emit("status", { hook: "eventbus", found: true, classes: Object.keys(eventClasses) });
+        }
+        console.log("[Hammer:Main] Re-synced to new bridge");
+      },
       cleanup() {
         Object.defineProperty(window, "Worker", {
           configurable: true,

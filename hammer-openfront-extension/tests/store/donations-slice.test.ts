@@ -31,7 +31,7 @@ describe("DonationsSlice", () => {
   // recordInbound
   // ───────────────────────────────────────────────────────
   test("recordInbound creates entry and adds to feedIn", () => {
-    store.getState().recordInbound("player1", "gold", 1000);
+    store.getState().recordInbound("player1", "Player1", "gold", 1000);
     const state = store.getState();
     expect(state.inbound.has("player1")).toBe(true);
     const rec = state.inbound.get("player1")!;
@@ -40,8 +40,8 @@ describe("DonationsSlice", () => {
   });
 
   test("recordInbound accumulates for same player", () => {
-    store.getState().recordInbound("player1", "gold", 1000);
-    store.getState().recordInbound("player1", "gold", 2000);
+    store.getState().recordInbound("player1", "Player1", "gold", 1000);
+    store.getState().recordInbound("player1", "Player1", "gold", 2000);
     const state = store.getState();
     const rec = state.inbound.get("player1")!;
     expect(rec.gold).toBe(3000);
@@ -52,7 +52,7 @@ describe("DonationsSlice", () => {
   // recordOutbound
   // ───────────────────────────────────────────────────────
   test("recordOutbound works same pattern", () => {
-    store.getState().recordOutbound("player2", "troops", 500);
+    store.getState().recordOutbound("player2", "Player2", "troops", 500);
     const state = store.getState();
     expect(state.outbound.has("player2")).toBe(true);
     const rec = state.outbound.get("player2")!;
@@ -89,11 +89,58 @@ describe("DonationsSlice", () => {
   // ───────────────────────────────────────────────────────
   // feedIn cap
   // ───────────────────────────────────────────────────────
-  test("feedIn capped at 200", () => {
-    for (let i = 0; i < 210; i++) {
-      store.getState().recordInbound(`player${i}`, "gold", 100);
+  test("feedIn capped at 5000", () => {
+    for (let i = 0; i < 5010; i++) {
+      store.getState().recordInbound(`player${i}`, `Player${i}`, "gold", 100);
     }
-    expect(store.getState().feedIn.length).toBeLessThanOrEqual(200);
+    expect(store.getState().feedIn.length).toBeLessThanOrEqual(5000);
+  });
+
+  // ───────────────────────────────────────────────────────
+  // donorTroops flows through (Fix 2 + Fix 3)
+  // ───────────────────────────────────────────────────────
+  test("recordInbound stores lastDonorTroops on DonationRecord", () => {
+    store.getState().recordInbound("player1", "Player1", "gold", 1000, 50000);
+    const rec = store.getState().inbound.get("player1")!;
+    expect(rec.lastDonorTroops).toBe(50000);
+  });
+
+  test("recordInbound updates lastDonorTroops on subsequent calls", () => {
+    store.getState().recordInbound("player1", "Player1", "gold", 1000, 50000);
+    store.getState().recordInbound("player1", "Player1", "gold", 2000, 30000);
+    const rec = store.getState().inbound.get("player1")!;
+    expect(rec.lastDonorTroops).toBe(30000);
+  });
+
+  test("recordInbound without donorTroops preserves existing value", () => {
+    store.getState().recordInbound("player1", "Player1", "gold", 1000, 50000);
+    store.getState().recordInbound("player1", "Player1", "gold", 2000);
+    const rec = store.getState().inbound.get("player1")!;
+    expect(rec.lastDonorTroops).toBe(50000);
+  });
+
+  test("donorTroops included in feedIn entries", () => {
+    store.getState().recordInbound("player1", "Player1", "troops", 500, 80000);
+    const feed = store.getState().feedIn[0];
+    expect(feed.donorTroops).toBe(80000);
+  });
+
+  test("feedIn entry without donorTroops has undefined", () => {
+    store.getState().recordInbound("player1", "Player1", "gold", 1000);
+    const feed = store.getState().feedIn[0];
+    expect(feed.donorTroops).toBeUndefined();
+  });
+
+  // ───────────────────────────────────────────────────────
+  // recordInbound troop accumulation
+  // ───────────────────────────────────────────────────────
+  test("recordInbound accumulates troops correctly", () => {
+    store.getState().recordInbound("player1", "Player1", "troops", 500);
+    store.getState().recordInbound("player1", "Player1", "troops", 300);
+    const rec = store.getState().inbound.get("player1")!;
+    expect(rec.troops).toBe(800);
+    expect(rec.troopsSends).toBe(2);
+    expect(rec.count).toBe(2);
   });
 
   // ───────────────────────────────────────────────────────
@@ -101,12 +148,12 @@ describe("DonationsSlice", () => {
   // ───────────────────────────────────────────────────────
   test("clearSeen empties dedup set", () => {
     // Record some events so the dedup set has entries
-    store.getState().recordInbound("player1", "gold", 1000);
+    store.getState().recordInbound("player1", "Player1", "gold", 1000);
     store.getState().clearSeen();
     // After clearing, the same event should be recordable again
     // (dedup won't block it)
     const sizeBefore = store.getState().inbound.get("player1")?.gold ?? 0;
-    store.getState().recordInbound("player1", "gold", 1000);
+    store.getState().recordInbound("player1", "Player1", "gold", 1000);
     const sizeAfter = store.getState().inbound.get("player1")?.gold ?? 0;
     expect(sizeAfter).toBeGreaterThanOrEqual(sizeBefore);
   });

@@ -17,11 +17,21 @@ import { readMyPlayer } from "@shared/logic/player-helpers";
 import { RECIPROCATE_COOLDOWN_MS } from "@shared/constants";
 import { short } from "@shared/utils";
 import { registerInterval } from "../cleanup";
+import { record } from "../../recorder";
+import type { ReciprocatePendingItem } from "@store/slices/reciprocate";
 
 // ---------- Module-level state ----------
 
 /** Per-player cooldown tracker: playerId -> last-sent timestamp */
 const reciprocateCooldowns = new Map<string, number>();
+
+/** The actual mutable queue — avoids Zustand immutable array thrashing */
+const pendingQueue: PendingItem[] = [];
+
+interface PendingItem extends ReciprocatePendingItem {
+  attempts: number;
+  cooldownUntil?: number;
+}
 
 /** Maximum age for a pending item before it is dropped (5 minutes) */
 const MAX_PENDING_AGE_MS = 300_000;
@@ -35,6 +45,19 @@ let processorTimer: ReturnType<typeof setInterval> | null = null;
 
 function log(...args: unknown[]): void {
   console.log("[Hammer]", ...args);
+}
+
+/** Sync the mutable queue to the Zustand store for UI display */
+function syncQueueToStore(): void {
+  useStore.setState({
+    reciprocatePending: pendingQueue.map((item) => ({
+      donorId: item.donorId,
+      donorName: item.donorName,
+      amountReceived: item.amountReceived,
+      receivedType: item.receivedType,
+      addedAt: item.addedAt,
+    })),
+  });
 }
 
 // ---------- handleAutoReciprocate ----------
@@ -54,21 +77,27 @@ export function handleAutoReciprocate(
   // Check cooldown first
   const lastSent = reciprocateCooldowns.get(donorId);
   if (lastSent && Date.now() - lastSent < RECIPROCATE_COOLDOWN_MS) {
+    record("recip", "skipped", { donor: donorName, reason: "cooldown" });
     log(`[RECIPROCATE] Cooldown active for ${donorName}, skipping`);
     return;
   }
 
+  record("recip", "queued", { donor: donorName, type: receivedType, amt: amountReceived });
+
   // Add to pending queue
-  useStore.getState().addReciprocatePending({
+  pendingQueue.push({
     donorId,
     donorName,
     amountReceived,
     receivedType: receivedType || "troops",
     addedAt: Date.now(),
+    attempts: 0,
   });
 
+  syncQueueToStore();
+
   log(
-    `[RECIPROCATE] Queued auto-send for ${donorName} (${amountReceived} ${receivedType}, queue size: ${useStore.getState().reciprocatePending.length})`,
+    `[RECIPROCATE] Queued auto-send for ${donorName} (${amountReceived} ${receivedType}, queue size: ${pendingQueue.length})`,
   );
 }
 
@@ -134,23 +163,21 @@ export function handleQuickReciprocate(
 
 /**
  * Processes the pending reciprocation queue. Called every 1000ms.
- * Handles up to 3 items per tick.
+ * Matches the old hammer.js approach: splice items out, process, re-queue failures.
  */
 function processReciprocateQueue(): void {
   const s = useStore.getState();
 
   if (!s.reciprocateEnabled || s.reciprocateMode !== "auto") {
-    // Clear queue if disabled
-    if (s.reciprocatePending.length > 0) {
-      // Remove all pending items one by one (reverse order to keep indices stable)
-      for (let i = s.reciprocatePending.length - 1; i >= 0; i--) {
-        s.removeReciprocatePending(i);
-      }
+    if (pendingQueue.length > 0) {
+      record("recip", "cleared", { reason: "disabled", count: pendingQueue.length });
+      pendingQueue.length = 0;
+      syncQueueToStore();
     }
     return;
   }
 
-  if (s.reciprocatePending.length === 0) return;
+  if (pendingQueue.length === 0) return;
 
   const me = readMyPlayer(s.lastPlayers, s.playersById, s.currentClientID, s.mySmallID);
   if (!me) {
@@ -162,30 +189,31 @@ function processReciprocateQueue(): void {
   const myTroops = Number(me.troops || 0);
   const now = Date.now();
 
-  // Process up to 3 pending reciprocations per interval
-  // We work with a snapshot and track which indices to remove
-  const pending = [...s.reciprocatePending];
-  const toProcess = pending.slice(0, 3);
-  const toRemove: number[] = [];
-  const toRequeue: typeof s.reciprocatePending = [];
+  // Take up to 3 items OUT of the queue (splice, not slice)
+  const batch = pendingQueue.splice(0, 3);
 
-  for (let i = 0; i < toProcess.length; i++) {
-    const item = toProcess[i];
+  for (const item of batch) {
+    // Skip items still waiting for cooldown (silently re-queue)
+    if (item.cooldownUntil && now < item.cooldownUntil) {
+      pendingQueue.push(item);
+      continue;
+    }
 
     // Check if too old (5 minutes)
     if (now - item.addedAt > MAX_PENDING_AGE_MS) {
+      record("recip", "dropped", { donor: item.donorName, reason: "stale", ageMs: now - item.addedAt });
       log(
         `[RECIPROCATE] Dropping stale request for ${item.donorName} (age: ${Math.floor((now - item.addedAt) / 1000)}s)`,
       );
-      toRemove.push(i);
-      continue;
+      continue; // Drop it — don't re-queue
     }
 
     // Check cooldown
     const lastSent = reciprocateCooldowns.get(item.donorId);
     if (lastSent && now - lastSent < RECIPROCATE_COOLDOWN_MS) {
-      log(`[RECIPROCATE] Cooldown active for ${item.donorName}, re-queueing`);
-      // Don't remove -- keep in queue
+      record("recip", "deferred", { donor: item.donorName, reason: "cooldown", resumeIn: RECIPROCATE_COOLDOWN_MS - (now - lastSent) });
+      item.cooldownUntil = lastSent + RECIPROCATE_COOLDOWN_MS;
+      pendingQueue.push(item);
       continue;
     }
 
@@ -198,9 +226,17 @@ function processReciprocateQueue(): void {
     const resourceLabel = sendTroops ? "troops" : "gold";
 
     if (amountToSend === 0) {
-      // Not enough resources -- keep in queue for retry (up to MAX_ATTEMPTS)
-      // Since the store doesn't track attempts, we drop after MAX_PENDING_AGE_MS
-      log(`[RECIPROCATE] Not enough ${resourceLabel}, keeping in queue`);
+      item.attempts++;
+      if (item.attempts < MAX_ATTEMPTS) {
+        record("recip", "retry", { donor: item.donorName, reason: "no-resource", attempt: item.attempts });
+        log(
+          `[RECIPROCATE] Not enough ${resourceLabel}, re-queueing (attempt ${item.attempts}/${MAX_ATTEMPTS})`,
+        );
+        pendingQueue.push(item); // Re-queue for later
+      } else {
+        record("recip", "dropped", { donor: item.donorName, reason: "max-attempts" });
+        log(`[RECIPROCATE] Max attempts reached for ${item.donorName}, dropping`);
+      }
       continue;
     }
 
@@ -228,21 +264,27 @@ function processReciprocateQueue(): void {
       // Set cooldown
       reciprocateCooldowns.set(item.donorId, now);
 
+      record("recip", "sent", { donor: item.donorName, type: resourceLabel, amt: amountToSend });
       log(
-        `[RECIPROCATE] Successfully sent ${amountToSend} ${resourceLabel} to ${item.donorName} (queue size: ${pending.length})`,
+        `[RECIPROCATE] Successfully sent ${amountToSend} ${resourceLabel} to ${item.donorName} (queue size: ${pendingQueue.length})`,
       );
-
-      toRemove.push(i);
     } else {
-      // Failed to send -- keep in queue for retry
-      log(`[RECIPROCATE] Send failed, keeping in queue for retry`);
+      // Failed to send — re-queue with attempt tracking
+      item.attempts++;
+      if (item.attempts < MAX_ATTEMPTS) {
+        record("recip", "error", { donor: item.donorName, reason: "send-failed", attempt: item.attempts });
+        log(
+          `[RECIPROCATE] Send failed, re-queueing (attempt ${item.attempts}/${MAX_ATTEMPTS})`,
+        );
+        pendingQueue.push(item);
+      } else {
+        record("recip", "dropped", { donor: item.donorName, reason: "max-attempts" });
+        log(`[RECIPROCATE] Max attempts reached for ${item.donorName}, dropping`);
+      }
     }
   }
 
-  // Remove processed items (in reverse order to keep indices stable)
-  for (let i = toRemove.length - 1; i >= 0; i--) {
-    useStore.getState().removeReciprocatePending(toRemove[i]);
-  }
+  syncQueueToStore();
 }
 
 // ---------- Start / Stop ----------

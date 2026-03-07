@@ -1,75 +1,89 @@
+import { useState } from "react";
 import { useStore } from "@store/index";
 import { useMyPlayer, useTeammates, useAllies } from "@ui/hooks/usePlayerHelpers";
-import { fmtDuration } from "@shared/utils";
 import { sendEmoji, sendQuickChat } from "@content/game/send";
+import { EMOJI_TABLE } from "@shared/emoji-table";
+import { Section, PresetButton } from "@ui/components/ds";
 
-const EMOJI_LIST = [
-  "\u{1F44D}", "\u2764\uFE0F", "\u{1F525}", "\u2B50", "\u{1F602}", "\u{1F622}", "\u{1F4AA}", "\u{1F3AF}", "\u2694\uFE0F", "\u{1F6E1}\uFE0F",
-  "\u{1F3F4}", "\u{1F3F3}\uFE0F", "\u{1F4B0}", "\u{1F451}", "\u{1F48E}", "\u{1F389}", "\u2705", "\u274C", "\u26A1", "\u{1F480}",
-  "\u{1F91D}", "\u{1F64F}", "\u{1F44B}", "\u{1FAE1}", "\u{1F608}", "\u{1F40D}", "\u{1F981}", "\u{1F43A}", "\u{1F3C6}", "\u{1F4A3}",
-];
+// All quickchat items from the game, organized by category
+const QC_NEEDS_TARGET = new Set([
+  "help.help_defend",
+  "attack.attack", "attack.mirv", "attack.focus", "attack.finish",
+  "defend.defend", "defend.defend_from", "defend.dont_attack", "defend.ally",
+  "misc.team_up",
+  "warnings.strong", "warnings.weak", "warnings.mirv_soon",
+  "warnings.has_allies", "warnings.no_allies",
+  "warnings.betrayed", "warnings.betrayed_me",
+  "warnings.getting_big", "warnings.danger_base",
+  "warnings.saving_for_mirv", "warnings.mirv_ready",
+  "warnings.snowballing", "warnings.cheating", "warnings.stop_trading",
+]);
 
 interface QCCategory {
-  label: string;
-  items: { key: string; label: string; needsTarget?: boolean }[];
+  title: string;
+  prefix: string;
+  keys: string[];
 }
 
 const QC_CATEGORIES: QCCategory[] = [
   {
-    label: "Greetings",
-    items: [
-      { key: "hello", label: "Hello" },
-      { key: "gl_hf", label: "GL HF" },
-      { key: "well_played", label: "Well Played" },
+    title: "Greetings",
+    prefix: "greet",
+    keys: [
+      "hello", "good_job", "good_luck", "have_fun", "gg",
+      "nice_to_meet", "well_played", "hi_again", "bye", "thanks",
+      "oops", "trust_me", "trust_broken", "ruining_games", "dont_do_that", "same_team",
     ],
   },
   {
-    label: "Help",
-    items: [
-      { key: "send_troops", label: "Send Troops" },
-      { key: "send_gold", label: "Send Gold" },
-      { key: "help", label: "Help" },
-      { key: "help_defend", label: "Help Defend" },
+    title: "Help",
+    prefix: "help",
+    keys: [
+      "troops", "troops_frontlines", "gold", "no_attack",
+      "sorry_attack", "alliance", "help_defend", "trade_partners",
     ],
   },
   {
-    label: "Attack",
-    items: [
-      { key: "attack", label: "Attack", needsTarget: true },
-      { key: "lets_attack_together", label: "Let's Attack Together", needsTarget: true },
-    ],
+    title: "Attack",
+    prefix: "attack",
+    keys: ["attack", "mirv", "focus", "finish", "build_warships"],
   },
   {
-    label: "Defend",
-    items: [
-      { key: "defend", label: "Defend", needsTarget: true },
-      { key: "lets_defend_together", label: "Let's Defend Together", needsTarget: true },
-    ],
+    title: "Defend",
+    prefix: "defend",
+    keys: ["defend", "defend_from", "dont_attack", "ally", "build_posts"],
   },
   {
-    label: "Misc",
-    items: [
-      { key: "thanks", label: "Thanks" },
-      { key: "gg", label: "GG" },
-      { key: "yes", label: "Yes" },
-      { key: "no", label: "No" },
+    title: "Misc",
+    prefix: "misc",
+    keys: ["go", "strategy", "fun", "team_up", "pr", "build_closer", "coastline"],
+  },
+  {
+    title: "Warnings",
+    prefix: "warnings",
+    keys: [
+      "strong", "weak", "mirv_soon", "number1_warning", "stalemate",
+      "has_allies", "no_allies", "betrayed", "betrayed_me",
+      "getting_big", "danger_base", "saving_for_mirv", "mirv_ready",
+      "snowballing", "cheating", "stop_trading",
     ],
   },
 ];
 
+function keyToLabel(key: string): string {
+  return key.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
+}
+
 function timeAgo(ts: number): string {
   const ms = Date.now() - ts;
-  if (ms < 60_000) return `${Math.floor(ms / 1000)}s ago`;
-  if (ms < 3_600_000) return `${Math.floor(ms / 60_000)}m ago`;
-  return `${Math.floor(ms / 3_600_000)}h ago`;
+  if (ms < 60_000) return `${Math.floor(ms / 1000)}s`;
+  if (ms < 3_600_000) return `${Math.floor(ms / 60_000)}m`;
+  return `${Math.floor(ms / 3_600_000)}h`;
 }
 
 export default function CommsView() {
-  const currentClientID = useStore((s) => s.currentClientID);
   const commsTargets = useStore((s) => s.commsTargets);
   const commsGroupMode = useStore((s) => s.commsGroupMode);
-  const commsOthersExpanded = useStore((s) => s.commsOthersExpanded);
-  const commsPendingQC = useStore((s) => s.commsPendingQC);
   const commsRecentSent = useStore((s) => s.commsRecentSent);
   const playersById = useStore((s) => s.playersById);
   const myTeam = useStore((s) => s.myTeam);
@@ -79,17 +93,15 @@ export default function CommsView() {
   const removeTarget = useStore((s) => s.removeCommsTarget);
   const clearTargets = useStore((s) => s.clearCommsTargets);
   const setGroupMode = useStore((s) => s.setCommsGroupMode);
-  const toggleOthers = useStore((s) => s.toggleCommsOthersExpanded);
-  const setPendingQC = useStore((s) => s.setCommsPendingQC);
   const addRecentSent = useStore((s) => s.addCommsRecentSent);
 
   const me = useMyPlayer();
   const teammates = useTeammates();
   const allies = useAllies();
 
-  const isConnected = currentClientID != null && currentClientID !== "";
+  const [pendingQCKey, setPendingQCKey] = useState<string | null>(null);
+  const [showOthers, setShowOthers] = useState(false);
 
-  // Others: alive non-team, non-ally players
   const others = [...playersById.values()].filter((p) => {
     if (!p.isAlive || !me || p.id === me.id) return false;
     if (p.team != null && myTeam != null && p.team === myTeam) return false;
@@ -116,260 +128,241 @@ export default function CommsView() {
     } else if (mode === "others") {
       for (const p of others) addTarget(p.id);
     }
-    // "clear" just clears
   }
 
-  function handleSendEmoji(emojiIdx: number) {
+  function handleSendEmoji(idx: number) {
     if (commsTargets.size === 0) return;
-    for (const tid of commsTargets) {
-      sendEmoji(tid, emojiIdx);
-    }
-    const emoji = EMOJI_LIST[emojiIdx] || "?";
-    addRecentSent({ type: "emoji", label: emoji, targetName: `${commsTargets.size} players`, ts: Date.now() });
-  }
-
-  function handleSendQC(key: string, label: string, needsTarget?: boolean) {
-    if (commsTargets.size === 0) return;
-    if (needsTarget) {
-      setPendingQC({ key, targetId: "" });
-      return;
-    }
-    for (const tid of commsTargets) {
-      sendQuickChat(tid, key);
-    }
-    addRecentSent({ type: "qc", label, targetName: `${commsTargets.size} players`, ts: Date.now() });
-  }
-
-  function handlePendingTargetSelect(targetId: string) {
-    if (!commsPendingQC) return;
-    for (const tid of commsTargets) {
-      sendQuickChat(tid, commsPendingQC.key, targetId);
-    }
-    const cat = QC_CATEGORIES.flatMap((c) => c.items).find((it) => it.key === commsPendingQC.key);
+    for (const tid of commsTargets) sendEmoji(tid, idx);
     addRecentSent({
-      type: "qc",
-      label: cat?.label || commsPendingQC.key,
-      targetName: `${commsTargets.size} players`,
+      type: "emoji",
+      label: EMOJI_TABLE[idx] || "?",
+      targetName: `${commsTargets.size} player${commsTargets.size > 1 ? "s" : ""}`,
       ts: Date.now(),
     });
-    setPendingQC(null);
   }
 
-  // Target picker mode
-  if (commsPendingQC) {
+  function handleSendQC(fullKey: string) {
+    if (commsTargets.size === 0) return;
+    if (QC_NEEDS_TARGET.has(fullKey)) {
+      setPendingQCKey(fullKey);
+      return;
+    }
+    for (const tid of commsTargets) sendQuickChat(tid, fullKey);
+    const label = fullKey.split(".")[1] || fullKey;
+    addRecentSent({
+      type: "qc",
+      label: keyToLabel(label),
+      targetName: `${commsTargets.size} player${commsTargets.size > 1 ? "s" : ""}`,
+      ts: Date.now(),
+    });
+  }
+
+  function handlePendingTarget(targetId: string) {
+    if (!pendingQCKey) return;
+    for (const tid of commsTargets) sendQuickChat(tid, pendingQCKey, targetId);
+    const label = pendingQCKey.split(".")[1] || pendingQCKey;
+    addRecentSent({
+      type: "qc",
+      label: keyToLabel(label),
+      targetName: `${commsTargets.size} player${commsTargets.size > 1 ? "s" : ""}`,
+      ts: Date.now(),
+    });
+    setPendingQCKey(null);
+  }
+
+  const noTargets = commsTargets.size === 0;
+
+  // Pending target picker overlay
+  if (pendingQCKey) {
     const allPlayers = [...playersById.values()].filter(
       (p) => p.isAlive && me && p.id !== me.id,
     );
+    const label = pendingQCKey.split(".")[1] || pendingQCKey;
     return (
-      <div className="flex flex-col gap-8 p-8">
-        <div className="bg-hammer-card border border-hammer-border p-8 flex flex-col gap-8">
-          <div className="text-hammer-gold text-sm font-bold">
-            Select Target Player
+      <div>
+        <Section title={`Target: ${keyToLabel(label)}`}>
+          <div className="text-2xs text-hammer-muted mb-1">
+            Select a player to target
           </div>
-          <div className="text-hammer-muted text-xs">
-            Choose a player to target with the quick chat command.
-          </div>
-          <div className="flex flex-wrap gap-4">
-            {allPlayers.map((p) => (
-              <button
-                key={p.id}
-                onClick={() => handlePendingTargetSelect(p.id)}
-                className="px-8 py-4 text-xs font-mono border border-hammer-border bg-hammer-bg text-hammer-text cursor-pointer hover:bg-hammer-green/10 hover:text-hammer-green"
-              >
-                {p.displayName || p.name || `ID:${p.smallID}`}
-              </button>
-            ))}
+          <div className="flex flex-wrap gap-0.5">
+            {allPlayers.map((p) => {
+              const isTeam = p.team != null && myTeam != null && p.team === myTeam;
+              const isAlly = p.smallID != null && myAllies.has(p.smallID);
+              const color = isTeam ? "text-hammer-blue" : isAlly ? "text-hammer-green" : "text-hammer-text";
+              return (
+                <button
+                  key={p.id}
+                  onClick={() => handlePendingTarget(p.id)}
+                  className={`px-1.5 py-0.5 text-2xs font-mono border border-hammer-border bg-hammer-bg cursor-pointer hover:bg-hammer-green/10 hover:text-hammer-green transition-colors rounded ${color}`}
+                >
+                  {p.displayName || p.name || `#${p.smallID}`}
+                </button>
+              );
+            })}
           </div>
           <button
-            onClick={() => setPendingQC(null)}
-            className="px-8 py-4 text-xs font-mono border border-hammer-border bg-hammer-bg text-hammer-red cursor-pointer hover:bg-hammer-red/10 self-start"
+            onClick={() => setPendingQCKey(null)}
+            className="mt-1.5 px-2 py-0.5 text-2xs border border-hammer-red/40 bg-hammer-red/10 text-hammer-red rounded cursor-pointer"
           >
             Cancel
           </button>
-        </div>
+        </Section>
       </div>
     );
   }
 
   return (
-    <div className="flex flex-col gap-8 p-8">
-      {/* Connection Status */}
-      <div className="flex items-center gap-4">
-        <span
-          className="inline-block w-2 h-2 rounded-full"
-          style={{ backgroundColor: isConnected ? "#7ff2a3" : "#ff6b6b" }}
-        />
-        <span className="text-hammer-text text-xs">
-          {isConnected ? "Connected" : "Disconnected"}
-        </span>
-      </div>
-
+    <div>
       {/* Send To */}
-      <div className="bg-hammer-card border border-hammer-border p-8 flex flex-col gap-8">
-        <div className="flex items-center justify-between">
-          <div className="flex items-center gap-4">
-            <span className="text-hammer-green text-sm font-bold">Send To</span>
-            <span className="text-hammer-muted text-xs">({commsTargets.size} selected)</span>
-          </div>
-        </div>
-
-        {/* Group buttons */}
-        <div className="flex flex-wrap gap-4">
-          {(["all", "team", "allies", "others", "clear"] as const).map((g) => (
-            <button
+      <Section title="Send To" count={commsTargets.size}>
+        <div className="flex items-center gap-1 mb-1.5">
+          {(["team", "allies", "all", "others", "clear"] as const).map((g) => (
+            <PresetButton
               key={g}
+              label={g === "clear" ? "Clear" : g.charAt(0).toUpperCase() + g.slice(1)}
+              active={commsGroupMode === g}
               onClick={() => handleGroupSelect(g)}
-              className={`px-8 py-4 text-xs font-mono border-none cursor-pointer ${
-                commsGroupMode === g
-                  ? "bg-hammer-green/20 text-hammer-green"
-                  : "bg-transparent text-hammer-muted hover:text-hammer-text"
-              }`}
-            >
-              {g.charAt(0).toUpperCase() + g.slice(1)}
-            </button>
+            />
           ))}
         </div>
 
-        {/* Team section */}
         {teammates.length > 0 && (
-          <div className="flex flex-col gap-4">
-            <span className="text-hammer-blue text-xs font-bold">Team</span>
-            <div className="flex flex-wrap gap-4">
+          <div className="mb-1">
+            <div className="text-2xs text-hammer-blue font-bold mb-0.5">Team ({teammates.length})</div>
+            <div className="flex flex-wrap gap-0.5">
               {teammates.map((p) => (
                 <button
                   key={p.id}
                   onClick={() => toggleTarget(p.id)}
-                  className={`px-8 py-4 text-xs font-mono border border-hammer-border cursor-pointer ${
+                  className={`px-1.5 py-0.5 text-2xs font-mono border rounded cursor-pointer transition-colors ${
                     commsTargets.has(p.id)
-                      ? "bg-hammer-green/20 text-hammer-green"
-                      : "bg-hammer-bg text-hammer-text hover:bg-hammer-blue/10"
+                      ? "bg-hammer-blue/20 border-hammer-blue text-hammer-blue"
+                      : "bg-hammer-bg border-hammer-border text-hammer-text hover:border-hammer-blue"
                   }`}
                 >
-                  {p.displayName || p.name || `ID:${p.smallID}`}
+                  {p.displayName || p.name || `#${p.smallID}`}
                 </button>
               ))}
             </div>
           </div>
         )}
 
-        {/* Allies section */}
         {allies.length > 0 && (
-          <div className="flex flex-col gap-4">
-            <span className="text-hammer-green text-xs font-bold">Allies</span>
-            <div className="flex flex-wrap gap-4">
+          <div className="mb-1">
+            <div className="text-2xs text-hammer-green font-bold mb-0.5">Allies ({allies.length})</div>
+            <div className="flex flex-wrap gap-0.5">
               {allies.map((p) => (
                 <button
                   key={p.id}
                   onClick={() => toggleTarget(p.id)}
-                  className={`px-8 py-4 text-xs font-mono border border-hammer-border cursor-pointer ${
+                  className={`px-1.5 py-0.5 text-2xs font-mono border rounded cursor-pointer transition-colors ${
                     commsTargets.has(p.id)
-                      ? "bg-hammer-green/20 text-hammer-green"
-                      : "bg-hammer-bg text-hammer-text hover:bg-hammer-green/10"
+                      ? "bg-hammer-green/20 border-hammer-green text-hammer-green"
+                      : "bg-hammer-bg border-hammer-border text-hammer-text hover:border-hammer-green"
                   }`}
                 >
-                  {p.displayName || p.name || `ID:${p.smallID}`}
+                  {p.displayName || p.name || `#${p.smallID}`}
                 </button>
               ))}
             </div>
           </div>
         )}
 
-        {/* Others section */}
-        <div className="flex flex-col gap-4">
-          <button
-            onClick={toggleOthers}
-            className="flex items-center gap-4 bg-transparent border-none cursor-pointer p-0 text-left"
-          >
-            <span className="text-hammer-muted text-xs font-bold">
-              Others ({others.length})
-            </span>
-            <span className="text-hammer-muted text-xs">
-              {commsOthersExpanded ? "\u25BC" : "\u25B6"}
-            </span>
-          </button>
-          {commsOthersExpanded && (
-            <div className="flex flex-wrap gap-4">
-              {others.map((p) => (
-                <button
-                  key={p.id}
-                  onClick={() => toggleTarget(p.id)}
-                  className={`px-8 py-4 text-xs font-mono border border-hammer-border cursor-pointer ${
-                    commsTargets.has(p.id)
-                      ? "bg-hammer-green/20 text-hammer-green"
-                      : "bg-hammer-bg text-hammer-text hover:bg-hammer-bg"
-                  }`}
-                >
-                  {p.displayName || p.name || `ID:${p.smallID}`}
-                </button>
-              ))}
-              {others.length === 0 && (
-                <span className="text-hammer-muted text-xs">No other players.</span>
-              )}
-            </div>
-          )}
-        </div>
-      </div>
+        {others.length > 0 && (
+          <div>
+            <button
+              onClick={() => setShowOthers(!showOthers)}
+              className="text-2xs text-hammer-muted hover:text-hammer-text bg-transparent border-none cursor-pointer p-0 font-mono"
+            >
+              Others ({others.length}) {showOthers ? "\u25BC" : "\u25B6"}
+            </button>
+            {showOthers && (
+              <div className="flex flex-wrap gap-0.5 mt-0.5">
+                {others.map((p) => (
+                  <button
+                    key={p.id}
+                    onClick={() => toggleTarget(p.id)}
+                    className={`px-1.5 py-0.5 text-2xs font-mono border rounded cursor-pointer transition-colors ${
+                      commsTargets.has(p.id)
+                        ? "bg-hammer-green/20 border-hammer-green text-hammer-green"
+                        : "bg-hammer-bg border-hammer-border text-hammer-muted hover:text-hammer-text"
+                    }`}
+                  >
+                    {p.displayName || p.name || `#${p.smallID}`}
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
 
-      {/* Emojis */}
-      <div className="bg-hammer-card border border-hammer-border p-8 flex flex-col gap-4">
-        <div className="text-hammer-green text-sm font-bold">Emojis</div>
-        <div className="flex flex-wrap gap-4">
-          {EMOJI_LIST.map((emoji, idx) => (
+        {noTargets && (
+          <div className="text-2xs text-hammer-dim mt-1">Select targets to send messages.</div>
+        )}
+      </Section>
+
+      {/* Emojis — bigger, tighter grid */}
+      <Section title="Emojis">
+        <div className="grid grid-cols-10 gap-px">
+          {EMOJI_TABLE.map((emoji, idx) => (
             <button
               key={idx}
               onClick={() => handleSendEmoji(idx)}
-              className="w-8 h-8 flex items-center justify-center text-sm bg-hammer-bg border border-hammer-border cursor-pointer hover:bg-hammer-green/10"
+              className="w-8 h-8 flex items-center justify-center text-lg bg-hammer-bg border border-hammer-border cursor-pointer hover:bg-hammer-green/10 transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
               title={emoji}
-              disabled={commsTargets.size === 0}
+              disabled={noTargets}
             >
               {emoji}
             </button>
           ))}
         </div>
-        {commsTargets.size === 0 && (
-          <span className="text-hammer-muted text-xs">Select targets to send emojis.</span>
-        )}
-      </div>
+      </Section>
 
-      {/* Quick Chat */}
-      <div className="bg-hammer-card border border-hammer-border p-8 flex flex-col gap-8">
-        <div className="text-hammer-green text-sm font-bold">Quick Chat</div>
+      {/* Quick Chat — all 72 items */}
+      <Section title="Quick Chat">
+        <div className="text-2xs text-hammer-dim mb-1">Target items shown in gold</div>
         {QC_CATEGORIES.map((cat) => (
-          <div key={cat.label} className="flex flex-col gap-4">
-            <span className="text-hammer-muted text-xs font-bold">{cat.label}</span>
-            <div className="flex flex-wrap gap-4">
-              {cat.items.map((item) => (
-                <button
-                  key={item.key}
-                  onClick={() => handleSendQC(item.key, item.label, item.needsTarget)}
-                  className="px-8 py-4 text-xs font-mono border border-hammer-border bg-hammer-bg text-hammer-text cursor-pointer hover:bg-hammer-blue/10 hover:text-hammer-blue disabled:opacity-50 disabled:cursor-not-allowed"
-                  disabled={commsTargets.size === 0}
-                >
-                  {item.label}
-                </button>
-              ))}
+          <div key={cat.prefix} className="mb-1.5 last:mb-0">
+            <div className="text-2xs text-hammer-muted font-bold mb-0.5">{cat.title}</div>
+            <div className="flex flex-wrap gap-px">
+              {cat.keys.map((key) => {
+                const fullKey = `${cat.prefix}.${key}`;
+                const needsTarget = QC_NEEDS_TARGET.has(fullKey);
+                return (
+                  <button
+                    key={fullKey}
+                    onClick={() => handleSendQC(fullKey)}
+                    className={`px-1 py-0.5 text-2xs font-mono border bg-hammer-bg cursor-pointer transition-colors disabled:opacity-30 disabled:cursor-not-allowed ${
+                      needsTarget
+                        ? "border-hammer-gold/30 text-hammer-gold hover:border-hammer-gold hover:bg-hammer-gold/10"
+                        : "border-hammer-border text-hammer-text hover:border-hammer-blue hover:text-hammer-blue"
+                    }`}
+                    disabled={noTargets}
+                  >
+                    {keyToLabel(key)}
+                  </button>
+                );
+              })}
             </div>
           </div>
         ))}
-        {commsTargets.size === 0 && (
-          <span className="text-hammer-muted text-xs">Select targets to send quick chats.</span>
-        )}
-      </div>
+      </Section>
 
-      {/* Recent Sent */}
+      {/* Recent */}
       {commsRecentSent.length > 0 && (
-        <div className="bg-hammer-card border border-hammer-border p-8 flex flex-col gap-4">
-          <div className="text-hammer-green text-sm font-bold">Recent Sent</div>
-          {commsRecentSent.slice(0, 15).map((entry, i) => (
-            <div key={i} className="flex items-center gap-8 text-xs">
-              <span className="text-hammer-muted">{timeAgo(entry.ts)}</span>
-              <span className="text-hammer-text">
-                {entry.type === "emoji" ? entry.label : `"${entry.label}"`}
-              </span>
-              <span className="text-hammer-muted">{"\u2192"} {entry.targetName}</span>
-            </div>
-          ))}
-        </div>
+        <Section title="Recent" count={commsRecentSent.length}>
+          <div className="flex flex-col gap-0.5">
+            {commsRecentSent.slice(0, 10).map((entry, i) => (
+              <div key={i} className="flex items-center gap-1.5 text-2xs">
+                <span className="text-hammer-dim w-3 text-right">{timeAgo(entry.ts)}</span>
+                <span className="text-hammer-text">
+                  {entry.type === "emoji" ? entry.label : `"${entry.label}"`}
+                </span>
+                <span className="text-hammer-dim">{"\u2192"} {entry.targetName}</span>
+              </div>
+            ))}
+          </div>
+        </Section>
       )}
     </div>
   );

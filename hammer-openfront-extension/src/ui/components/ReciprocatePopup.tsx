@@ -1,6 +1,7 @@
 import { useEffect, useCallback } from "react";
 import { useStore } from "@store/index";
-import { short, dTroops } from "@shared/utils";
+import { short } from "@shared/utils";
+import { handleQuickReciprocate } from "@content/automation/reciprocate-engine";
 
 const PCT_OPTIONS = [10, 25, 50, 75, 100] as const;
 
@@ -29,18 +30,10 @@ export default function ReciprocatePopup() {
   }, [notifications, notifyDuration, popupsEnabled, dismissNotification]);
 
   const handleSend = useCallback(
-    (donorId: string, pct: number, troops: number, gold: number) => {
-      const troopAmt = Math.round(dTroops(troops) * (pct / 100));
-      const goldAmt = Math.round(gold * (pct / 100));
-
-      // Dispatch send commands via the game bridge
-      const hammer = (window as any).__HAMMER__;
-      if (hammer?.sendTroops && troopAmt > 0) {
-        hammer.sendTroops(donorId, troopAmt);
-      }
-      if (hammer?.sendGold && goldAmt > 0) {
-        hammer.sendGold(donorId, goldAmt);
-      }
+    (n: (typeof notifications)[0], pct: number) => {
+      // Cross-resource: received troops → send gold, received gold → send troops
+      const sendType = n.troops > 0 ? "gold" : "troops";
+      handleQuickReciprocate(n.donorId, n.donorName, pct, n.id, sendType);
     },
     [],
   );
@@ -54,55 +47,73 @@ export default function ReciprocatePopup() {
     <div
       className="fixed font-mono"
       style={{
-        top: 120,
+        top: 80,
         right: 20,
         zIndex: 2147483647,
         display: "flex",
         flexDirection: "column",
-        gap: 8,
-        maxWidth: 320,
+        gap: 10,
+        maxWidth: 380,
       }}
     >
       {visible.map((n) => {
         const hasTroops = n.troops > 0;
         const hasGold = n.gold > 0;
-        const troopDisplay = dTroops(n.troops);
-        const parts: string[] = [];
-        if (hasTroops) parts.push(`${short(troopDisplay)} troops`);
-        if (hasGold) parts.push(`${short(n.gold)} gold`);
+        // Cross-resource: show what you'll send back (opposite resource)
+        const sendType = hasTroops ? "gold" : "troops";
+        const sendLabel = hasTroops ? "Send Gold Back" : "Send Troops Back";
 
         return (
           <div
             key={n.id}
-            className="bg-hammer-bg border border-hammer-border text-hammer-text text-xs p-2"
-            style={{ borderRadius: 4 }}
+            className="bg-hammer-bg border border-hammer-border text-hammer-text"
+            style={{
+              borderRadius: 6,
+              borderLeft: "4px solid var(--color-hammer-green)",
+              padding: "12px 14px",
+              boxShadow: "0 4px 20px rgba(0,0,0,0.5)",
+            }}
           >
             {/* Header */}
-            <div className="flex items-center justify-between mb-1">
-              <span className="text-hammer-green font-bold">
+            <div className="flex items-center justify-between mb-2">
+              <span className="text-hammer-green font-bold text-base">
                 {n.donorName}
               </span>
               <button
-                className="text-hammer-muted hover:text-hammer-red cursor-pointer bg-transparent border-none font-mono text-xs"
+                className="text-hammer-muted hover:text-hammer-red cursor-pointer bg-transparent border-none font-mono text-sm px-1"
                 onClick={() => dismissNotification(n.id)}
                 title="Dismiss"
               >
                 X
               </button>
             </div>
-            <div className="text-hammer-text mb-1">
-              sent you {parts.join(" + ")}
+
+            {/* What they sent */}
+            <div className="text-sm mb-3">
+              <span className="text-hammer-text">sent you </span>
+              {hasTroops && (
+                <span className="text-hammer-blue font-bold">{short(n.troops)} troops</span>
+              )}
+              {hasTroops && hasGold && <span className="text-hammer-muted"> + </span>}
+              {hasGold && (
+                <span className="text-hammer-gold font-bold">{short(n.gold)} gold</span>
+              )}
+            </div>
+
+            {/* Send type label */}
+            <div className="text-2xs text-hammer-muted uppercase tracking-wider mb-1.5">
+              {sendLabel}
             </div>
 
             {/* Percentage buttons */}
-            <div className="flex gap-1 flex-wrap">
+            <div className="flex gap-2 flex-wrap">
               {PCT_OPTIONS.map((pct) => (
                 <button
                   key={pct}
-                  className="px-1.5 py-0.5 text-2xs font-mono border border-hammer-border bg-hammer-surface text-hammer-muted hover:text-hammer-green hover:border-hammer-green cursor-pointer"
-                  style={{ borderRadius: 2 }}
-                  onClick={() => handleSend(n.donorId, pct, n.troops, n.gold)}
-                  title={formatPctTooltip(pct, troopDisplay, n.gold, hasTroops, hasGold)}
+                  className="px-3 py-1.5 text-sm font-mono font-bold border border-hammer-border bg-hammer-surface text-hammer-text hover:text-hammer-green hover:border-hammer-green cursor-pointer transition-colors"
+                  style={{ borderRadius: 4, minWidth: 48 }}
+                  onClick={() => handleSend(n, pct)}
+                  title={`Send ${pct}% of your ${sendType}`}
                 >
                   {pct}%
                 </button>
@@ -113,17 +124,4 @@ export default function ReciprocatePopup() {
       })}
     </div>
   );
-}
-
-function formatPctTooltip(
-  pct: number,
-  troops: number,
-  gold: number,
-  hasTroops: boolean,
-  hasGold: boolean,
-): string {
-  const parts: string[] = [];
-  if (hasTroops) parts.push(`${short(Math.round(troops * (pct / 100)))} troops`);
-  if (hasGold) parts.push(`${short(Math.round(gold * (pct / 100)))} gold`);
-  return `Send back ${pct}%: ${parts.join(" + ")}`;
 }

@@ -12,6 +12,8 @@ export default function HeaderButtons() {
   const paused = useStore((s) => s.paused);
   const togglePaused = useStore((s) => s.togglePaused);
   const setUIVisible = useStore((s) => s.setUIVisible);
+  const recorderOn = useStore((s) => s.recorderOn);
+  const toggleRecorder = useStore((s) => s.toggleRecorder);
 
   const handleSize = () => {
     setSizeIdx((sizeIdx + 1) % SIZES.length);
@@ -46,6 +48,15 @@ export default function HeaderButtons() {
         style={{ minWidth: 20, textAlign: "center" }}
       >
         {minimized ? "\u25B2" : "\u25BC"}
+      </button>
+
+      {/* Record toggle */}
+      <button
+        className={`${btnClass} ${recorderOn ? "text-hammer-red" : ""}`}
+        onClick={toggleRecorder}
+        title={recorderOn ? "Stop recording" : "Start recording"}
+      >
+        {recorderOn ? "\u25CF REC" : "REC"}
       </button>
 
       {/* Pause / Resume */}

@@ -2,6 +2,7 @@ import { useState, useCallback, useEffect, useMemo } from "react";
 import { useStore } from "@store/index";
 import { useMyPlayer, useTeammates, useAllies } from "@ui/hooks/usePlayerHelpers";
 import { short, comma, fmtSec, fmtDuration } from "@shared/utils";
+import { asGoldStart, asGoldStop } from "@content/automation/auto-gold";
 import type { AutoGoldTarget, AutoGoldLogEntry } from "@store/slices/auto-gold";
 
 const RATIO_PRESETS = [5, 10, 15, 20, 25, 33, 50, 75, 100];
@@ -87,6 +88,7 @@ function CountdownTimer({ nextSend }: { nextSend: number }) {
 export default function AutoGoldView() {
   const running = useStore((s) => s.asGoldRunning);
   const targets = useStore((s) => s.asGoldTargets);
+  const playersById = useStore((s) => s.playersById);
   const ratio = useStore((s) => s.asGoldRatio);
   const threshold = useStore((s) => s.asGoldThreshold);
   const cooldownSec = useStore((s) => s.asGoldCooldownSec);
@@ -96,7 +98,6 @@ export default function AutoGoldView() {
   const allTeamMode = useStore((s) => s.asGoldAllTeamMode);
   const allAlliesMode = useStore((s) => s.asGoldAllAlliesMode);
 
-  const setRunning = useStore((s) => s.setAsGoldRunning);
   const setRatio = useStore((s) => s.setAsGoldRatio);
   const setThreshold = useStore((s) => s.setAsGoldThreshold);
   const setCooldown = useStore((s) => s.setAsGoldCooldown);
@@ -227,6 +228,24 @@ export default function AutoGoldView() {
           {belowThreshold && myGold > 0 && (
             <div className="mt-1 text-2xs text-hammer-red bg-hammer-red/10 rounded px-1 py-0_5">
               Below threshold -- send will be skipped
+            </div>
+          )}
+
+          {/* Recharge Bar */}
+          {running && (
+            <div className="mt-1">
+              <div className="flex items-center justify-between text-2xs mb-0_5">
+                <span className="text-hammer-muted">Send Ready</span>
+                <span className={belowThreshold ? "text-hammer-red" : "text-hammer-green"}>
+                  {belowThreshold ? "Recharging..." : "Ready"}
+                </span>
+              </div>
+              <div className="w-full bg-hammer-bg rounded h-1_5 overflow-hidden">
+                <div
+                  className={`h-full rounded transition-all ${belowThreshold ? "bg-hammer-gold" : "bg-hammer-green"}`}
+                  style={{ width: `${Math.min(100, belowThreshold ? (remaining / (threshold || 1)) * 100 : 100)}%` }}
+                />
+              </div>
             </div>
           )}
         </div>
@@ -404,7 +423,7 @@ export default function AutoGoldView() {
       <Section title="Controls">
         <div className="flex gap-1">
           <button
-            onClick={() => setRunning(!running)}
+            onClick={() => running ? asGoldStop() : asGoldStart()}
             className={`flex-1 py-1 rounded text-xs font-bold border transition-colors cursor-pointer ${
               running
                 ? "bg-hammer-red/20 border-hammer-red text-hammer-red hover:bg-hammer-red/30"
@@ -425,7 +444,8 @@ export default function AutoGoldView() {
             <div className="flex flex-col gap-0_5">
               {Object.entries(nextSend).map(([targetId, ns]) => {
                 const target = targets.find((t) => t.id === targetId);
-                const targetName = target?.name ?? targetId;
+                const player = playersById.get(targetId);
+                const targetName = target?.name || player?.displayName || player?.name || targetId;
                 return (
                   <div
                     key={targetId}

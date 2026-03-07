@@ -13,6 +13,7 @@ export interface PlayerData {
 }
 
 export interface DonationRecord {
+  displayName: string;
   gold: number;
   troops: number;
   count: number;
@@ -77,6 +78,48 @@ export interface CIAAlert {
   ts: number;
   level: string;
   message: string;
+}
+
+// --- CIA v2 types (rolling window + severity) ---
+
+export type AlertSeverity = "critical" | "warning" | "info" | "note";
+export type AlertCategory = "economy" | "threat" | "relationship" | "milestone";
+
+export interface CIAAlertV2 {
+  ts: number;
+  severity: AlertSeverity;
+  category: AlertCategory;
+  title: string;
+  detail: string;
+  playerNames: string[];
+}
+
+export interface CIARollingRates {
+  windowMs: number;
+  goldIn: number;
+  goldOut: number;
+  troopsIn: number;
+  troopsOut: number;
+  transferCount: number;
+}
+
+export interface CIAPlayerRelationship {
+  playerId: string;
+  name: string;
+  team: number | null;
+  isTeammate: boolean;
+  isAlly: boolean;
+  recentGoldSent: number;
+  recentGoldRecv: number;
+  recentTroopsSent: number;
+  recentTroopsRecv: number;
+  lifetimeGoldSent: number;
+  lifetimeGoldRecv: number;
+  lifetimeTroopsSent: number;
+  lifetimeTroopsRecv: number;
+  lastActivity: number;
+  feedsNonAlly: boolean;
+  feedsNonAllyDetail: string | null;
 }
 
 export interface CIAState {

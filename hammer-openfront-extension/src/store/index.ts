@@ -8,6 +8,8 @@ import { createAutoGoldSlice, type AutoGoldSlice } from "./slices/auto-gold";
 import { createReciprocateSlice, type ReciprocateSlice } from "./slices/reciprocate";
 import { createCommsSlice, type CommsSlice } from "./slices/comms";
 import { createCIASlice, type CIASlice } from "./slices/cia";
+import { createDonationToastsSlice, type DonationToastsSlice } from "./slices/donation-toasts";
+import { createRecorderSlice, type RecorderSlice } from "./slices/recorder";
 
 export type HammerStore = UISlice &
   PlayerSlice &
@@ -16,7 +18,9 @@ export type HammerStore = UISlice &
   AutoGoldSlice &
   ReciprocateSlice &
   CommsSlice &
-  CIASlice;
+  CIASlice &
+  DonationToastsSlice &
+  RecorderSlice;
 
 export const useStore = create<HammerStore>()(
   subscribeWithSelector((...a) => ({
@@ -28,5 +32,7 @@ export const useStore = create<HammerStore>()(
     ...createReciprocateSlice(...a),
     ...createCommsSlice(...a),
     ...createCIASlice(...a),
+    ...createDonationToastsSlice(...a),
+    ...createRecorderSlice(...a),
   })),
 );

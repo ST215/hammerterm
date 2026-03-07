@@ -7,6 +7,7 @@
 
 import { useStore } from "@store/index";
 import { sendToMainWorld } from "../bridge";
+import { record } from "../../recorder";
 
 // ---------- Helpers ----------
 
@@ -18,6 +19,7 @@ function log(...args: unknown[]): void {
 
 export function asSendTroops(targetId: string, amount: number | null): boolean {
   sendToMainWorld({ action: "troops", targetId, amount });
+  record("cmd", "send.troops", { targetId, amount: amount ?? 0 });
   log("[SEND] Troops command dispatched:", targetId, amount);
   return true;
 }
@@ -26,6 +28,7 @@ export function asSendTroops(targetId: string, amount: number | null): boolean {
 
 export function asSendGold(targetId: string, amount: number): boolean {
   sendToMainWorld({ action: "gold", targetId, amount });
+  record("cmd", "send.gold", { targetId, amount });
   log("[SEND] Gold command dispatched:", targetId, amount);
   return true;
 }
