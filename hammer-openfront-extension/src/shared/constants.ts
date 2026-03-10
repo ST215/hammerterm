@@ -45,18 +45,20 @@ export const SIZES = [
 
 export const RECIPROCATE_COOLDOWN_MS = 10_000;
 
-// Palantir smart reciprocation constants
-export const PALANTIR_FLOOR = 10_000;
-export const PALANTIR_CAP_PCT = 0.4;
-export const PALANTIR_TEAM_BONUS = 1.25;
-export const PALANTIR_LOYALTY_STEP = 0.05;
-export const PALANTIR_LOYALTY_MAX = 0.5;
+// Palantir smart reciprocation constants — range-based scoring system
+// Exploit filters
+export const PALANTIR_MIN_DONATION = 5_000;
+export const PALANTIR_MIN_SACRIFICE = 0.02;
+// Scoring weights (must sum to 1.0)
+export const PALANTIR_W_SACRIFICE = 0.4;
+export const PALANTIR_W_LOYALTY = 0.3;
+export const PALANTIR_W_TEAMMATE = 0.2;
+export const PALANTIR_W_SIZE = 0.1;
+// Loyalty normalizes over this many sends (score 1.0 at this count)
+export const PALANTIR_LOYALTY_SENDS = 5;
+// Default sacrifice when donor troop count is unknown
 export const PALANTIR_DEFAULT_SACRIFICE = 0.1;
-export const PALANTIR_SMALL_THRESHOLD = 50_000;
-export const PALANTIR_MID_THRESHOLD = 200_000;
-export const PALANTIR_SELF_SMALL = 0.6;
-export const PALANTIR_SELF_MID = 1.2;
-export const PALANTIR_SELF_DOMINANT = 1.5;
+// Minimum gold to bother sending
 export const PALANTIR_MIN_GOLD = 1_000;
 
 export const LOG_LEVELS = { DEBUG: 0, INFO: 1, WARN: 2, ERROR: 3 } as const;

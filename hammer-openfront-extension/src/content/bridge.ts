@@ -80,6 +80,9 @@ function startDashboardSync(port: chrome.runtime.Port): void {
         fn(...(msg.args || []));
       }
     }
+    if (msg.type === "dismiss-notification" && msg.id != null) {
+      useStore.getState().dismissReciprocateNotification(msg.id);
+    }
     if (msg.type === "sync-local" && msg.data) {
       // Dashboard pushes LOCAL_KEY changes so automation stays in sync
       record("bridge", "sync-local", { keys: Object.keys(msg.data) });

@@ -212,7 +212,6 @@ export default function CIAView() {
     });
   }, []);
 
-  const netFlow = myRates.goldIn + myRates.troopsIn - myRates.goldOut - myRates.troopsOut;
   const windowLabel = WINDOW_OPTIONS.find((w) => w.ms === ciaWindowMs)?.label ?? "5m";
 
   return (
@@ -222,12 +221,18 @@ export default function CIAView() {
         <div className="grid grid-cols-2 gap-1">
           <StatCard label="Gold In" value={short(myRates.goldIn)} color="text-hammer-green" sub={`in ${windowLabel}`} />
           <StatCard label="Troops In" value={short(myRates.troopsIn)} color="text-hammer-blue" sub={`in ${windowLabel}`} />
-          <StatCard label="Gold Out" value={short(myRates.goldOut)} color="text-hammer-gold" sub={`in ${windowLabel}`} />
+          <StatCard label="Troops Out" value={short(myRates.troopsOut)} color="text-hammer-blue" sub={`out ${windowLabel}`} />
+        </div>
+        <div className="grid grid-cols-2 gap-1 mt-1">
           <StatCard
-            label="Net Flow"
-            value={short(netFlow)}
-            color={netFlow >= 0 ? "text-hammer-green" : "text-hammer-red"}
-            sub={netFlow >= 0 ? "positive" : "negative"}
+            label="Net Gold"
+            value={short(myRates.goldIn - myRates.goldOut)}
+            color={myRates.goldIn - myRates.goldOut >= 0 ? "text-hammer-green" : "text-hammer-red"}
+          />
+          <StatCard
+            label="Net Troops"
+            value={short(myRates.troopsIn - myRates.troopsOut)}
+            color={myRates.troopsIn - myRates.troopsOut >= 0 ? "text-hammer-green" : "text-hammer-red"}
           />
         </div>
 
@@ -303,7 +308,7 @@ export default function CIAView() {
             {feedingNonAlly.length > 0 && (
               <div className="mt-2">
                 <div className="text-2xs text-hammer-muted uppercase tracking-wider mb-1">
-                  Feeding Non-Ally
+                  Cross-Team Transfers
                   <span className="ml-1 text-hammer-dim">({feedingNonAlly.length})</span>
                 </div>
                 <div className="flex flex-col gap-0_5">
@@ -342,7 +347,7 @@ export default function CIAView() {
               return (
                 <div
                   key={i}
-                  className={`flex items-center gap-1_5 text-2xs px-1 py-0_5 rounded ${isLarge ? "bg-hammer-warn/5" : ""}`}
+                  className={`flex items-center gap-1 text-2xs px-1 py-px rounded ${isLarge ? "bg-hammer-warn/5" : ""}`}
                 >
                   <span className="text-hammer-dim w-4 shrink-0 text-right">{timeAgo(t.ts)}</span>
                   <div className={`w-1 h-1 rounded-full shrink-0 ${t.type === "gold" ? "bg-hammer-gold" : "bg-hammer-blue"}`} />

@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { useStore } from "@store/index";
-import { deserialize } from "@shared/serialize";
+import { deserialize, mapsEqual, setsEqual } from "@shared/serialize";
 import HammerApp from "@ui/components/App";
 
 // Keys that are local to the dashboard UI — never overwritten by snapshots.
@@ -15,7 +15,7 @@ const LOCAL_KEYS = new Set([
   // Reciprocate config
   "reciprocateMode", "reciprocateAutoPct", "reciprocateNotifyDuration",
   "reciprocateEnabled", "reciprocateOnGold", "reciprocateOnTroops",
-  "reciprocatePopupsEnabled",
+  "reciprocatePopupsEnabled", "palantirMinPct", "palantirMaxPct",
   // Auto-troops config
   "asTroopsRunning", "asTroopsTargets", "asTroopsRatio",
   "asTroopsThreshold", "asTroopsCooldownSec",
@@ -74,6 +74,22 @@ export default function DashboardApp() {
                 patch[key] = val;
               }
             }
+
+            // Preserve dismissed state for notifications: if the dashboard
+            // dismissed a notification, keep it dismissed even if the game tab
+            // snapshot still has it as not-dismissed (race window before next sync)
+            if (patch.reciprocateNotifications && Array.isArray(patch.reciprocateNotifications)) {
+              const current = useStore.getState().reciprocateNotifications;
+              const dismissedIds = new Set(
+                current.filter((n) => n.dismissed).map((n) => n.id),
+              );
+              if (dismissedIds.size > 0) {
+                patch.reciprocateNotifications = patch.reciprocateNotifications.map(
+                  (n: any) => dismissedIds.has(n.id) ? { ...n, dismissed: true } : n,
+                );
+              }
+            }
+
             useStore.setState(patch);
             if (!connected) setConnected(true);
           }
@@ -89,10 +105,29 @@ export default function DashboardApp() {
         // Reverse sync: push LOCAL_KEY changes back to the content script
         unsub = useStore.subscribe((state, prev) => {
           if (!port) return;
+
+          // Forward notification dismissals to game tab
+          if (state.reciprocateNotifications !== prev.reciprocateNotifications) {
+            for (const n of state.reciprocateNotifications) {
+              const old = prev.reciprocateNotifications.find((p) => p.id === n.id);
+              if (n.dismissed && old && !old.dismissed) {
+                port.postMessage({ type: "dismiss-notification", id: n.id });
+              }
+            }
+          }
+
           const changes: Record<string, unknown> = {};
           for (const key of LOCAL_KEYS) {
-            if ((state as any)[key] !== (prev as any)[key]) {
-              changes[key] = (state as any)[key];
+            const curr = (state as any)[key];
+            const old = (prev as any)[key];
+            // Deep equality for Maps/Sets to avoid feedback loops from
+            // deserialize() creating new instances with identical content
+            if (curr instanceof Map && old instanceof Map) {
+              if (!mapsEqual(curr, old)) changes[key] = curr;
+            } else if (curr instanceof Set && old instanceof Set) {
+              if (!setsEqual(curr, old)) changes[key] = curr;
+            } else if (curr !== old) {
+              changes[key] = curr;
             }
           }
           if (Object.keys(changes).length > 0) {

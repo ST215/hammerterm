@@ -30,6 +30,26 @@ export function serialize(obj: any): any {
   return obj;
 }
 
+/** Shallow equality check for two Maps (same keys → same values by ===) */
+export function mapsEqual<K, V>(a: Map<K, V>, b: Map<K, V>): boolean {
+  if (a === b) return true;
+  if (a.size !== b.size) return false;
+  for (const [k, v] of a) {
+    if (!b.has(k) || b.get(k) !== v) return false;
+  }
+  return true;
+}
+
+/** Shallow equality check for two Sets (same elements by ===) */
+export function setsEqual<T>(a: Set<T>, b: Set<T>): boolean {
+  if (a === b) return true;
+  if (a.size !== b.size) return false;
+  for (const v of a) {
+    if (!b.has(v)) return false;
+  }
+  return true;
+}
+
 export function deserialize(obj: any): any {
   if (obj === null || obj === undefined) return obj;
   if (typeof obj !== "object") return obj;

@@ -2,17 +2,10 @@ import { useStore } from "@store/index";
 import { useMyPlayer } from "@ui/hooks/usePlayerHelpers";
 import { short, comma, dTroops, num } from "@shared/utils";
 import { handleQuickReciprocate } from "@content/automation/reciprocate-engine";
-import { getPhase, getSelfMod } from "@shared/logic/palantir";
 import { Section, StatCard, PresetButton, Badge, PercentBar } from "@ui/components/ds";
 import type { PalantirDecision } from "@store/slices/reciprocate";
 
 const PCT_OPTIONS = [10, 25, 50, 75, 100] as const;
-
-const PHASE_CONFIG = {
-  conserving: { label: "CONSERVING", color: "gold" as const, mod: 0.6 },
-  growing: { label: "GROWING", color: "green" as const, mod: 1.2 },
-  dominant: { label: "DOMINANT", color: "purple" as const, mod: 1.5 },
-} as const;
 
 function timeAgo(ts: number): string {
   const ms = Date.now() - ts;
@@ -22,23 +15,48 @@ function timeAgo(ts: number): string {
 }
 
 function loyaltyDots(sendCount: number): string {
-  const filled = Math.min(sendCount, 10);
-  return "\u25CF".repeat(filled) + "\u25CB".repeat(10 - filled);
+  const filled = Math.min(sendCount, 5);
+  return "\u25CF".repeat(filled) + "\u25CB".repeat(5 - filled);
+}
+
+function scoreColor(score: number): string {
+  if (score >= 0.7) return "bg-hammer-green";
+  if (score >= 0.4) return "bg-hammer-gold";
+  return "bg-hammer-red";
 }
 
 function PalantirDecisionCard({ p }: { p: PalantirDecision }) {
-  const phaseCfg = PHASE_CONFIG[p.phase];
   const sacPct = Math.round(p.sacrificeRatio * 100);
+  const scorePct = Math.round(p.score * 100);
+
+  if (p.skipped) {
+    return (
+      <div className="text-2xs text-hammer-red mt-1">
+        Filtered: {p.skipReason === "min-donation" ? "donation too small" : "trivial sacrifice"}
+      </div>
+    );
+  }
 
   return (
     <div className="flex flex-col gap-1 mt-1.5">
-      {/* Sacrifice bar */}
+      {/* Overall score bar */}
+      <div className="flex items-center gap-2">
+        <span className="text-2xs text-hammer-muted w-14">Score</span>
+        <div className="flex-1">
+          <PercentBar value={scorePct} max={100} color={scoreColor(p.score)} />
+        </div>
+        <span className="text-2xs text-hammer-text w-16 text-right font-bold">
+          {scorePct}% → {Math.round(p.percentage)}%
+        </span>
+      </div>
+
+      {/* Sacrifice */}
       <div className="flex items-center gap-2">
         <span className="text-2xs text-hammer-muted w-14">Sacrifice</span>
         <div className="flex-1">
           <PercentBar value={sacPct} max={100} color={sacPct > 50 ? "bg-hammer-green" : sacPct > 10 ? "bg-hammer-gold" : "bg-hammer-red"} />
         </div>
-        <span className="text-2xs text-hammer-text w-20 text-right">
+        <span className="text-2xs text-hammer-text w-16 text-right">
           {sacPct}% ({short(p.donorTroops > 0 ? p.donorTroops : 0)})
         </span>
       </div>
@@ -47,29 +65,17 @@ function PalantirDecisionCard({ p }: { p: PalantirDecision }) {
       <div className="flex items-center gap-2">
         <span className="text-2xs text-hammer-muted w-14">Loyalty</span>
         <span className="text-2xs text-hammer-gold tracking-tighter">{loyaltyDots(p.sendCount)}</span>
-        <span className="text-2xs text-hammer-dim ml-auto">{p.loyaltyMultiplier.toFixed(2)}x ({p.sendCount}x)</span>
+        <span className="text-2xs text-hammer-dim ml-auto">{p.sendCount}x sends</span>
       </div>
 
       {/* Team */}
-      {p.teammateMultiplier > 1 && (
+      {p.teammateScore > 0 && (
         <div className="flex items-center gap-2">
           <span className="text-2xs text-hammer-muted w-14">Team</span>
           <Badge label="TM" color="blue" />
-          <span className="text-2xs text-hammer-dim ml-auto">{p.teammateMultiplier}x</span>
+          <span className="text-2xs text-hammer-dim ml-auto">+{Math.round(p.teammateScore * 20)}% weight</span>
         </div>
       )}
-
-      {/* Phase */}
-      <div className="flex items-center gap-2">
-        <span className="text-2xs text-hammer-muted w-14">Phase</span>
-        <Badge label={phaseCfg.label} color={phaseCfg.color} />
-        <span className="text-2xs text-hammer-dim ml-auto">{p.selfMod}x</span>
-      </div>
-
-      {/* Calculation flow */}
-      <div className="text-2xs text-hammer-dim border-t border-hammer-border-subtle pt-1 mt-0.5">
-        {short(p.rawAmount)} raw → {short(p.flooredAmount)} floor → {short(p.cappedAmount)} cap
-      </div>
     </div>
   );
 }
@@ -81,6 +87,10 @@ export default function ReciprocateView() {
   const setMode = useStore((s) => s.setReciprocateMode);
   const autoPct = useStore((s) => s.reciprocateAutoPct);
   const setAutoPct = useStore((s) => s.setReciprocateAutoPct);
+  const palantirMinPct = useStore((s) => s.palantirMinPct);
+  const setPalantirMinPct = useStore((s) => s.setPalantirMinPct);
+  const palantirMaxPct = useStore((s) => s.palantirMaxPct);
+  const setPalantirMaxPct = useStore((s) => s.setPalantirMaxPct);
   const onTroops = useStore((s) => s.reciprocateOnTroops);
   const toggleOnTroops = useStore((s) => s.toggleReciprocateOnTroops);
   const onGold = useStore((s) => s.reciprocateOnGold);
@@ -100,11 +110,6 @@ export default function ReciprocateView() {
   const me = useMyPlayer();
   const myTroops = me ? dTroops(me.troops) : 0;
   const myGold = me ? num(me.gold) : 0;
-  const myRawTroops = me ? Number(me.troops || 0) : 0;
-
-  // Current power phase for Palantir status display
-  const phase = getPhase(myRawTroops);
-  const phaseCfg = PHASE_CONFIG[phase];
 
   // Build sent-back totals from reciprocate history
   const sentBackByDonor = new Map<string, { troops: number; gold: number }>();
@@ -206,6 +211,42 @@ export default function ReciprocateView() {
           </div>
         )}
 
+        {/* Palantir range config */}
+        {mode === "palantir" && (
+          <div className="flex flex-col gap-1.5 mb-1.5">
+            <div className="flex items-center gap-2">
+              <span className="text-2xs text-hammer-muted w-10">Range:</span>
+              <span className="text-2xs text-hammer-text">{palantirMinPct}%</span>
+              <input
+                type="range"
+                min={5}
+                max={palantirMaxPct - 5}
+                value={palantirMinPct}
+                onChange={(e) => setPalantirMinPct(parseInt(e.target.value))}
+                className="flex-1 accent-hammer-purple h-1"
+              />
+              <span className="text-2xs text-hammer-dim">min</span>
+            </div>
+            <div className="flex items-center gap-2">
+              <span className="text-2xs text-hammer-muted w-10"></span>
+              <span className="text-2xs text-hammer-text">{palantirMaxPct}%</span>
+              <input
+                type="range"
+                min={palantirMinPct + 5}
+                max={100}
+                value={palantirMaxPct}
+                onChange={(e) => setPalantirMaxPct(parseInt(e.target.value))}
+                className="flex-1 accent-hammer-purple h-1"
+              />
+              <span className="text-2xs text-hammer-dim">max</span>
+            </div>
+            <div className="text-2xs text-hammer-dim border-t border-hammer-border-subtle pt-1">
+              Palantir scores each donor and sends {palantirMinPct}–{palantirMaxPct}% of your resources.
+              Exploiters get filtered out.
+            </div>
+          </div>
+        )}
+
         {/* Manual mode options */}
         {mode === "manual" && (
           <div className="flex items-center gap-2 mb-1.5">
@@ -230,35 +271,20 @@ export default function ReciprocateView() {
           </div>
         )}
 
-        {/* Palantir explanation */}
-        {mode === "palantir" && (
-          <div className="text-2xs text-hammer-dim mt-1 border-t border-hammer-border-subtle pt-1">
-            Palantir analyzes each donation's sacrifice level, donor loyalty,
-            team relationship, and your power phase to calculate optimal reciprocation.
-          </div>
-        )}
-
-        {/* Cross-resource explanation */}
-        {mode !== "palantir" && (
+        {/* Cross-resource explanation (non-palantir) */}
+        {mode !== "palantir" && mode !== "manual" && (
           <div className="text-2xs text-hammer-dim mt-1 border-t border-hammer-border-subtle pt-1">
             Cross-resource: receive troops → send gold back, receive gold → send troops back
           </div>
         )}
       </Section>
 
-      {/* Resources + Palantir Phase */}
-      <Section title={mode === "palantir" ? "Status" : "My Resources"}>
+      {/* Resources */}
+      <Section title="My Resources">
         <div className="grid grid-cols-2 gap-1">
           <StatCard label="Troops" value={short(myTroops)} color="text-hammer-blue" />
           <StatCard label="Gold" value={short(myGold)} color="text-hammer-gold" />
         </div>
-        {mode === "palantir" && (
-          <div className="flex items-center gap-2 mt-1.5">
-            <Badge label={phaseCfg.label} color={phaseCfg.color} />
-            <span className="text-2xs text-hammer-text">{short(myRawTroops)} troops</span>
-            <span className="text-2xs text-hammer-dim ml-auto">{getSelfMod(phase)}x generosity</span>
-          </div>
-        )}
       </Section>
 
       {/* Pending Queue (auto/palantir mode) */}
@@ -285,7 +311,7 @@ export default function ReciprocateView() {
         <Section title="Palantir Decisions" count={palantirHistory.length}>
           {palantirHistory.length === 0 ? (
             <div className="text-hammer-dim text-2xs">
-              No Palantir decisions yet. Donations will appear here with full formula breakdowns.
+              No Palantir decisions yet. Donations will appear here with score breakdowns.
             </div>
           ) : (
             <div className="flex flex-col gap-1.5">
@@ -307,12 +333,10 @@ export default function ReciprocateView() {
 
                     {/* Result line */}
                     <div className="flex items-center gap-1 text-2xs mb-0.5">
-                      <span className="text-hammer-green font-bold">→ Sent {sentLabel}</span>
-                      {p.cappedAmount < p.flooredAmount && (
-                        <span className="text-hammer-warn">(capped)</span>
-                      )}
-                      {p.flooredAmount > p.rawAmount && (
-                        <span className="text-hammer-gold">(floored)</span>
+                      {p.skipped ? (
+                        <span className="text-hammer-red font-bold">✕ Filtered ({p.skipReason})</span>
+                      ) : (
+                        <span className="text-hammer-green font-bold">→ Sent {sentLabel} ({Math.round(p.percentage)}%)</span>
                       )}
                     </div>
 
@@ -425,7 +449,9 @@ export default function ReciprocateView() {
                       <span className="text-hammer-gold">{short(entry.goldSent)}g</span>
                     )}
                     {entry.palantir ? (
-                      <span className="text-hammer-dim">{Math.round(entry.palantir.sacrificeRatio * 100)}% sac</span>
+                      <span className="text-hammer-dim">
+                        {Math.round(entry.palantir.score * 100)}pt → {Math.round(entry.palantir.percentage)}%
+                      </span>
                     ) : (
                       <span className="text-hammer-dim">{entry.percentage}%</span>
                     )}

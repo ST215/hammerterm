@@ -9,6 +9,7 @@ export interface AutoTroopsLogEntry {
 export interface AutoTroopsTarget {
   id: string;
   name: string;
+  type?: "TM" | "AL";
 }
 
 const LOG_CAP = 50;
@@ -31,7 +32,7 @@ export interface AutoTroopsSlice {
   setAsTroopsCooldown: (sec: number) => void;
   toggleAsTroopsAllTeamMode: () => void;
   toggleAsTroopsAllAlliesMode: () => void;
-  addAsTroopsTarget: (id: string, name: string) => void;
+  addAsTroopsTarget: (id: string, name: string, type?: "TM" | "AL") => void;
   removeAsTroopsTarget: (id: string) => void;
   clearAsTroopsTargets: () => void;
   addAsTroopsLog: (entry: AutoTroopsLogEntry) => void;
@@ -78,11 +79,11 @@ export const createAutoTroopsSlice: StateCreator<AutoTroopsSlice, [], [], AutoTr
         : { asTroopsAllAlliesMode: false };
     }),
 
-  addAsTroopsTarget: (id, name) =>
+  addAsTroopsTarget: (id, name, type) =>
     set((s) => {
       if (s.asTroopsTargets.some((t) => t.id === id)) return s;
       return {
-        asTroopsTargets: [...s.asTroopsTargets, { id, name }],
+        asTroopsTargets: [...s.asTroopsTargets, { id, name, type }],
         asTroopsAllTeamMode: false,
         asTroopsAllAlliesMode: false,
       };

@@ -87,4 +87,24 @@
   --color-hammer-purple: #b088f9;
   --color-hammer-cyan: #4ecdc4;
   --color-hammer-warn: #f0a040;
+
+  /* Animations */
+  --animate-slide-in: slide-in 0.25s ease-out;
+  --animate-fade-in: fade-in 0.2s ease-out;
+  --animate-pulse-glow: pulse-glow 1.5s ease-in-out;
+}
+
+@keyframes slide-in {
+  from { opacity: 0; transform: translateX(20px); }
+  to { opacity: 1; transform: translateX(0); }
+}
+
+@keyframes fade-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@keyframes pulse-glow {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(127, 242, 163, 0); }
+  50% { box-shadow: 0 0 8px 2px rgba(127, 242, 163, 0.4); }
 }

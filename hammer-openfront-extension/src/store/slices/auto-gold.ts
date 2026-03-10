@@ -9,6 +9,7 @@ export interface AutoGoldLogEntry {
 export interface AutoGoldTarget {
   id: string;
   name: string;
+  type?: "TM" | "AL";
 }
 
 const LOG_CAP = 50;
@@ -31,7 +32,7 @@ export interface AutoGoldSlice {
   setAsGoldCooldown: (sec: number) => void;
   toggleAsGoldAllTeamMode: () => void;
   toggleAsGoldAllAlliesMode: () => void;
-  addAsGoldTarget: (id: string, name: string) => void;
+  addAsGoldTarget: (id: string, name: string, type?: "TM" | "AL") => void;
   removeAsGoldTarget: (id: string) => void;
   clearAsGoldTargets: () => void;
   addAsGoldLog: (entry: AutoGoldLogEntry) => void;
@@ -75,11 +76,11 @@ export const createAutoGoldSlice: StateCreator<AutoGoldSlice, [], [], AutoGoldSl
         : { asGoldAllAlliesMode: false };
     }),
 
-  addAsGoldTarget: (id, name) =>
+  addAsGoldTarget: (id, name, type) =>
     set((s) => {
       if (s.asGoldTargets.some((t) => t.id === id)) return s;
       return {
-        asGoldTargets: [...s.asGoldTargets, { id, name }],
+        asGoldTargets: [...s.asGoldTargets, { id, name, type }],
         asGoldAllTeamMode: false,
         asGoldAllAlliesMode: false,
       };

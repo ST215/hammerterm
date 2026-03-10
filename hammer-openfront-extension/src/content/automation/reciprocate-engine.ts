@@ -248,19 +248,28 @@ function processReciprocateQueue(): void {
         myGold: myResource,
         myTroops,
         isTeammate,
+        minPct: s.palantirMinPct,
+        maxPct: s.palantirMaxPct,
       });
 
+      // Skip exploit-filtered donations
+      if (result.skipped) {
+        record("recip", "skipped", { donor: item.donorName, reason: result.skipReason, amt: item.amountReceived });
+        log(`[RECIPROCATE] Palantir filtered ${item.donorName}: ${result.skipReason} (sent ${item.amountReceived})`);
+        continue;
+      }
+
       amountToSend = result.final;
-      percentage = Math.round(result.sacrificeRatio * 100);
+      percentage = Math.round(result.percentage);
       palantirDecision = {
+        score: result.score,
+        percentage: result.percentage,
         sacrificeRatio: result.sacrificeRatio,
-        loyaltyMultiplier: result.loyaltyMultiplier,
-        teammateMultiplier: result.teammateMultiplier,
-        selfMod: result.selfMod,
-        phase: result.phase,
-        rawAmount: result.rawAmount,
-        flooredAmount: result.flooredAmount,
-        cappedAmount: result.cappedAmount,
+        sacrificeScore: result.sacrificeScore,
+        loyaltyScore: result.loyaltyScore,
+        teammateScore: result.teammateScore,
+        sizeScore: result.sizeScore,
+        skipped: false,
         donorTroops: item.donorTroops ?? 0,
         sendCount: item.sendCount ?? 1,
       };
@@ -313,7 +322,7 @@ function processReciprocateQueue(): void {
       reciprocateCooldowns.set(item.donorId, now);
 
       const palantirLog = palantirDecision
-        ? { palantir: true, sacrifice: palantirDecision.sacrificeRatio, loyalty: palantirDecision.loyaltyMultiplier, phase: palantirDecision.phase, raw: palantirDecision.rawAmount, final: amountToSend }
+        ? { palantir: true, score: palantirDecision.score, pct: palantirDecision.percentage, sacrifice: palantirDecision.sacrificeRatio, final: amountToSend }
         : {};
       record("recip", "sent", { donor: item.donorName, type: resourceLabel, amt: amountToSend, ...palantirLog });
       log(

@@ -1,15 +1,15 @@
 import type { StateCreator } from "zustand";
-import type { PalantirPhase } from "@shared/logic/palantir";
 
 export interface PalantirDecision {
+  score: number;
+  percentage: number;
   sacrificeRatio: number;
-  loyaltyMultiplier: number;
-  teammateMultiplier: number;
-  selfMod: number;
-  phase: PalantirPhase;
-  rawAmount: number;
-  flooredAmount: number;
-  cappedAmount: number;
+  sacrificeScore: number;
+  loyaltyScore: number;
+  teammateScore: number;
+  sizeScore: number;
+  skipped: boolean;
+  skipReason?: string;
   donorTroops: number;
   sendCount: number;
 }
@@ -50,6 +50,8 @@ export interface ReciprocateSlice {
   reciprocateEnabled: boolean;
   reciprocateMode: "manual" | "auto" | "palantir";
   reciprocateAutoPct: number;
+  palantirMinPct: number;
+  palantirMaxPct: number;
   reciprocateOnTroops: boolean;
   reciprocateOnGold: boolean;
   reciprocatePopupsEnabled: boolean;
@@ -62,6 +64,8 @@ export interface ReciprocateSlice {
   toggleReciprocateEnabled: () => void;
   setReciprocateMode: (mode: "manual" | "auto" | "palantir") => void;
   setReciprocateAutoPct: (pct: number) => void;
+  setPalantirMinPct: (pct: number) => void;
+  setPalantirMaxPct: (pct: number) => void;
   toggleReciprocateOnTroops: () => void;
   toggleReciprocateOnGold: () => void;
   toggleReciprocatePopupsEnabled: () => void;
@@ -81,6 +85,8 @@ export const createReciprocateSlice: StateCreator<ReciprocateSlice, [], [], Reci
   reciprocateEnabled: true,
   reciprocateMode: "manual",
   reciprocateAutoPct: 50,
+  palantirMinPct: 25,
+  palantirMaxPct: 50,
   reciprocateOnTroops: true,
   reciprocateOnGold: false,
   reciprocatePopupsEnabled: true,
@@ -96,6 +102,10 @@ export const createReciprocateSlice: StateCreator<ReciprocateSlice, [], [], Reci
   setReciprocateMode: (mode) => set({ reciprocateMode: mode }),
 
   setReciprocateAutoPct: (pct) => set({ reciprocateAutoPct: pct }),
+
+  setPalantirMinPct: (pct) => set({ palantirMinPct: pct }),
+
+  setPalantirMaxPct: (pct) => set({ palantirMaxPct: pct }),
 
   toggleReciprocateOnTroops: () =>
     set((s) => ({ reciprocateOnTroops: !s.reciprocateOnTroops })),

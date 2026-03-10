@@ -1,11 +1,9 @@
 /**
- * Tests for the Palantir smart reciprocation formula.
+ * Tests for the Palantir range-based scoring system.
  */
 import { describe, expect, test } from "vitest";
 import {
   calcPalantirAmount,
-  getPhase,
-  getSelfMod,
   type PalantirInput,
 } from "../src/shared/logic/palantir";
 
@@ -16,258 +14,280 @@ function input(overrides: Partial<PalantirInput> = {}): PalantirInput {
     donorTroops: 100_000,
     sendCount: 1,
     myGold: 100_000,
-    myTroops: 100_000, // "growing" phase
+    myTroops: 100_000,
     isTeammate: false,
+    minPct: 25,
+    maxPct: 50,
     ...overrides,
   };
 }
 
-describe("getPhase", () => {
-  test("conserving below 50K", () => {
-    expect(getPhase(0)).toBe("conserving");
-    expect(getPhase(49_999)).toBe("conserving");
+describe("exploit filters", () => {
+  test("skips donations below minimum amount", () => {
+    const r = calcPalantirAmount(input({ amountSent: 4_999 }));
+    expect(r.skipped).toBe(true);
+    expect(r.skipReason).toBe("min-donation");
+    expect(r.final).toBe(0);
   });
 
-  test("growing between 50K and 200K", () => {
-    expect(getPhase(50_000)).toBe("growing");
-    expect(getPhase(199_999)).toBe("growing");
+  test("allows donations at minimum amount", () => {
+    const r = calcPalantirAmount(input({ amountSent: 5_000 }));
+    expect(r.skipped).toBe(false);
   });
 
-  test("dominant at 200K+", () => {
-    expect(getPhase(200_000)).toBe("dominant");
-    expect(getPhase(1_000_000)).toBe("dominant");
+  test("skips trivial sacrifice from big player", () => {
+    // Whale sends 5k from 500k army = 1% sacrifice (below 2% threshold)
+    const r = calcPalantirAmount(
+      input({ amountSent: 5_000, donorTroops: 500_000 }),
+    );
+    expect(r.skipped).toBe(true);
+    expect(r.skipReason).toBe("min-sacrifice");
+    expect(r.sacrificeRatio).toBeCloseTo(0.01);
+  });
+
+  test("allows meaningful sacrifice from big player", () => {
+    // Whale sends 15k from 500k army = 3% sacrifice (above 2%)
+    const r = calcPalantirAmount(
+      input({ amountSent: 15_000, donorTroops: 500_000 }),
+    );
+    expect(r.skipped).toBe(false);
+  });
+
+  test("does not filter by sacrifice when donor troops unknown", () => {
+    const r = calcPalantirAmount(
+      input({ amountSent: 10_000, donorTroops: 0 }),
+    );
+    expect(r.skipped).toBe(false);
+    expect(r.sacrificeRatio).toBe(0.1); // default
   });
 });
 
-describe("getSelfMod", () => {
-  test("returns correct multipliers", () => {
-    expect(getSelfMod("conserving")).toBe(0.6);
-    expect(getSelfMod("growing")).toBe(1.2);
-    expect(getSelfMod("dominant")).toBe(1.5);
-  });
-});
-
-describe("sacrifice ratio", () => {
-  test("small sacrifice from big player", () => {
+describe("sacrifice score", () => {
+  test("small sacrifice → low score", () => {
     const r = calcPalantirAmount(
-      input({ amountSent: 1_000, donorTroops: 500_000 }),
+      input({ amountSent: 5_000, donorTroops: 100_000 }),
     );
-    expect(r.sacrificeRatio).toBeCloseTo(0.002);
+    expect(r.sacrificeScore).toBeCloseTo(0.05);
   });
 
-  test("large sacrifice from small player", () => {
+  test("50% sacrifice → 0.5 score", () => {
     const r = calcPalantirAmount(
-      input({ amountSent: 50_000, donorTroops: 50_000 }),
+      input({ amountSent: 50_000, donorTroops: 100_000 }),
     );
-    expect(r.sacrificeRatio).toBe(1.0);
+    expect(r.sacrificeScore).toBeCloseTo(0.5);
+  });
+
+  test("all-in sacrifice → 1.0 score", () => {
+    const r = calcPalantirAmount(
+      input({ amountSent: 100_000, donorTroops: 100_000 }),
+    );
+    expect(r.sacrificeScore).toBe(1.0);
   });
 
   test("sacrifice capped at 1.0", () => {
     const r = calcPalantirAmount(
-      input({ amountSent: 100_000, donorTroops: 50_000 }),
+      input({ amountSent: 200_000, donorTroops: 100_000 }),
     );
-    expect(r.sacrificeRatio).toBe(1.0);
-  });
-
-  test("zero donor troops uses default sacrifice", () => {
-    const r = calcPalantirAmount(input({ donorTroops: 0 }));
-    expect(r.sacrificeRatio).toBe(0.1);
+    expect(r.sacrificeScore).toBe(1.0);
   });
 });
 
-describe("loyalty multiplier", () => {
-  test("first send = 1.0x", () => {
+describe("loyalty score", () => {
+  test("first send = 0.0 loyalty", () => {
     const r = calcPalantirAmount(input({ sendCount: 1 }));
-    expect(r.loyaltyMultiplier).toBe(1.0);
+    expect(r.loyaltyScore).toBe(0);
   });
 
-  test("5th send = 1.2x", () => {
-    const r = calcPalantirAmount(input({ sendCount: 5 }));
-    expect(r.loyaltyMultiplier).toBeCloseTo(1.2);
+  test("3rd send = 0.4 loyalty", () => {
+    const r = calcPalantirAmount(input({ sendCount: 3 }));
+    expect(r.loyaltyScore).toBeCloseTo(0.4);
   });
 
-  test("11th send = capped at 1.5x", () => {
-    const r = calcPalantirAmount(input({ sendCount: 11 }));
-    expect(r.loyaltyMultiplier).toBe(1.5);
+  test("6th send = capped at 1.0 loyalty", () => {
+    const r = calcPalantirAmount(input({ sendCount: 6 }));
+    expect(r.loyaltyScore).toBe(1.0);
   });
 
-  test("20th send still capped at 1.5x", () => {
+  test("20th send still capped at 1.0", () => {
     const r = calcPalantirAmount(input({ sendCount: 20 }));
-    expect(r.loyaltyMultiplier).toBe(1.5);
+    expect(r.loyaltyScore).toBe(1.0);
   });
 });
 
-describe("teammate multiplier", () => {
-  test("non-teammate = 1.0x", () => {
+describe("teammate score", () => {
+  test("non-teammate = 0.0", () => {
     const r = calcPalantirAmount(input({ isTeammate: false }));
-    expect(r.teammateMultiplier).toBe(1.0);
+    expect(r.teammateScore).toBe(0);
   });
 
-  test("teammate = 1.25x", () => {
+  test("teammate = 1.0", () => {
     const r = calcPalantirAmount(input({ isTeammate: true }));
-    expect(r.teammateMultiplier).toBe(1.25);
+    expect(r.teammateScore).toBe(1.0);
   });
 });
 
-describe("self-preservation phases", () => {
-  test("conserving phase reduces generosity", () => {
-    const r = calcPalantirAmount(input({ myTroops: 30_000 }));
-    expect(r.phase).toBe("conserving");
-    expect(r.selfMod).toBe(0.6);
+describe("size score", () => {
+  test("same size = moderate score", () => {
+    const r = calcPalantirAmount(
+      input({ myTroops: 100_000, donorTroops: 100_000 }),
+    );
+    // ratio = 100k/100k = 1.0, / 5 = 0.2
+    expect(r.sizeScore).toBeCloseTo(0.2);
   });
 
-  test("growing phase boosts generosity", () => {
-    const r = calcPalantirAmount(input({ myTroops: 100_000 }));
-    expect(r.phase).toBe("growing");
-    expect(r.selfMod).toBe(1.2);
+  test("small player helping big player = high score", () => {
+    const r = calcPalantirAmount(
+      input({ myTroops: 500_000, donorTroops: 50_000 }),
+    );
+    // ratio = 500k/50k = 10, capped at 5, / 5 = 1.0
+    expect(r.sizeScore).toBe(1.0);
   });
 
-  test("dominant phase is most generous", () => {
-    const r = calcPalantirAmount(input({ myTroops: 300_000 }));
-    expect(r.phase).toBe("dominant");
-    expect(r.selfMod).toBe(1.5);
+  test("big player helping small player = low score", () => {
+    const r = calcPalantirAmount(
+      input({ myTroops: 50_000, donorTroops: 500_000 }),
+    );
+    // ratio = 50k/500k = 0.1, / 5 = 0.02
+    expect(r.sizeScore).toBeCloseTo(0.02);
   });
 });
 
-describe("floor and cap", () => {
-  test("small amounts get floored to 10K", () => {
-    // Big player sends tiny amount → low sacrifice → raw amount is tiny
-    const r = calcPalantirAmount(
-      input({ amountSent: 1_000, donorTroops: 500_000, myGold: 100_000 }),
-    );
-    // sacrifice = 0.002, raw = 100K * 0.002 * 1.0 * 1.0 * 1.2 = 240
-    expect(r.rawAmount).toBeCloseTo(240);
-    expect(r.flooredAmount).toBe(10_000);
-    // cap = 100K * 0.4 = 40K, floor 10K < cap 40K → 10K
-    expect(r.final).toBe(10_000);
-  });
-
-  test("large amounts get capped at 40%", () => {
-    // All-in player: sacrifice = 1.0
+describe("overall score → percentage mapping", () => {
+  test("low-quality donor gets near minPct", () => {
+    // Small sacrifice, first send, not teammate, big player helping small
     const r = calcPalantirAmount(
       input({
-        amountSent: 50_000,
-        donorTroops: 50_000,
-        myGold: 100_000,
-        myTroops: 100_000,
+        amountSent: 5_000,
+        donorTroops: 100_000,
+        sendCount: 1,
+        myTroops: 50_000,
+        isTeammate: false,
+        minPct: 25,
+        maxPct: 50,
       }),
     );
-    // raw = 100K * 1.0 * 1.0 * 1.0 * 1.2 = 120K
-    expect(r.rawAmount).toBeCloseTo(120_000);
-    // cap = 40K
-    expect(r.final).toBe(40_000);
+    expect(r.score).toBeLessThan(0.2);
+    expect(r.percentage).toBeLessThan(30);
   });
 
-  test("cap wins over floor when gold is low", () => {
+  test("high-quality donor gets near maxPct", () => {
+    // High sacrifice, loyal, teammate, small player
     const r = calcPalantirAmount(
       input({
-        amountSent: 1_000,
-        donorTroops: 500_000,
-        myGold: 20_000,
-        myTroops: 100_000,
+        amountSent: 80_000,
+        donorTroops: 100_000,
+        sendCount: 6,
+        myTroops: 500_000,
+        isTeammate: true,
+        minPct: 25,
+        maxPct: 50,
       }),
     );
-    // cap = 20K * 0.4 = 8K, floor = 10K, cap < floor → cap wins
-    expect(r.final).toBe(8_000);
+    expect(r.score).toBeGreaterThan(0.8);
+    expect(r.percentage).toBeGreaterThan(45);
   });
 
+  test("custom range is respected", () => {
+    const rLow = calcPalantirAmount(
+      input({ amountSent: 50_000, donorTroops: 100_000, minPct: 10, maxPct: 20 }),
+    );
+    const rHigh = calcPalantirAmount(
+      input({ amountSent: 50_000, donorTroops: 100_000, minPct: 40, maxPct: 80 }),
+    );
+    expect(rLow.percentage).toBeGreaterThanOrEqual(10);
+    expect(rLow.percentage).toBeLessThanOrEqual(20);
+    expect(rHigh.percentage).toBeGreaterThanOrEqual(40);
+    expect(rHigh.percentage).toBeLessThanOrEqual(80);
+  });
+});
+
+describe("final amount calculation", () => {
   test("zero gold when below minimum threshold", () => {
     const r = calcPalantirAmount(input({ myGold: 500 }));
     expect(r.final).toBe(0);
   });
-});
 
-describe("combined scenarios from plan", () => {
-  test("small loyal ally sending 30% sacrifice", () => {
+  test("amount is floor of percentage × gold", () => {
     const r = calcPalantirAmount(
       input({
-        amountSent: 15_000,
-        donorTroops: 50_000,
-        sendCount: 5,
+        amountSent: 50_000,
+        donorTroops: 100_000,
+        sendCount: 1,
         myGold: 100_000,
-        myTroops: 100_000,
         isTeammate: false,
+        minPct: 25,
+        maxPct: 50,
       }),
     );
-    expect(r.sacrificeRatio).toBeCloseTo(0.3);
-    expect(r.loyaltyMultiplier).toBeCloseTo(1.2);
-    expect(r.selfMod).toBe(1.2);
-    // raw = 100K * 0.3 * 1.2 * 1.0 * 1.2 = 43,200
-    expect(r.rawAmount).toBeCloseTo(43_200);
-    // capped at 40K
-    expect(r.final).toBe(40_000);
+    const expectedAmount = Math.floor((100_000 * r.percentage) / 100);
+    expect(r.final).toBe(expectedAmount);
   });
+});
 
-  test("big exploiter sending 0.2% sacrifice", () => {
+describe("real gameplay scenarios (25-50% range)", () => {
+  test("exploiter: whale sends 1k from 500k army → filtered", () => {
     const r = calcPalantirAmount(
       input({
         amountSent: 1_000,
         donorTroops: 500_000,
-        sendCount: 1,
         myGold: 100_000,
-        myTroops: 100_000,
-        isTeammate: false,
       }),
     );
-    expect(r.sacrificeRatio).toBeCloseTo(0.002);
-    // raw = 100K * 0.002 * 1.0 * 1.0 * 1.2 = 240
-    expect(r.rawAmount).toBeCloseTo(240);
-    // floored to 10K, cap = 40K → 10K
-    expect(r.final).toBe(10_000);
+    // Below min donation
+    expect(r.skipped).toBe(true);
+    expect(r.final).toBe(0);
   });
 
-  test("medium regular teammate 3rd send", () => {
+  test("normal donation: 10k from 100k army, first send, non-TM", () => {
     const r = calcPalantirAmount(
       input({
         amountSent: 10_000,
+        donorTroops: 100_000,
+        sendCount: 1,
+        myGold: 100_000,
+        isTeammate: false,
+      }),
+    );
+    expect(r.skipped).toBe(false);
+    // 10% sacrifice, no loyalty, no team, moderate size
+    // Should be in the lower portion of 25-50% range
+    expect(r.percentage).toBeGreaterThan(25);
+    expect(r.percentage).toBeLessThan(35);
+    expect(r.final).toBeGreaterThan(25_000);
+    expect(r.final).toBeLessThan(35_000);
+  });
+
+  test("generous teammate: 50k from 100k, 3rd send, TM", () => {
+    const r = calcPalantirAmount(
+      input({
+        amountSent: 50_000,
         donorTroops: 100_000,
         sendCount: 3,
         myGold: 100_000,
-        myTroops: 100_000,
         isTeammate: true,
       }),
     );
-    expect(r.sacrificeRatio).toBeCloseTo(0.1);
-    expect(r.loyaltyMultiplier).toBeCloseTo(1.1);
-    expect(r.teammateMultiplier).toBe(1.25);
-    // raw = 100K * 0.1 * 1.1 * 1.25 * 1.2 = 16,500
-    expect(r.rawAmount).toBeCloseTo(16_500);
-    expect(r.final).toBe(16_500);
+    expect(r.skipped).toBe(false);
+    // 50% sacrifice + some loyalty + teammate = high score
+    expect(r.score).toBeGreaterThan(0.5);
+    expect(r.percentage).toBeGreaterThan(37);
   });
 
-  test("dominant player is extra generous", () => {
+  test("all-in loyal teammate: 100k from 100k, 6th send, TM", () => {
     const r = calcPalantirAmount(
       input({
-        amountSent: 10_000,
+        amountSent: 100_000,
         donorTroops: 100_000,
-        sendCount: 1,
+        sendCount: 6,
         myGold: 100_000,
-        myTroops: 300_000,
-        isTeammate: false,
+        myTroops: 500_000,
+        isTeammate: true,
       }),
     );
-    expect(r.phase).toBe("dominant");
-    expect(r.selfMod).toBe(1.5);
-    // raw = 100K * 0.1 * 1.0 * 1.0 * 1.5 = 15,000
-    expect(r.rawAmount).toBeCloseTo(15_000);
-    expect(r.final).toBe(15_000);
-  });
-
-  test("conserving player is careful", () => {
-    const r = calcPalantirAmount(
-      input({
-        amountSent: 10_000,
-        donorTroops: 100_000,
-        sendCount: 1,
-        myGold: 100_000,
-        myTroops: 20_000,
-        isTeammate: false,
-      }),
-    );
-    expect(r.phase).toBe("conserving");
-    expect(r.selfMod).toBe(0.6);
-    // raw = 100K * 0.1 * 1.0 * 1.0 * 0.6 = 6,000
-    // floored to 10K, cap = 40K → 10K
-    expect(r.final).toBe(10_000);
+    expect(r.skipped).toBe(false);
+    // Max sacrifice, max loyalty, teammate, small donor → very high score
+    expect(r.score).toBeGreaterThan(0.9);
+    expect(r.percentage).toBeGreaterThan(47);
+    expect(r.final).toBeGreaterThan(47_000);
   });
 });

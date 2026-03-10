@@ -66,7 +66,7 @@ export default function ReciprocatePopup() {
         return (
           <div
             key={n.id}
-            className="bg-hammer-bg border border-hammer-border text-hammer-text"
+            className="bg-hammer-bg border border-hammer-border text-hammer-text animate-slide-in"
             style={{
               borderRadius: 6,
               borderLeft: "4px solid var(--color-hammer-green)",
