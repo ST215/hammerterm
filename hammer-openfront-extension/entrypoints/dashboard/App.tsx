@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { useStore } from "@store/index";
-import { deserialize, mapsEqual, setsEqual } from "@shared/serialize";
+import { deserializeWithSharing, mapsEqual, setsEqual } from "@shared/serialize";
 import HammerApp from "@ui/components/App";
 
 // Keys that are local to the dashboard UI — never overwritten by snapshots.
@@ -66,7 +66,8 @@ export default function DashboardApp() {
 
         port.onMessage.addListener((msg) => {
           if (msg.type === "snapshot" && msg.data) {
-            const data = deserialize(msg.data);
+            const currentState = useStore.getState();
+            const data = deserializeWithSharing(msg.data, currentState);
             // Apply only game-data fields, skip local UI keys and functions
             const patch: Record<string, any> = {};
             for (const [key, val] of Object.entries(data)) {
@@ -79,9 +80,10 @@ export default function DashboardApp() {
             // dismissed a notification, keep it dismissed even if the game tab
             // snapshot still has it as not-dismissed (race window before next sync)
             if (patch.reciprocateNotifications && Array.isArray(patch.reciprocateNotifications)) {
-              const current = useStore.getState().reciprocateNotifications;
               const dismissedIds = new Set(
-                current.filter((n) => n.dismissed).map((n) => n.id),
+                currentState.reciprocateNotifications
+                  .filter((n) => n.dismissed)
+                  .map((n) => n.id),
               );
               if (dismissedIds.size > 0) {
                 patch.reciprocateNotifications = patch.reciprocateNotifications.map(
@@ -90,7 +92,16 @@ export default function DashboardApp() {
               }
             }
 
-            useStore.setState(patch);
+            // Skip keys where structural sharing already preserved the reference
+            const finalPatch: Record<string, any> = {};
+            for (const [key, val] of Object.entries(patch)) {
+              if (val !== (currentState as any)[key]) {
+                finalPatch[key] = val;
+              }
+            }
+            if (Object.keys(finalPatch).length > 0) {
+              useStore.setState(finalPatch);
+            }
             if (!connected) setConnected(true);
           }
         });

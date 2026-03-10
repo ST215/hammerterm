@@ -7,29 +7,7 @@ import { Section, StatCard, Badge, PresetButton } from "@ui/components/ds";
 import type { CIAFeedFilter } from "@store/slices/cia";
 import { CIA_BIG_GOLD_THRESHOLD, CIA_BIG_TROOPS_THRESHOLD } from "@shared/constants";
 
-function timeAgo(ts: number): string {
-  const ms = Date.now() - ts;
-  if (ms < 60_000) return `${Math.floor(ms / 1000)}s`;
-  if (ms < 3_600_000) return `${Math.floor(ms / 60_000)}m`;
-  return `${Math.floor(ms / 3_600_000)}h`;
-}
-
-function nameColor(
-  name: string,
-  playersById: Map<string, any>,
-  myTeam: number | null,
-  myAllies: Set<number>,
-): string {
-  for (const p of playersById.values()) {
-    const pName = p.displayName || p.name || "";
-    if (pName === name) {
-      if (p.team != null && myTeam != null && p.team === myTeam) return "text-hammer-blue";
-      if (p.smallID != null && myAllies.has(p.smallID)) return "text-hammer-green";
-      return "text-hammer-text";
-    }
-  }
-  return "text-hammer-text";
-}
+import { timeAgo, nameColor } from "@shared/ui-helpers";
 
 const SEVERITY_DOT: Record<string, string> = {
   critical: "bg-hammer-red",

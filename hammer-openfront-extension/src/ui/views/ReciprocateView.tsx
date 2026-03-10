@@ -3,16 +3,12 @@ import { useMyPlayer } from "@ui/hooks/usePlayerHelpers";
 import { short, comma, dTroops, num } from "@shared/utils";
 import { handleQuickReciprocate } from "@content/automation/reciprocate-engine";
 import { Section, StatCard, PresetButton, Badge, PercentBar } from "@ui/components/ds";
+import { timeAgo as _timeAgo } from "@shared/ui-helpers";
 import type { PalantirDecision } from "@store/slices/reciprocate";
 
 const PCT_OPTIONS = [10, 25, 50, 75, 100] as const;
 
-function timeAgo(ts: number): string {
-  const ms = Date.now() - ts;
-  if (ms < 60_000) return `${Math.floor(ms / 1000)}s ago`;
-  if (ms < 3_600_000) return `${Math.floor(ms / 60_000)}m ago`;
-  return `${Math.floor(ms / 3_600_000)}h ago`;
-}
+function timeAgo(ts: number): string { return _timeAgo(ts, " ago"); }
 
 function loyaltyDots(sendCount: number): string {
   const filled = Math.min(sendCount, 5);

@@ -4,6 +4,7 @@ import { useMyPlayer, useTeammates, useAllies } from "@ui/hooks/usePlayerHelpers
 import { sendEmoji, sendQuickChat } from "@content/game/send";
 import { EMOJI_TABLE } from "@shared/emoji-table";
 import { Section, PresetButton } from "@ui/components/ds";
+import { timeAgo } from "@shared/ui-helpers";
 
 // All quickchat items from the game, organized by category
 const QC_NEEDS_TARGET = new Set([
@@ -74,12 +75,7 @@ function keyToLabel(key: string): string {
   return key.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
 }
 
-function timeAgo(ts: number): string {
-  const ms = Date.now() - ts;
-  if (ms < 60_000) return `${Math.floor(ms / 1000)}s`;
-  if (ms < 3_600_000) return `${Math.floor(ms / 60_000)}m`;
-  return `${Math.floor(ms / 3_600_000)}h`;
-}
+const GROUP_MODES = ["team", "allies", "all", "others", "clear"] as const;
 
 export default function CommsView() {
   const commsTargets = useStore((s) => s.commsTargets);
@@ -216,7 +212,7 @@ export default function CommsView() {
       {/* Send To */}
       <Section title="Send To" count={commsTargets.size}>
         <div className="flex items-center gap-1 mb-1.5">
-          {(["team", "allies", "all", "others", "clear"] as const).map((g) => (
+          {GROUP_MODES.map((g) => (
             <PresetButton
               key={g}
               label={g === "clear" ? "Clear" : g.charAt(0).toUpperCase() + g.slice(1)}

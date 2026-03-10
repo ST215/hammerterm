@@ -10,11 +10,10 @@
 
 import { useStore } from "@store/index";
 import {
-  getTeammates,
-  getAllies,
   asIsAlly,
   readMyPlayer,
 } from "@shared/logic/player-helpers";
+import { resolveAutoSendTargets, type ResolvedTarget } from "@shared/logic/auto-send-helpers";
 import { estimateMaxTroops } from "@shared/logic/city";
 import { dTroops, short } from "@shared/utils";
 import { asSendTroops } from "../game/send";
@@ -31,53 +30,23 @@ function log(...args: unknown[]): void {
   console.log("[Hammer]", ...args);
 }
 
-function fmtTime(d: Date): string {
-  return d.toTimeString().slice(0, 8);
-}
-
 // ---------- asResolveTargets ----------
-
-interface ResolvedTarget {
-  id: string;
-  name: string;
-}
 
 /**
  * Resolve auto-troops targets based on mode (AllTeam / AllAllies / manual list).
  */
 export function asResolveTargets(): ResolvedTarget[] {
   const s = useStore.getState();
-
-  if (s.asTroopsAllTeamMode || s.asTroopsAllAlliesMode) {
-    const result: ResolvedTarget[] = [];
-    const ids = new Set<string>();
-
-    // Resolve "me" for helper functions
-    const me = readMyPlayer(s.lastPlayers, s.playersById, s.currentClientID, s.mySmallID);
-
-    if (s.asTroopsAllTeamMode) {
-      for (const p of getTeammates(s.playersById, me)) {
-        result.push({ id: p.id, name: p.displayName || p.name || "" });
-        ids.add(p.id);
-      }
-    }
-    if (s.asTroopsAllAlliesMode) {
-      for (const p of getAllies(s.playersById, me, s.myAllies)) {
-        if (!ids.has(p.id)) {
-          result.push({ id: p.id, name: p.displayName || p.name || "" });
-        }
-      }
-    }
-    return result;
-  }
-
-  // Manual target list: resolve names from store targets
-  const resolved: ResolvedTarget[] = [];
-  for (const tgt of s.asTroopsTargets) {
-    // Targets are already stored as {id, name} in the extension store
-    resolved.push({ id: tgt.id, name: tgt.name });
-  }
-  return resolved;
+  return resolveAutoSendTargets({
+    allTeamMode: s.asTroopsAllTeamMode,
+    allAlliesMode: s.asTroopsAllAlliesMode,
+    manualTargets: s.asTroopsTargets,
+    lastPlayers: s.lastPlayers,
+    playersById: s.playersById,
+    currentClientID: s.currentClientID,
+    mySmallID: s.mySmallID,
+    myAllies: s.myAllies,
+  });
 }
 
 // ---------- asTroopsTick ----------
