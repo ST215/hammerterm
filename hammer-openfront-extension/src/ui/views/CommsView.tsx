@@ -1,10 +1,11 @@
-import { useState } from "react";
+import { useState, useMemo } from "react";
 import { useStore } from "@store/index";
 import { useMyPlayer, useTeammates, useAllies } from "@ui/hooks/usePlayerHelpers";
 import { sendEmoji, sendQuickChat } from "@content/game/send";
 import { EMOJI_TABLE } from "@shared/emoji-table";
 import { Section, PresetButton } from "@ui/components/ds";
 import { timeAgo } from "@shared/ui-helpers";
+import type { PlayerData } from "@shared/types";
 
 // All quickchat items from the game, organized by category
 const QC_NEEDS_TARGET = new Set([
@@ -97,13 +98,22 @@ export default function CommsView() {
 
   const [pendingQCKey, setPendingQCKey] = useState<string | null>(null);
   const [showOthers, setShowOthers] = useState(false);
+  const [showBots, setShowBots] = useState(false);
 
-  const others = [...playersById.values()].filter((p) => {
-    if (!p.isAlive || !me || p.id === me.id) return false;
-    if (p.team != null && myTeam != null && p.team === myTeam) return false;
-    if (p.smallID != null && myAllies.has(p.smallID)) return false;
-    return true;
-  });
+  const { otherHumans, otherBots } = useMemo(() => {
+    const humans: PlayerData[] = [];
+    const bots: PlayerData[] = [];
+    for (const p of playersById.values()) {
+      if (!p.isAlive || !me || p.id === me.id) continue;
+      if (p.team != null && myTeam != null && p.team === myTeam) continue;
+      if (p.smallID != null && myAllies.has(p.smallID)) continue;
+      if (p.clientID) humans.push(p);
+      else bots.push(p);
+    }
+    return { otherHumans: humans, otherBots: bots };
+  }, [playersById, me, myTeam, myAllies]);
+
+  const others = showBots ? [...otherHumans, ...otherBots] : otherHumans;
 
   function toggleTarget(id: string) {
     if (commsTargets.has(id)) removeTarget(id);
@@ -264,14 +274,28 @@ export default function CommsView() {
           </div>
         )}
 
-        {others.length > 0 && (
+        {(otherHumans.length > 0 || otherBots.length > 0) && (
           <div>
-            <button
-              onClick={() => setShowOthers(!showOthers)}
-              className="text-2xs text-hammer-muted hover:text-hammer-text bg-transparent border-none cursor-pointer p-0 font-mono"
-            >
-              Others ({others.length}) {showOthers ? "\u25BC" : "\u25B6"}
-            </button>
+            <div className="flex items-center gap-1">
+              <button
+                onClick={() => setShowOthers(!showOthers)}
+                className="text-2xs text-hammer-muted hover:text-hammer-text bg-transparent border-none cursor-pointer p-0 font-mono"
+              >
+                Others ({others.length}) {showOthers ? "\u25BC" : "\u25B6"}
+              </button>
+              {showOthers && otherBots.length > 0 && (
+                <button
+                  onClick={() => setShowBots((b) => !b)}
+                  className={`px-1 py-0 rounded text-2xs border transition-colors cursor-pointer ${
+                    showBots
+                      ? "border-hammer-warn text-hammer-warn"
+                      : "border-hammer-border text-hammer-dim hover:text-hammer-muted"
+                  }`}
+                >
+                  {showBots ? "Hide" : "Show"} Bots ({otherBots.length})
+                </button>
+              )}
+            </div>
             {showOthers && (
               <div className="flex flex-wrap gap-0.5 mt-0.5">
                 {others.map((p) => (
@@ -284,6 +308,7 @@ export default function CommsView() {
                         : "bg-hammer-bg border-hammer-border text-hammer-muted hover:text-hammer-text"
                     }`}
                   >
+                    {!p.clientID && <span className="text-hammer-warn mr-0.5">[BOT]</span>}
                     {p.displayName || p.name || `#${p.smallID}`}
                   </button>
                 ))}

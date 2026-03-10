@@ -1,8 +1,8 @@
-import { useCallback, useMemo } from "react";
+import { useState, useCallback, useMemo } from "react";
 import { useStore } from "@store/index";
 import { useMyPlayer, useTeammates, useAllies } from "@ui/hooks/usePlayerHelpers";
 import { short, dTroops, num } from "@shared/utils";
-import { sendEmoji, sendQuickChat, asSendTroops, asSendGold } from "@content/game/send";
+import { sendEmoji, sendQuickChat, asSendTroops, asSendGold, sendAllianceRequest } from "@content/game/send";
 import { EMOJI_COMPACT } from "@shared/emoji-table";
 import { Section, StatCard, Badge } from "@ui/components/ds";
 import type { PlayerData } from "@shared/types";
@@ -196,8 +196,12 @@ export default function AlliancesView() {
   const teammates = useTeammates();
   const allies = useAllies();
   const me = useMyPlayer();
+  const playersById = useStore((s) => s.playersById);
+  const myAllies = useStore((s) => s.myAllies);
   const inbound = useStore((s) => s.inbound);
   const outbound = useStore((s) => s.outbound);
+  const [showBots, setShowBots] = useState(false);
+  const [allianceRequested, setAllianceRequested] = useState<Set<string>>(new Set());
 
   const myTroops = dTroops(me?.troops);
   const myGold = num(me?.gold ?? 0);
@@ -290,21 +294,69 @@ export default function AlliancesView() {
   const getDonations = (id: string): DonationSummary =>
     donationMap.get(id) || { goldSentToMe: 0, troopsSentToMe: 0, goldISent: 0, troopsISent: 0, totalToMe: 0, totalISent: 0 };
 
-  const hasAny = teammates.length > 0 || allies.length > 0;
+  // Non-allied, non-team players available for alliance requests
+  const allianceCandidates = useMemo(() => {
+    if (!me) return { humans: [] as PlayerData[], bots: [] as PlayerData[] };
+    const tmIds = new Set(teammates.map((p) => p.id));
+    const allyIds = new Set(allies.map((p) => p.id));
+    const humans: PlayerData[] = [];
+    const bots: PlayerData[] = [];
 
-  if (!hasAny) {
-    return (
-      <div className="flex flex-col items-center justify-center text-hammer-muted font-mono text-sm py-8">
-        <div className="text-base mb-1">No teammates or allies</div>
-        <div className="text-2xs">
-          Team members and alliance partners will appear here.
-        </div>
-      </div>
-    );
-  }
+    for (const p of playersById.values()) {
+      if (p.id === me.id) continue;
+      if (!p.isAlive) continue;
+      if (tmIds.has(p.id)) continue;
+      if (allyIds.has(p.id)) continue;
+      // Same team = already teammate (shouldn't need alliance)
+      if (p.team != null && me.team != null && p.team === me.team) continue;
+
+      if (p.clientID) {
+        humans.push(p);
+      } else {
+        bots.push(p);
+      }
+    }
+
+    const sortFn = (a: PlayerData, b: PlayerData) =>
+      (a.displayName || a.name || "").localeCompare(b.displayName || b.name || "");
+    humans.sort(sortFn);
+    bots.sort(sortFn);
+    return { humans, bots };
+  }, [playersById, me, teammates, allies]);
+
+  const visibleCandidates = showBots
+    ? [...allianceCandidates.humans, ...allianceCandidates.bots]
+    : allianceCandidates.humans;
+
+  const handleAllianceRequest = useCallback((playerId: string) => {
+    sendAllianceRequest(playerId);
+    setAllianceRequested((prev) => new Set(prev).add(playerId));
+  }, []);
+
+  const handleRequestAll = useCallback(() => {
+    for (const p of visibleCandidates) {
+      if (!allianceRequested.has(p.id)) {
+        sendAllianceRequest(p.id);
+      }
+    }
+    setAllianceRequested((prev) => {
+      const next = new Set(prev);
+      for (const p of visibleCandidates) next.add(p.id);
+      return next;
+    });
+  }, [visibleCandidates, allianceRequested]);
+
+  const hasAny = teammates.length > 0 || allies.length > 0;
 
   return (
     <div>
+      {!hasAny && (
+        <div className="flex flex-col items-center justify-center text-hammer-muted font-mono text-sm py-4">
+          <div className="text-base mb-1">No teammates or allies yet</div>
+          <div className="text-2xs">Send alliance requests below, or wait for team assignment.</div>
+        </div>
+      )}
+
       {/* Team Health */}
       {teammates.length > 0 && (
         <Section title="Team Health">
@@ -358,6 +410,68 @@ export default function AlliancesView() {
           </div>
         </Section>
       )}
+
+      {/* Alliance Requests */}
+      <Section title="Alliance Requests">
+        {/* Controls row */}
+        <div className="flex items-center gap-1 mb-1">
+          <button
+            onClick={handleRequestAll}
+            disabled={visibleCandidates.length === 0}
+            className={`px-2 py-0.5 rounded text-2xs font-bold border transition-colors cursor-pointer ${
+              visibleCandidates.length > 0
+                ? "bg-hammer-green/20 border-hammer-green text-hammer-green hover:bg-hammer-green/30"
+                : "bg-hammer-surface border-hammer-border text-hammer-dim cursor-not-allowed"
+            }`}
+          >
+            Request All ({visibleCandidates.length})
+          </button>
+          <button
+            onClick={() => setShowBots((b) => !b)}
+            className={`px-2 py-0.5 rounded text-2xs border transition-colors cursor-pointer ${
+              showBots
+                ? "bg-hammer-warn/20 border-hammer-warn text-hammer-warn"
+                : "bg-hammer-surface border-hammer-border text-hammer-muted hover:text-hammer-text"
+            }`}
+          >
+            {showBots ? "Hide" : "Show"} Bots ({allianceCandidates.bots.length})
+          </button>
+        </div>
+
+        {visibleCandidates.length > 0 ? (
+          <div className="flex flex-wrap gap-0.5">
+            {visibleCandidates.map((p) => {
+              const isBot = !p.clientID;
+              const sent = allianceRequested.has(p.id);
+              const name = p.displayName || p.name || "Unknown";
+              return (
+                <button
+                  key={p.id}
+                  onClick={() => handleAllianceRequest(p.id)}
+                  disabled={sent}
+                  className={`px-1.5 py-0.5 rounded text-2xs border transition-colors ${
+                    sent
+                      ? "bg-hammer-green/10 border-hammer-green/50 text-hammer-green cursor-default"
+                      : "bg-hammer-surface border-hammer-border text-hammer-text hover:border-hammer-green hover:text-hammer-green cursor-pointer"
+                  }`}
+                  title={sent ? `Alliance request sent to ${name}` : `Send alliance request to ${name}`}
+                >
+                  {isBot && <span className="text-hammer-warn mr-0.5">[BOT]</span>}
+                  {sent ? "✓ " : "+ "}
+                  {name}
+                  <span className="text-hammer-dim ml-1">{short(dTroops(p.troops))}t</span>
+                </button>
+              );
+            })}
+          </div>
+        ) : (
+          <div className="text-2xs text-hammer-dim">
+            {allianceCandidates.bots.length > 0
+              ? "No human players to ally with. Toggle 'Show Bots' to see tribes."
+              : "No players available for alliance requests."}
+          </div>
+        )}
+      </Section>
     </div>
   );
 }
