@@ -1,4 +1,5 @@
 import type { StateCreator } from "zustand";
+import type { NotifPosition } from "@shared/notif-position";
 
 export interface UISlice {
   view: string;
@@ -7,6 +8,14 @@ export interface UISlice {
   sizeIdx: number;
   displayMode: "overlay" | "window";
   uiVisible: boolean;
+  toastInboundTroops: boolean;
+  toastInboundGold: boolean;
+  toastOutboundTroops: boolean;
+  toastOutboundGold: boolean;
+  toastScale: number;
+  statusToastScale: number;
+  reciprocatePosition: NotifPosition;
+  donationPosition: NotifPosition;
 
   setView: (view: string) => void;
   togglePaused: () => void;
@@ -14,6 +23,14 @@ export interface UISlice {
   setSizeIdx: (idx: number) => void;
   setDisplayMode: (mode: "overlay" | "window") => void;
   setUIVisible: (visible: boolean) => void;
+  setToastInboundTroops: (v: boolean) => void;
+  setToastInboundGold: (v: boolean) => void;
+  setToastOutboundTroops: (v: boolean) => void;
+  setToastOutboundGold: (v: boolean) => void;
+  setToastScale: (v: number) => void;
+  setStatusToastScale: (v: number) => void;
+  setReciprocatePosition: (v: NotifPosition) => void;
+  setDonationPosition: (v: NotifPosition) => void;
 }
 
 export const createUISlice: StateCreator<UISlice, [], [], UISlice> = (set) => ({
@@ -23,6 +40,14 @@ export const createUISlice: StateCreator<UISlice, [], [], UISlice> = (set) => ({
   sizeIdx: 1,
   displayMode: "overlay",
   uiVisible: true,
+  toastInboundTroops: true,
+  toastInboundGold: true,
+  toastOutboundTroops: true,
+  toastOutboundGold: true,
+  toastScale: 1.0,
+  statusToastScale: 1.0,
+  reciprocatePosition: "top-right",
+  donationPosition: "top-center",
 
   setView: (view) => set({ view }),
   togglePaused: () => set((s) => ({ paused: !s.paused })),
@@ -30,4 +55,12 @@ export const createUISlice: StateCreator<UISlice, [], [], UISlice> = (set) => ({
   setSizeIdx: (sizeIdx) => set({ sizeIdx }),
   setDisplayMode: (displayMode) => set({ displayMode }),
   setUIVisible: (uiVisible) => set({ uiVisible }),
+  setToastInboundTroops: (v) => set({ toastInboundTroops: v }),
+  setToastInboundGold: (v) => set({ toastInboundGold: v }),
+  setToastOutboundTroops: (v) => set({ toastOutboundTroops: v }),
+  setToastOutboundGold: (v) => set({ toastOutboundGold: v }),
+  setToastScale: (v) => set({ toastScale: v }),
+  setStatusToastScale: (v) => set({ statusToastScale: v }),
+  setReciprocatePosition: (v) => set({ reciprocatePosition: v }),
+  setDonationPosition: (v) => set({ donationPosition: v }),
 });

@@ -47,6 +47,8 @@ import CommsView from "../views/CommsView";
 import CIAView from "../views/CIAView";
 import HelpView from "../views/HelpView";
 import RecorderView from "../views/RecorderView";
+import TradingView from "../views/TradingView";
+import BroadcastView from "../views/BroadcastView";
 
 interface AppProps {
   mode: "overlay" | "window";
@@ -55,11 +57,13 @@ interface AppProps {
 const VIEW_MAP: Record<string, React.FC> = {
   summary: SummaryView,
   alliances: AlliancesView,
+  trading: TradingView,
   autotroops: AutoTroopsView,
   autogold: AutoGoldView,
   reciprocate: ReciprocateView,
   comms: CommsView,
   cia: CIAView,
+  broadcast: BroadcastView,
   help: HelpView,
   recorder: RecorderView,
 };
@@ -111,21 +115,21 @@ export default function App({ mode }: AppProps) {
 
   // Window mode — simple flex column, full viewport
   return (
-    <div className="flex flex-col w-full h-screen bg-hammer-bg text-hammer-text font-mono text-base">
-      {/* Header bar */}
-      <div className="flex items-center justify-between bg-hammer-header px-2 py-1 border-b border-hammer-border">
-        <span className="text-hammer-green text-sm font-bold">HAMMER</span>
-        <div className="flex items-center gap-1">
-          <HeaderButtons />
+    <>
+      <div className="flex flex-col w-full h-screen bg-hammer-bg text-hammer-text font-mono text-base">
+        {/* Header bar */}
+        <div className="flex items-center justify-between bg-hammer-header px-2 py-1 border-b border-hammer-border">
+          <span className="text-hammer-green text-sm font-bold">HAMMER</span>
+          <div className="flex items-center gap-1">
+            <HeaderButtons />
+          </div>
+        </div>
+
+        <div className="flex-1 overflow-y-auto overflow-x-hidden">
+          {content}
         </div>
       </div>
-
-      <div className="flex-1 overflow-y-auto overflow-x-hidden">
-        {content}
-      </div>
-
-      <ReciprocatePopup />
       <StatusToast />
-    </div>
+    </>
   );
 }

@@ -99,10 +99,14 @@ export const createAutoGoldSlice: StateCreator<AutoGoldSlice, [], [], AutoGoldSl
     })),
 
   updateAsGoldSendTimes: (targetId, lastSend, nextSend) =>
-    set((s) => ({
-      asGoldLastSend: { ...s.asGoldLastSend, [targetId]: lastSend },
-      asGoldNextSend: { ...s.asGoldNextSend, [targetId]: nextSend },
-    })),
+    set((s) => {
+      if (s.asGoldLastSend[targetId] === lastSend && s.asGoldNextSend[targetId] === nextSend)
+        return s;
+      return {
+        asGoldLastSend: { ...s.asGoldLastSend, [targetId]: lastSend },
+        asGoldNextSend: { ...s.asGoldNextSend, [targetId]: nextSend },
+      };
+    }),
 
   resetAutoGold: () =>
     set({

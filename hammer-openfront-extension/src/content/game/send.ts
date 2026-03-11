@@ -37,6 +37,7 @@ export function asSendGold(targetId: string, amount: number): boolean {
 
 export function sendEmoji(recipientId: string, emojiIndex: number): boolean {
   sendToMainWorld({ action: "emoji", recipientId, emojiIndex });
+  record("cmd", "send.emoji", { recipientId, emojiIndex });
   log("[SEND] Emoji command dispatched:", recipientId, emojiIndex);
   return true;
 }
@@ -54,6 +55,7 @@ export function sendQuickChat(
     key: quickChatKey,
     targetPlayerId,
   });
+  record("cmd", "send.quickchat", { recipientId, key: quickChatKey, targetPlayerId });
   log("[SEND] QuickChat command dispatched:", recipientId, quickChatKey);
   return true;
 }
@@ -62,7 +64,36 @@ export function sendQuickChat(
 
 export function sendAllianceRequest(recipientId: string): boolean {
   sendToMainWorld({ action: "alliance", recipientId });
+  record("cmd", "send.alliance", { recipientId });
   log("[SEND] Alliance command dispatched:", recipientId);
+  return true;
+}
+
+// ---------- sendBetray ----------
+
+/** Break alliance with a player (uses separate break-alliance event class) */
+export function sendBetray(recipientId: string): boolean {
+  sendToMainWorld({ action: "betray", recipientId });
+  record("cmd", "send.betray", { recipientId });
+  log("[SEND] Betray command dispatched:", recipientId);
+  return true;
+}
+
+// ---------- sendEmbargo ----------
+
+/** Stop trading with a player (embargo start) */
+export function sendEmbargoStart(targetId: string): boolean {
+  sendToMainWorld({ action: "embargo", targetId, embargoAction: "start" });
+  record("cmd", "embargo.start", { targetId });
+  log("[SEND] Embargo start (stop trading):", targetId);
+  return true;
+}
+
+/** Resume trading with a player (embargo stop) */
+export function sendEmbargoStop(targetId: string): boolean {
+  sendToMainWorld({ action: "embargo", targetId, embargoAction: "stop" });
+  record("cmd", "embargo.stop", { targetId });
+  log("[SEND] Embargo stop (resume trading):", targetId);
   return true;
 }
 

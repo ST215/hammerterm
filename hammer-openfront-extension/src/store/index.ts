@@ -10,6 +10,7 @@ import { createCommsSlice, type CommsSlice } from "./slices/comms";
 import { createCIASlice, type CIASlice } from "./slices/cia";
 import { createDonationToastsSlice, type DonationToastsSlice } from "./slices/donation-toasts";
 import { createRecorderSlice, type RecorderSlice } from "./slices/recorder";
+import { createBroadcastSlice, type BroadcastSlice } from "./slices/broadcast";
 
 export type HammerStore = UISlice &
   PlayerSlice &
@@ -20,7 +21,8 @@ export type HammerStore = UISlice &
   CommsSlice &
   CIASlice &
   DonationToastsSlice &
-  RecorderSlice;
+  RecorderSlice &
+  BroadcastSlice;
 
 export const useStore = create<HammerStore>()(
   subscribeWithSelector((...a) => ({
@@ -34,5 +36,6 @@ export const useStore = create<HammerStore>()(
     ...createCIASlice(...a),
     ...createDonationToastsSlice(...a),
     ...createRecorderSlice(...a),
+    ...createBroadcastSlice(...a),
   })),
 );

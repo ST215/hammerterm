@@ -15,7 +15,7 @@ const LOCAL_KEYS = new Set([
   // Reciprocate config
   "reciprocateMode", "reciprocateAutoPct", "reciprocateNotifyDuration",
   "reciprocateEnabled", "reciprocateOnGold", "reciprocateOnTroops",
-  "reciprocatePopupsEnabled", "palantirMinPct", "palantirMaxPct",
+  "reciprocatePopupsEnabled", "palantirMinPct", "palantirMaxPct", "popupScale",
   // Auto-troops config
   "asTroopsRunning", "asTroopsTargets", "asTroopsRatio",
   "asTroopsThreshold", "asTroopsCooldownSec",
@@ -24,8 +24,16 @@ const LOCAL_KEYS = new Set([
   "asGoldRunning", "asGoldTargets", "asGoldRatio",
   "asGoldThreshold", "asGoldCooldownSec",
   "asGoldAllTeamMode", "asGoldAllAlliesMode",
+  // Activity feed toggles
+  "toastInboundTroops", "toastInboundGold", "toastOutboundTroops", "toastOutboundGold",
+  "toastScale", "statusToastScale",
+  // Notification positions
+  "reciprocatePosition", "donationPosition",
   // CIA user preferences
   "ciaWindowMs", "ciaFeedFilter",
+  // Broadcast config
+  "broadcastEnabled", "broadcastEmojiIndex", "broadcastSequence",
+  "broadcastUseSequence",
   // Recorder (only the toggle — count & events come from content script snapshots)
   "recorderOn",
 ]);
@@ -33,6 +41,12 @@ const LOCAL_KEYS = new Set([
 export default function DashboardApp() {
   const [connected, setConnected] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  // Dashboard always runs in window mode — set this immediately so the
+  // HeaderButtons toggle shows the correct "close dashboard" icon from the start.
+  useEffect(() => {
+    useStore.setState({ displayMode: "window" });
+  }, []);
 
   useEffect(() => {
     let port: chrome.runtime.Port | null = null;

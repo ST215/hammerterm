@@ -1,4 +1,5 @@
 import { useState, useEffect } from "react";
+import { useStore } from "@store/index";
 
 interface ToastMessage {
   text: string;
@@ -13,6 +14,7 @@ export function showStatus(text: string, duration = 2000) {
 
 export default function StatusToast() {
   const [msg, setMsg] = useState<ToastMessage | null>(null);
+  const scale = useStore((s) => s.statusToastScale);
   _setMsg = setMsg;
 
   useEffect(() => {
@@ -29,7 +31,8 @@ export default function StatusToast() {
       style={{
         top: "50%",
         left: "50%",
-        transform: "translate(-50%, -50%)",
+        transform: `translate(-50%, -50%) scale(${scale})`,
+        transformOrigin: "center center",
         backgroundColor: "rgba(0, 0, 0, 0.92)",
         padding: "12px 24px",
         borderRadius: "6px",

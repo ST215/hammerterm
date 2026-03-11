@@ -298,6 +298,10 @@ export default defineContentScript({
             if (obj?.type === "intent") {
               gameSocket = this;
             }
+            // Flight Recorder: capture all outgoing WS messages (skip ping/pong)
+            if (obj && obj.type !== "ping" && obj.type !== "pong") {
+              emit("ws-out", { data: obj });
+            }
           }
         } catch {}
         return origSend.call(this, data);
@@ -315,6 +319,10 @@ export default defineContentScript({
               obj.type === "ping")
           ) {
             gameSocket = ws;
+          }
+          // Flight Recorder: capture incoming WS messages (skip noisy types)
+          if (obj && obj.type !== "turn" && obj.type !== "ping" && obj.type !== "lobbies_update") {
+            emit("ws-in", { data: obj });
           }
         } catch {}
       });
@@ -550,7 +558,7 @@ export default defineContentScript({
         result.type = "emoji";
       else if (result.hasRecipient && result.hasQuickChatKey)
         result.type = "quickchat";
-      else if (result.hasRecipient) result.type = "alliance";
+      else if (result.hasRecipient) result.type = "recipient_only";
 
       return result;
     }
@@ -560,7 +568,12 @@ export default defineContentScript({
 
       for (const [cls] of eventBus.listeners.entries()) {
         const probe = probeClass(cls);
-        if (probe.type && !eventClasses[probe.type]) {
+        if (probe.type === "recipient_only") {
+          // Alliance and betray use the same EventBus class (toggle)
+          if (!eventClasses.alliance) {
+            eventClasses.alliance = cls;
+          }
+        } else if (probe.type && !eventClasses[probe.type]) {
           eventClasses[probe.type] = cls;
         }
       }
@@ -867,6 +880,43 @@ export default defineContentScript({
       return null;
     }
 
+    /** Get our own PlayerView by resolving _myPlayer or matching clientID */
+    function getMyPlayerView(): any {
+      try {
+        // multiplayer
+        const gv = document.querySelector("game-view") as any;
+        const cgr = gv?.clientGameRunner;
+        if (cgr?.gameView) {
+          const myPlayer = cgr.gameView._myPlayer ?? cgr._myPlayer;
+          if (myPlayer) return myPlayer;
+          // fallback: find by clientID
+          if (currentClientID && cgr.gameView._players?.forEach) {
+            let found: any = null;
+            cgr.gameView._players.forEach((p: any) => {
+              if (!found && readProp(p, "clientID") === currentClientID) found = p;
+            });
+            if (found) return found;
+          }
+        }
+      } catch {}
+      try {
+        // singleplayer
+        const ed = document.querySelector("events-display") as any;
+        const game = ed?.game;
+        if (game) {
+          if (game._myPlayer) return game._myPlayer;
+          if (currentClientID && game._players?.forEach) {
+            let found: any = null;
+            game._players.forEach((p: any) => {
+              if (!found && readProp(p, "clientID") === currentClientID) found = p;
+            });
+            if (found) return found;
+          }
+        }
+      } catch {}
+      return null;
+    }
+
     function ensureEventClasses() {
       if (eventBus && Object.keys(eventClasses).length === 0) {
         discoverEventClasses();
@@ -963,26 +1013,33 @@ export default defineContentScript({
         }
         emit("send-result", { action, success: false });
       } else if (action === "emoji") {
-        if (
-          eventBus &&
-          eventClasses.emoji &&
-          recipientId !== "AllPlayers"
-        ) {
-          const pv = getPlayerView(recipientId);
-          if (pv) {
-            try {
-              const evt = new eventClasses.emoji(pv, emojiIndex);
-              eventBus.emit(evt);
-              return;
-            } catch (err) {
-              console.warn("[Hammer:Main] Emoji EventBus emit failed:", err);
+        if (eventBus && eventClasses.emoji) {
+          try {
+            let evt;
+            if (recipientId === "AllPlayers") {
+              // Broadcast: pass the string "AllPlayers" directly (not a PlayerView)
+              evt = new eventClasses.emoji(recipientId, emojiIndex);
+            } else {
+              const pv = getPlayerView(recipientId);
+              if (pv) {
+                evt = new eventClasses.emoji(pv, emojiIndex);
+              }
             }
+            if (evt) {
+              eventBus.emit(evt);
+              emit("send-result", { action: "emoji", recipientId, emojiIndex, success: true, method: "eventbus" });
+              return;
+            }
+          } catch (err) {
+            console.warn("[Hammer:Main] Emoji EventBus emit failed:", err);
           }
         }
+        // WebSocket fallback for targeted emoji (broadcast only works via EventBus)
         if (
           gameSocket &&
           gameSocket.readyState === 1 &&
-          currentClientID
+          currentClientID &&
+          recipientId !== "AllPlayers"
         ) {
           gameSocket.send(
             JSON.stringify({
@@ -1033,35 +1090,101 @@ export default defineContentScript({
           );
         }
       } else if (action === "alliance") {
+        const diag: Record<string, unknown> = {
+          action,
+          recipientId,
+          eventBusAvailable: !!eventBus,
+          allianceClassAvailable: !!eventClasses.alliance,
+          gameSocketAvailable: !!(gameSocket && gameSocket.readyState === 1),
+          currentClientID,
+        };
+
+        // EventBus path — alliance event needs (requestor, recipient)
         if (
           eventBus &&
           eventClasses.alliance &&
           recipientId !== "AllPlayers"
         ) {
+          const myPv = getMyPlayerView();
           const pv = getPlayerView(recipientId);
-          if (pv) {
+          diag.myPlayerViewFound = !!myPv;
+          diag.playerViewFound = !!pv;
+          if (myPv && pv) {
             try {
-              const evt = new eventClasses.alliance(pv);
+              const evt = new eventClasses.alliance(myPv, pv);
+              diag.eventCreated = true;
+              diag.eventKeys = Object.keys(evt);
               eventBus.emit(evt);
+              diag.success = true;
+              diag.method = "eventbus";
+              emit("send-result", diag);
               return;
-            } catch {}
+            } catch (err) {
+              diag.eventBusError = String(err);
+              console.warn("[Hammer:Main] Alliance EventBus emit failed:", err);
+            }
+          } else {
+            if (!myPv) console.warn("[Hammer:Main] Alliance: could not get own PlayerView");
+            if (!pv) console.warn("[Hammer:Main] Alliance getPlayerView returned null for:", recipientId);
           }
         }
+
+        diag.success = false;
+        diag.method = "none";
+        console.warn("[Hammer:Main] Alliance send failed:", diag);
+        emit("send-result", diag);
+      } else if (action === "betray") {
+        // Betray uses the SAME EventBus class as alliance — it's a toggle
+        if (eventBus && eventClasses.alliance && recipientId) {
+          const myPv = getMyPlayerView();
+          const pv = getPlayerView(recipientId);
+          if (myPv && pv) {
+            try {
+              const evt = new eventClasses.alliance(myPv, pv);
+              eventBus.emit(evt);
+              emit("send-result", { action: "betray", recipientId, success: true, method: "eventbus" });
+              return;
+            } catch (err) {
+              console.warn("[Hammer:Main] Betray EventBus emit failed:", err);
+            }
+          }
+        }
+        emit("send-result", { action: "betray", recipientId, success: false });
+      } else if (action === "embargo") {
+        // Trade embargo — WebSocket intent only
+        const { targetId: embargoTarget, embargoAction } = data;
         if (
           gameSocket &&
           gameSocket.readyState === 1 &&
-          currentClientID
+          currentClientID &&
+          embargoTarget
         ) {
           gameSocket.send(
             JSON.stringify({
               type: "intent",
               intent: {
-                type: "send_alliance_request",
+                type: "embargo",
                 clientID: currentClientID,
-                recipient: recipientId,
+                targetID: embargoTarget,
+                action: embargoAction, // "start" = stop trading, "stop" = resume trading
               },
             }),
           );
+          emit("send-result", {
+            action: "embargo",
+            targetId: embargoTarget,
+            embargoAction,
+            success: true,
+            method: "websocket",
+          });
+        } else {
+          console.warn("[Hammer:Main] Embargo failed: no gameSocket or clientID");
+          emit("send-result", {
+            action: "embargo",
+            targetId: embargoTarget,
+            embargoAction,
+            success: false,
+          });
         }
       } else if (action === "capture-mouse") {
         // ALT+M: resolve tile under mouse cursor, return owner info
@@ -1165,7 +1288,7 @@ export default defineContentScript({
         timeoutIds.length = 0;
         intervalIds.length = 0;
       },
-      version: "11.0.0-ext",
+      version: "15.0.0-ext",
     };
 
     console.log("[Hammer:Main] Hooks installed at document_start");

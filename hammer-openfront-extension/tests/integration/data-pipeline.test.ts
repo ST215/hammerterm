@@ -134,14 +134,15 @@ describe("data pipeline integration", () => {
   test("donation toast tracks correctly", () => {
     store.getState().addDonationToast({
       id: 1,
-      donorName: "Alice",
+      playerName: "Alice",
       type: "troops",
       amount: 5000,
+      direction: "in",
       timestamp: Date.now(),
     });
     const toasts = store.getState().donationToasts;
     expect(toasts.length).toBe(1);
-    expect(toasts[0].donorName).toBe("Alice");
+    expect(toasts[0].playerName).toBe("Alice");
   });
 
   test("CIA trackCIAEvent records sent troops transfer", () => {
@@ -264,9 +265,10 @@ describe("data pipeline integration", () => {
     store.getState().recordInbound(from!.id, "Alice", "troops", 8000);
     store.getState().addDonationToast({
       id: Date.now(),
-      donorName: "Alice",
+      playerName: "Alice",
       type: "troops",
       amount: 8000,
+      direction: "in",
       timestamp: Date.now(),
     });
 
@@ -274,6 +276,6 @@ describe("data pipeline integration", () => {
     expect(state.inbound.get(from!.id)!.troops).toBe(8000);
     expect(state.feedIn.length).toBe(1);
     expect(state.donationToasts.length).toBe(1);
-    expect(state.donationToasts[0].donorName).toBe("Alice");
+    expect(state.donationToasts[0].playerName).toBe("Alice");
   });
 });

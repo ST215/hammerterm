@@ -26,6 +26,14 @@ build/
 *.log
 OpenFrontIO/
 
+# WXT build artifacts
+.wxt/
+install/
+
+# Flight recorder exports (local diagnostics)
+hammer-recording-*.json
+hammer-match-*.json
+
 # Debug/diagnostic files
 data/
 ANALYSIS.md

@@ -1,3 +1,4 @@
+import { useMemo } from "react";
 import { useStore } from "@store/index";
 import {
   readMyPlayer,
@@ -19,7 +20,7 @@ export function useTeammates() {
   const currentClientID = useStore((s) => s.currentClientID);
   const mySmallID = useStore((s) => s.mySmallID);
   const me = readMyPlayer(lastPlayers, playersById, currentClientID, mySmallID);
-  return getTeammates(playersById, me);
+  return useMemo(() => getTeammates(playersById, me), [playersById, me]);
 }
 
 export function useAllies() {
@@ -29,5 +30,5 @@ export function useAllies() {
   const mySmallID = useStore((s) => s.mySmallID);
   const myAllies = useStore((s) => s.myAllies);
   const me = readMyPlayer(lastPlayers, playersById, currentClientID, mySmallID);
-  return getAllies(playersById, me, myAllies);
+  return useMemo(() => getAllies(playersById, me, myAllies), [playersById, me, myAllies]);
 }

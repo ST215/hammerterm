@@ -119,14 +119,17 @@ function handleReceivedTroops(
   // Update inbound donations
   useStore.getState().recordInbound(from.id, name, "troops", amt, donorTroopSnapshot);
 
-  // Donation toast (always, regardless of reciprocate settings)
-  useStore.getState().addDonationToast({
-    id: Date.now() + Math.random(),
-    donorName: name,
-    type: "troops",
-    amount: amt,
-    timestamp: Date.now(),
-  });
+  // Donation toast
+  if (useStore.getState().toastInboundTroops) {
+    useStore.getState().addDonationToast({
+      id: Date.now() + Math.random(),
+      playerName: name,
+      type: "troops",
+      amount: amt,
+      direction: "in",
+      timestamp: Date.now(),
+    });
+  }
 
   record("msg", "received.troops", { from: name, amt });
   log("[RECEIVED] Troops from", name, ":", amt);
@@ -211,14 +214,17 @@ function handleReceivedGold(
 
   useStore.getState().recordInbound(from.id, name!, "gold", amt, donorTroopSnapshot);
 
-  // Donation toast (always, regardless of reciprocate settings)
-  useStore.getState().addDonationToast({
-    id: Date.now() + Math.random(),
-    donorName: name!,
-    type: "gold",
-    amount: amt,
-    timestamp: Date.now(),
-  });
+  // Donation toast
+  if (useStore.getState().toastInboundGold) {
+    useStore.getState().addDonationToast({
+      id: Date.now() + Math.random(),
+      playerName: name!,
+      type: "gold",
+      amount: amt,
+      direction: "in",
+      timestamp: Date.now(),
+    });
+  }
 
   record("msg", "received.gold", { from: name, amt });
   log("[RECEIVED] Gold from", name, ":", amt);

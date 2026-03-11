@@ -114,7 +114,7 @@ export default defineBackground(() => {
     }
 
     if (message.type === "GET_STATUS") {
-      sendResponse({ ok: true, version: "11.0.0-ext" });
+      sendResponse({ ok: true, version: "15.0.0-ext" });
       return true;
     }
 

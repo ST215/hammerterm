@@ -57,6 +57,7 @@ export interface ReciprocateSlice {
   reciprocatePopupsEnabled: boolean;
   reciprocateNotifyDuration: number;
   reciprocateNotifySound: boolean;
+  popupScale: number;
   reciprocateHistory: ReciprocateHistoryEntry[];
   reciprocateNotifications: ReciprocateNotification[];
   reciprocatePending: ReciprocatePendingItem[];
@@ -70,6 +71,7 @@ export interface ReciprocateSlice {
   toggleReciprocateOnGold: () => void;
   toggleReciprocatePopupsEnabled: () => void;
   setReciprocateNotifyDuration: (duration: number) => void;
+  setPopupScale: (scale: number) => void;
   addReciprocateHistory: (entry: ReciprocateHistoryEntry) => void;
   addReciprocateNotification: (notification: ReciprocateNotification) => void;
   dismissReciprocateNotification: (id: number) => void;
@@ -92,6 +94,7 @@ export const createReciprocateSlice: StateCreator<ReciprocateSlice, [], [], Reci
   reciprocatePopupsEnabled: true,
   reciprocateNotifyDuration: 30,
   reciprocateNotifySound: false,
+  popupScale: 1.0,
   reciprocateHistory: [],
   reciprocateNotifications: [],
   reciprocatePending: [],
@@ -118,6 +121,8 @@ export const createReciprocateSlice: StateCreator<ReciprocateSlice, [], [], Reci
 
   setReciprocateNotifyDuration: (duration) =>
     set({ reciprocateNotifyDuration: duration }),
+
+  setPopupScale: (scale) => set({ popupScale: scale }),
 
   addReciprocateHistory: (entry) =>
     set((s) => ({

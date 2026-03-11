@@ -102,10 +102,14 @@ export const createAutoTroopsSlice: StateCreator<AutoTroopsSlice, [], [], AutoTr
     })),
 
   updateAsTroopsSendTimes: (targetId, lastSend, nextSend) =>
-    set((s) => ({
-      asTroopsLastSend: { ...s.asTroopsLastSend, [targetId]: lastSend },
-      asTroopsNextSend: { ...s.asTroopsNextSend, [targetId]: nextSend },
-    })),
+    set((s) => {
+      if (s.asTroopsLastSend[targetId] === lastSend && s.asTroopsNextSend[targetId] === nextSend)
+        return s;
+      return {
+        asTroopsLastSend: { ...s.asTroopsLastSend, [targetId]: lastSend },
+        asTroopsNextSend: { ...s.asTroopsNextSend, [targetId]: nextSend },
+      };
+    }),
 
   resetAutoTroops: () =>
     set({

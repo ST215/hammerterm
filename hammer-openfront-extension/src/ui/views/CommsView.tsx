@@ -99,6 +99,7 @@ export default function CommsView() {
   const [pendingQCKey, setPendingQCKey] = useState<string | null>(null);
   const [showOthers, setShowOthers] = useState(false);
   const [showBots, setShowBots] = useState(false);
+  const [search, setSearch] = useState("");
 
   const { otherHumans, otherBots } = useMemo(() => {
     const humans: PlayerData[] = [];
@@ -114,6 +115,13 @@ export default function CommsView() {
   }, [playersById, me, myTeam, myAllies]);
 
   const others = showBots ? [...otherHumans, ...otherBots] : otherHumans;
+
+  const q = search.toLowerCase();
+  const matchName = (p: PlayerData) =>
+    !q || (p.displayName || p.name || "").toLowerCase().includes(q);
+  const filteredTeammates = teammates.filter(matchName);
+  const filteredAllies = allies.filter(matchName);
+  const filteredOthers = others.filter(matchName);
 
   function toggleTarget(id: string) {
     if (commsTargets.has(id)) removeTarget(id);
@@ -221,6 +229,13 @@ export default function CommsView() {
     <div>
       {/* Send To */}
       <Section title="Send To" count={commsTargets.size}>
+        <input
+          type="text"
+          placeholder="Search players..."
+          value={search}
+          onChange={(e) => setSearch(e.target.value)}
+          className="w-full bg-hammer-bg border border-hammer-border text-hammer-text text-2xs px-2 py-1 rounded mb-1.5 focus:outline-none focus:border-hammer-blue"
+        />
         <div className="flex items-center gap-1 mb-1.5">
           {GROUP_MODES.map((g) => (
             <PresetButton
@@ -232,11 +247,11 @@ export default function CommsView() {
           ))}
         </div>
 
-        {teammates.length > 0 && (
+        {filteredTeammates.length > 0 && (
           <div className="mb-1">
-            <div className="text-2xs text-hammer-blue font-bold mb-0.5">Team ({teammates.length})</div>
+            <div className="text-2xs text-hammer-blue font-bold mb-0.5">Team ({filteredTeammates.length})</div>
             <div className="flex flex-wrap gap-0.5">
-              {teammates.map((p) => (
+              {filteredTeammates.map((p) => (
                 <button
                   key={p.id}
                   onClick={() => toggleTarget(p.id)}
@@ -253,11 +268,11 @@ export default function CommsView() {
           </div>
         )}
 
-        {allies.length > 0 && (
+        {filteredAllies.length > 0 && (
           <div className="mb-1">
-            <div className="text-2xs text-hammer-green font-bold mb-0.5">Allies ({allies.length})</div>
+            <div className="text-2xs text-hammer-green font-bold mb-0.5">Allies ({filteredAllies.length})</div>
             <div className="flex flex-wrap gap-0.5">
-              {allies.map((p) => (
+              {filteredAllies.map((p) => (
                 <button
                   key={p.id}
                   onClick={() => toggleTarget(p.id)}
@@ -281,7 +296,7 @@ export default function CommsView() {
                 onClick={() => setShowOthers(!showOthers)}
                 className="text-2xs text-hammer-muted hover:text-hammer-text bg-transparent border-none cursor-pointer p-0 font-mono"
               >
-                Others ({others.length}) {showOthers ? "\u25BC" : "\u25B6"}
+                Others ({filteredOthers.length}) {showOthers ? "\u25BC" : "\u25B6"}
               </button>
               {showOthers && otherBots.length > 0 && (
                 <button
@@ -298,7 +313,7 @@ export default function CommsView() {
             </div>
             {showOthers && (
               <div className="flex flex-wrap gap-0.5 mt-0.5">
-                {others.map((p) => (
+                {filteredOthers.map((p) => (
                   <button
                     key={p.id}
                     onClick={() => toggleTarget(p.id)}

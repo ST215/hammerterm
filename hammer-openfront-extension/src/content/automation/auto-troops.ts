@@ -89,9 +89,6 @@ function asTroopsTick(): void {
     const cooldownMs = s.asTroopsCooldownSec * 1000;
     const nextSend = last + cooldownMs;
 
-    // Update next-send time in store for UI display
-    useStore.getState().updateAsTroopsSendTimes(target.id, last, nextSend);
-
     if (now >= nextSend) {
       // Recompute amount each iteration (troops decrease after each send)
       const toSend = Math.max(1, Math.floor(troops * (s.asTroopsRatio / 100)));
@@ -112,6 +109,17 @@ function asTroopsTick(): void {
           target: target.name,
           amount: toSend,
         });
+        const { toastOutboundTroops } = useStore.getState();
+        if (toastOutboundTroops) {
+          useStore.getState().addDonationToast({
+            id: Date.now() + Math.random(),
+            playerName: target.name,
+            type: "troops",
+            amount: toSend,
+            direction: "out",
+            timestamp: Date.now(),
+          });
+        }
       } else {
         record("auto-t", "error", { target: target.name, reason: "send-failed" });
         log(`[AUTO-TROOPS] Send failed to ${target.name}`);

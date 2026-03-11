@@ -3,9 +3,11 @@ import { useStore } from "@store/index";
 const TABS: { id: string; label: string }[] = [
   { id: "summary", label: "Summary" },
   { id: "alliances", label: "Alliances" },
+  { id: "trading", label: "Trading" },
   { id: "autotroops", label: "AutoTroops" },
   { id: "autogold", label: "AutoGold" },
   { id: "reciprocate", label: "Reciprocate" },
+  { id: "broadcast", label: "Broadcast" },
   { id: "comms", label: "Comms" },
   { id: "cia", label: "CIA" },
   { id: "recorder", label: "Rec" },

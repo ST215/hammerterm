@@ -132,8 +132,22 @@ export function installBridge(): void {
         record("hook", hook + (found ? ".found" : ".missing"), { found, snapshot: true });
       }
       // Periodically refresh recorder data in the store (for dashboard sync)
+      let snapshotCounter = 0;
       recorderRefreshInterval = setInterval(() => {
         useStore.getState().refreshRecorderCount();
+        // Periodic game state snapshot every 30s
+        snapshotCounter++;
+        if (snapshotCounter % 30 === 0) {
+          const s = useStore.getState();
+          record("state", "snapshot", {
+            playerCount: s.playersById.size,
+            mySmallID: s.mySmallID,
+            myTeam: s.myTeam,
+            allies: [...s.myAllies],
+            hooks: { ...hookStatus },
+            eventClasses: [...discoveredEventClasses],
+          });
+        }
       }, 1000);
     } else {
       stopRecording();
@@ -179,7 +193,13 @@ function onBridgeMessage(e: MessageEvent): void {
       handleMouseTarget(payload);
       break;
     case "send-result":
-      // Could add callback handling here if needed
+      record("cmd", "result", payload);
+      break;
+    case "ws-out":
+      record("ws", "out", payload?.data ?? payload);
+      break;
+    case "ws-in":
+      record("ws", "in", payload?.data ?? payload);
       break;
   }
 }
@@ -201,6 +221,7 @@ function handleInit(payload: { clientID: string }): void {
     store.resetDonations();
     store.resetAutoTroops();
     store.resetAutoGold();
+    store.resetBroadcast();
     store.resetReciprocate();
     store.resetComms();
     store.resetCIA();
@@ -211,6 +232,28 @@ function handleInit(payload: { clientID: string }): void {
   console.log("[Hammer:Bridge] ClientID set:", payload.clientID);
 }
 
+/** Shallow-compare two PlayerData objects (all primitive/simple fields). */
+function playerChanged(prev: PlayerData | undefined, next: PlayerData): boolean {
+  if (!prev) return true;
+  return (
+    prev.troops !== next.troops ||
+    prev.gold !== next.gold ||
+    prev.isAlive !== next.isAlive ||
+    prev.team !== next.team ||
+    prev.displayName !== next.displayName ||
+    prev.name !== next.name ||
+    prev.clientID !== next.clientID ||
+    prev.tilesOwned !== next.tilesOwned
+  );
+}
+
+/** Compare two Sets of numbers for equality. */
+function setsEqual(a: Set<number>, b: Set<number>): boolean {
+  if (a.size !== b.size) return false;
+  for (const v of a) if (!b.has(v)) return false;
+  return true;
+}
+
 function handlePlayerUpdate(payload: {
   players: any[];
   tick?: number;
@@ -219,18 +262,27 @@ function handlePlayerUpdate(payload: {
 
   const store = useStore.getState();
 
-  // Atomic merge: copy existing maps, overlay incremental updates
-  const newById = new Map(store.playersById);
-  const newBySmallId = new Map(store.playersBySmallId);
-
+  // Check if any player actually changed before creating new Map references
+  let anyChanged = false;
   for (const p of payload.players) {
     if (!p) continue;
-    newById.set(p.id, p);
-    if (p.smallID != null) newBySmallId.set(p.smallID, p);
+    if (playerChanged(store.playersById.get(p.id), p)) {
+      anyChanged = true;
+      break;
+    }
   }
 
-  const list = [...newById.values()];
-  store.setPlayers(newById, newBySmallId, list);
+  if (anyChanged) {
+    const newById = new Map(store.playersById);
+    const newBySmallId = new Map(store.playersBySmallId);
+    for (const p of payload.players) {
+      if (!p) continue;
+      newById.set(p.id, p);
+      if (p.smallID != null) newBySmallId.set(p.smallID, p);
+    }
+    const list = [...newById.values()];
+    store.setPlayers(newById, newBySmallId, list);
+  }
 
   // Identify our player
   let my: any = null;
@@ -252,10 +304,15 @@ function handlePlayerUpdate(payload: {
     const smallID = my.smallID ?? store.mySmallID;
     const team = my.team ?? store.myTeam;
     if (smallID != null) {
-      store.setMyIdentity(smallID, team);
+      if (store.mySmallID !== smallID || store.myTeam !== team) {
+        store.setMyIdentity(smallID, team);
+      }
     }
     if (Array.isArray(my.allies) && my.allies.length > 0) {
-      store.updateAllies(new Set(my.allies));
+      const newAllies = new Set<number>(my.allies);
+      if (!setsEqual(store.myAllies, newAllies)) {
+        store.updateAllies(newAllies);
+      }
     }
     if (!store.playerDataReady && smallID !== null) {
       store.markPlayerDataReady();
@@ -312,7 +369,19 @@ function handleBootstrap(payload: {
   }
 
   if (newById.size > 0) {
-    store.setPlayers(newById, newBySmallId, [...newById.values()]);
+    // Skip setPlayers if nothing actually changed
+    let changed = newById.size !== store.playersById.size;
+    if (!changed) {
+      for (const [id, p] of newById) {
+        if (playerChanged(store.playersById.get(id), p)) {
+          changed = true;
+          break;
+        }
+      }
+    }
+    if (changed) {
+      store.setPlayers(newById, newBySmallId, [...newById.values()]);
+    }
     if (foundMyPlayer && store.mySmallID != null) {
       store.markPlayerDataReady();
       drainPendingMessages();
@@ -347,7 +416,19 @@ function handleRefresh(payload: { players: any[] }): void {
     }
   }
 
-  store.setPlayers(newById, newBySmallId, [...newById.values()]);
+  // Skip setPlayers if nothing actually changed (prevents re-renders every 3s)
+  let changed = newById.size !== store.playersById.size;
+  if (!changed) {
+    for (const [id, p] of newById) {
+      if (playerChanged(store.playersById.get(id), p)) {
+        changed = true;
+        break;
+      }
+    }
+  }
+  if (changed) {
+    store.setPlayers(newById, newBySmallId, [...newById.values()]);
+  }
 }
 
 function handleTiles(payload: { packed: string[] }): void {

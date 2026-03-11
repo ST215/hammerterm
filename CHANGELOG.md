@@ -4,6 +4,35 @@ All notable changes to Hammer Control Panel will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [15.0.0] - 2026-03-11 "Full Dashboard + Match Replay"
+
+### Added
+
+- **Dashboard Window** — detach the Hammer overlay into a standalone browser window. The overlay stays visible on the game page simultaneously. Header toggle switches between modes seamlessly; dashboard initializes to correct mode without momentarily hiding the panel.
+- **Trading View** — new dedicated tab for donation history: inbound/outbound feeds with cumulative gold/troops totals and running stats per session.
+- **Broadcast** — timed emoji broadcaster. Configure a sequence (or single emoji), set a cadence, toggle on/off. Broadcasts to all alliance targets in sequence.
+- **Player search** — Comms, Alliances, and Trading views all have a live search/filter field to find players by name.
+- **Alliance Request UI** — bot/human filtering in the Alliances tab; send alliance requests to filtered sets of players.
+- **Notification position pickers** — independently reposition ReciprocatePopup and DonationToast to any of 7 screen zones (top-left, top-center, top-right, center, bottom-left, bottom-center, bottom-right) via 3×3 grid selector in the Help tab.
+- **StatusToast scale + test** — center-screen flash popup now has a scale slider (0.5–2.5) and a "Test" button in the Help tab. StatusToast now mounts in dashboard window mode so test button works there too.
+- **DonationToast enrichment** — donation popups now show cumulative history per donor: ordinal count (1st/2nd/3rd gift), running gold/troops totals, per-session history list.
+- **Separate toast scale sliders** — ReciprocatePopup scale and DonationToast scale are independently configurable.
+- **Match Export** — "Export Match Data" button in Help tab downloads a structured JSON snapshot of the full session: CIA transfers, flow graph, player totals, donation feeds, player roster.
+- **Replay Viewer** (`hammer-replay-viewer/index.html`) — standalone static app (no build step, no server) for visualizing exported match data. Drop zone, player POV selector, overview cards, leaderboard bar charts (Chart.js), timeline, net balance table, flow table, and suspicious pattern detection (feeder/sink alerts).
+- **Palantir mode** — sacrifice-aware smart reciprocation engine that weighs donor sacrifice ratio, loyalty score, team relationship, and your current power phase to decide if/how much to send back.
+
+### Changed
+
+- Opening dashboard window no longer hides the overlay panel — both coexist.
+- Mode toggle icon in header correctly reflects current display mode from first render.
+- Auto mode in Reciprocate hides percentage buttons (only relevant in manual mode).
+- `.gitignore` now excludes `.wxt/`, `install/`, `hammer-recording-*.json`, `hammer-match-*.json`.
+
+### Fixed
+
+- StatusToast test button was a no-op in dashboard window mode (component not mounted). Fixed by mounting StatusToast in window mode render branch.
+- Dashboard opening caused immediate panel disappearance due to premature `setDisplayMode("window")` call in overlay button handler. Overlay now only sends `OPEN_DASHBOARD`; dashboard forces its own `displayMode: "window"` on mount.
+
 ## [11.0.4] - 2026-02-19
 
 ### Fixed

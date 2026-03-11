@@ -2,6 +2,7 @@ import { useEffect, useCallback } from "react";
 import { useStore } from "@store/index";
 import { short } from "@shared/utils";
 import { handleQuickReciprocate } from "@content/automation/reciprocate-engine";
+import { notifPositionStyle } from "@shared/notif-position";
 
 const PCT_OPTIONS = [10, 25, 50, 75, 100] as const;
 
@@ -10,6 +11,10 @@ export default function ReciprocatePopup() {
   const dismissNotification = useStore((s) => s.dismissReciprocateNotification);
   const popupsEnabled = useStore((s) => s.reciprocatePopupsEnabled);
   const notifyDuration = useStore((s) => s.reciprocateNotifyDuration);
+  const popupScale = useStore((s) => s.popupScale);
+  const reciprocateMode = useStore((s) => s.reciprocateMode);
+  const position = useStore((s) => s.reciprocatePosition);
+  const isAuto = reciprocateMode === "auto" || reciprocateMode === "palantir";
 
   // Auto-dismiss after duration
   useEffect(() => {
@@ -45,11 +50,9 @@ export default function ReciprocatePopup() {
 
   return (
     <div
-      className="fixed font-mono"
+      className="font-mono"
       style={{
-        top: 80,
-        right: 20,
-        zIndex: 2147483647,
+        ...notifPositionStyle(position, popupScale),
         display: "flex",
         flexDirection: "column",
         gap: 10,
@@ -100,25 +103,31 @@ export default function ReciprocatePopup() {
               )}
             </div>
 
-            {/* Send type label */}
-            <div className="text-2xs text-hammer-muted uppercase tracking-wider mb-1.5">
-              {sendLabel}
-            </div>
+            {isAuto ? (
+              <div className="text-2xs text-hammer-dim italic">Auto-reciprocating...</div>
+            ) : (
+              <>
+                {/* Send type label */}
+                <div className="text-2xs text-hammer-muted uppercase tracking-wider mb-1.5">
+                  {sendLabel}
+                </div>
 
-            {/* Percentage buttons */}
-            <div className="flex gap-2 flex-wrap">
-              {PCT_OPTIONS.map((pct) => (
-                <button
-                  key={pct}
-                  className="px-3 py-1.5 text-sm font-mono font-bold border border-hammer-border bg-hammer-surface text-hammer-text hover:text-hammer-green hover:border-hammer-green cursor-pointer transition-colors"
-                  style={{ borderRadius: 4, minWidth: 48 }}
-                  onClick={() => handleSend(n, pct)}
-                  title={`Send ${pct}% of your ${sendType}`}
-                >
-                  {pct}%
-                </button>
-              ))}
-            </div>
+                {/* Percentage buttons */}
+                <div className="flex gap-2 flex-wrap">
+                  {PCT_OPTIONS.map((pct) => (
+                    <button
+                      key={pct}
+                      className="px-3 py-1.5 text-sm font-mono font-bold border border-hammer-border bg-hammer-surface text-hammer-text hover:text-hammer-green hover:border-hammer-green cursor-pointer transition-colors"
+                      style={{ borderRadius: 4, minWidth: 48 }}
+                      onClick={() => handleSend(n, pct)}
+                      title={`Send ${pct}% of your ${sendType}`}
+                    >
+                      {pct}%
+                    </button>
+                  ))}
+                </div>
+              </>
+            )}
           </div>
         );
       })}

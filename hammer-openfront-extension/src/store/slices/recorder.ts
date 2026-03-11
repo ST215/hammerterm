@@ -4,6 +4,7 @@ import {
   getEventCount,
   getRecentEvents,
   exportRecording,
+  setMetadata,
 } from "../../recorder";
 
 export interface RecorderSlice {
@@ -15,7 +16,7 @@ export interface RecorderSlice {
   refreshRecorderCount: () => void;
 }
 
-export const createRecorderSlice: StateCreator<RecorderSlice> = (set) => ({
+export const createRecorderSlice: StateCreator<RecorderSlice> = (set, get) => ({
   recorderOn: false,
   recorderEventCount: 0,
   recorderRecentEvents: [],
@@ -27,6 +28,23 @@ export const createRecorderSlice: StateCreator<RecorderSlice> = (set) => ({
   },
 
   exportRecorder: () => {
+    // Enrich export with current game state for diagnostics
+    const state = get() as any;
+    setMetadata({
+      playerCount: state.playersById?.size ?? 0,
+      players: (state.lastPlayers ?? []).map((p: any) => ({
+        id: p.id,
+        smallID: p.smallID,
+        name: p.displayName || p.name,
+        team: p.team,
+        isAlive: p.isAlive,
+        clientID: p.clientID,
+      })),
+      mySmallID: state.mySmallID ?? null,
+      myTeam: state.myTeam ?? null,
+      myAllies: state.myAllies ? [...state.myAllies] : [],
+      currentClientID: state.currentClientID ?? null,
+    });
     const data = exportRecording();
     const json = JSON.stringify(data, null, 2);
     const blob = new Blob([json], { type: "application/json" });
@@ -39,9 +57,13 @@ export const createRecorderSlice: StateCreator<RecorderSlice> = (set) => ({
   },
 
   refreshRecorderCount: () => {
-    set({
-      recorderEventCount: getEventCount(),
-      recorderRecentEvents: getRecentEvents(20),
+    const count = getEventCount();
+    set((s) => {
+      if (s.recorderEventCount === count) return s;
+      return {
+        recorderEventCount: count,
+        recorderRecentEvents: getRecentEvents(20),
+      };
     });
   },
 });

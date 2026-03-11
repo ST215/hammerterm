@@ -14,6 +14,8 @@ export default function HeaderButtons() {
   const setUIVisible = useStore((s) => s.setUIVisible);
   const recorderOn = useStore((s) => s.recorderOn);
   const toggleRecorder = useStore((s) => s.toggleRecorder);
+  const displayMode = useStore((s) => s.displayMode);
+  const setDisplayMode = useStore((s) => s.setDisplayMode);
 
   const handleSize = () => {
     setSizeIdx((sizeIdx + 1) % SIZES.length);
@@ -28,8 +30,29 @@ export default function HeaderButtons() {
     }
   };
 
+  const handleModeToggle = () => {
+    if (displayMode === "window") {
+      // In dashboard — switch back to overlay and close window
+      setDisplayMode("overlay");
+      chrome.runtime.sendMessage({ type: "CLOSE_DASHBOARD" });
+    } else {
+      // In overlay — open dashboard alongside (panel stays visible)
+      chrome.runtime.sendMessage({ type: "OPEN_DASHBOARD" });
+    }
+  };
+
   return (
     <>
+      {/* Display mode toggle */}
+      <button
+        className={btnClass}
+        onClick={handleModeToggle}
+        title={displayMode === "window" ? "Close dashboard / switch to overlay" : "Open dashboard window"}
+        style={{ minWidth: 28, textAlign: "center" }}
+      >
+        {displayMode === "window" ? "\u2612" : "\u29C9"}
+      </button>
+
       {/* Size toggle */}
       <button
         className={btnClass}

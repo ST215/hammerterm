@@ -18,6 +18,7 @@ let events: RecorderEvent[] = [];
 let recording = false;
 let startedAt = 0;
 let dropped = 0;
+let metadata: Record<string, unknown> = {};
 
 export function isRecording(): boolean {
   return recording;
@@ -26,8 +27,13 @@ export function isRecording(): boolean {
 export function startRecording(): void {
   events = [];
   dropped = 0;
+  metadata = {};
   startedAt = Date.now();
   recording = true;
+}
+
+export function setMetadata(meta: Record<string, unknown>): void {
+  metadata = meta;
 }
 
 export function stopRecording(): void {
@@ -57,13 +63,14 @@ export function getRecentEvents(n: number): RecorderEvent[] {
 
 export function exportRecording(): object {
   return {
-    version: "11.0.0-ext",
+    version: "15.0.0-ext",
     exportedAt: Date.now(),
     session: {
       startedAt,
       durationMs: Date.now() - startedAt,
     },
     stats: { totalEvents: events.length + dropped, dropped },
+    metadata,
     events: [...events],
   };
 }

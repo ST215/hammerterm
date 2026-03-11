@@ -7,7 +7,7 @@ import {
   getAllies,
   readMyPlayer,
 } from "./player-helpers";
-import type { PlayerData } from "./state";
+import type { PlayerData } from "../types";
 
 export interface ResolvedTarget {
   id: string;

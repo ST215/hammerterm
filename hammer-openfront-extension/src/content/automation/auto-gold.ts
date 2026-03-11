@@ -82,9 +82,6 @@ function asGoldTick(): void {
     const cooldownMs = s.asGoldCooldownSec * 1000;
     const nextSend = last + cooldownMs;
 
-    // Update next-send time in store for UI display
-    useStore.getState().updateAsGoldSendTimes(target.id, last, nextSend);
-
     if (now >= nextSend) {
       // Recompute each iteration (gold decreases after each send)
       const toSend = Math.max(1, Math.floor(gold * (s.asGoldRatio / 100)));
@@ -103,6 +100,17 @@ function asGoldTick(): void {
           target: target.name,
           amount: toSend,
         });
+        const { toastOutboundGold } = useStore.getState();
+        if (toastOutboundGold) {
+          useStore.getState().addDonationToast({
+            id: Date.now() + Math.random(),
+            playerName: target.name,
+            type: "gold",
+            amount: toSend,
+            direction: "out",
+            timestamp: Date.now(),
+          });
+        }
       } else {
         record("auto-g", "error", { target: target.name, reason: "send-failed" });
         log(`[AUTO-GOLD] Send failed to ${target.name}`);
