@@ -1,12 +1,16 @@
 import AutoSendView, { type ResourceConfig } from "./AutoSendView";
 import { asTroopsStart, asTroopsStop } from "@content/automation/auto-troops";
 import { dTroops } from "@shared/utils";
+import { TROOP_DISPLAY_DIV } from "@shared/constants";
+import { estimateMaxTroops } from "@shared/logic/city";
+import { cityLevelSumByOwner } from "@content/hooks/worker-hook";
 
 const TROOPS_CONFIG: ResourceConfig = {
   label: "Troops",
   unit: "t",
   accentColor: "hammer-blue",
   getMyAmount: (me) => dTroops(me?.troops),
+  getMaxAmount: (me) => estimateMaxTroops(me?.tilesOwned ?? 0, me?.smallID ?? 0, cityLevelSumByOwner) / TROOP_DISPLAY_DIV,
   thresholdMode: "pct",
   thresholdPresets: [0, 25, 50, 75],
   thresholdLabel: "Threshold (min troops %)",

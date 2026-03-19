@@ -15,6 +15,7 @@ import {
 } from "@shared/logic/player-helpers";
 import { resolveAutoSendTargets, type ResolvedTarget } from "@shared/logic/auto-send-helpers";
 import { estimateMaxTroops } from "@shared/logic/city";
+import { cityLevelSumByOwner } from "@content/hooks/worker-hook";
 import { dTroops, short } from "@shared/utils";
 import { asSendTroops } from "../game/send";
 import { registerInterval } from "../cleanup";
@@ -70,9 +71,6 @@ function asTroopsTick(): void {
   if (!me) return;
 
   let troops = Number(me.troops || 0);
-  // TODO: cityLevelSumByOwner is tracked by the worker hook (not yet wired).
-  // For now pass an empty map; max troop estimates will be base-only.
-  const cityLevelSumByOwner = new Map<number, number>();
   const maxT = estimateMaxTroops(me.tilesOwned ?? 0, me.smallID ?? 0, cityLevelSumByOwner);
   const troopPct = maxT > 0 ? (troops / maxT) * 100 : 0;
 
@@ -101,13 +99,14 @@ function asTroopsTick(): void {
       }
 
       if (asSendTroops(target.id, toSend)) {
-        record("auto-t", "sent", { target: target.name, amount: toSend });
+        const displayAmount = dTroops(toSend); // convert internal→display for UI
+        record("auto-t", "sent", { target: target.name, amount: displayAmount });
         troops -= toSend; // Track locally so next target sees reduced amount
         useStore.getState().updateAsTroopsSendTimes(target.id, now, now + cooldownMs);
         useStore.getState().addAsTroopsLog({
           ts: Date.now(),
           target: target.name,
-          amount: toSend,
+          amount: displayAmount,
         });
         const { toastOutboundTroops } = useStore.getState();
         if (toastOutboundTroops) {
@@ -115,7 +114,7 @@ function asTroopsTick(): void {
             id: Date.now() + Math.random(),
             playerName: target.name,
             type: "troops",
-            amount: toSend,
+            amount: displayAmount,
             direction: "out",
             timestamp: Date.now(),
           });

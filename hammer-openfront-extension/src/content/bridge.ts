@@ -34,12 +34,16 @@ let discoveredEventClasses: string[] = [];
 let dashboardPort: chrome.runtime.Port | null = null;
 let syncTimer: ReturnType<typeof setInterval> | null = null;
 const SYNC_INTERVAL_MS = 500;
+let lastSnapshotJson = "";
 
 function sendSnapshot(): void {
   if (!dashboardPort) return;
   try {
     const state = useStore.getState();
     const snapshot = serialize(state);
+    const json = JSON.stringify(snapshot);
+    if (json === lastSnapshotJson) return; // nothing changed, skip re-render
+    lastSnapshotJson = json;
     dashboardPort.postMessage({ type: "snapshot", data: snapshot });
   } catch {
     // Port may be disconnected
@@ -232,12 +236,12 @@ function handleInit(payload: { clientID: string }): void {
   console.log("[Hammer:Bridge] ClientID set:", payload.clientID);
 }
 
-/** Shallow-compare two PlayerData objects (all primitive/simple fields). */
-function playerChanged(prev: PlayerData | undefined, next: PlayerData): boolean {
-  if (!prev) return true;
+/**
+ * Structural fields: player join/leave/die, team changes, name, tile count.
+ * Changes here always propagate to the store immediately.
+ */
+function playerStructurallyChanged(prev: PlayerData, next: PlayerData): boolean {
   return (
-    prev.troops !== next.troops ||
-    prev.gold !== next.gold ||
     prev.isAlive !== next.isAlive ||
     prev.team !== next.team ||
     prev.displayName !== next.displayName ||
@@ -246,6 +250,25 @@ function playerChanged(prev: PlayerData | undefined, next: PlayerData): boolean 
     prev.tilesOwned !== next.tilesOwned
   );
 }
+
+/**
+ * Volatile stats: troops and gold tick up constantly during gameplay.
+ * These are throttled to at most once per STATS_THROTTLE_MS to prevent
+ * continuous UI re-renders from every troop tick.
+ */
+function playerStatsChanged(prev: PlayerData, next: PlayerData): boolean {
+  return prev.troops !== next.troops || prev.gold !== next.gold;
+}
+
+/** Combined check — used by bootstrap/refresh where we have no prior context. */
+function playerChanged(prev: PlayerData | undefined, next: PlayerData): boolean {
+  if (!prev) return true;
+  return playerStructurallyChanged(prev, next) || playerStatsChanged(prev, next);
+}
+
+/** How often stat-only player updates (troops/gold ticks) land in the store. */
+const STATS_THROTTLE_MS = 1000;
+let lastStatsUpdateMs = 0;
 
 /** Compare two Sets of numbers for equality. */
 function setsEqual(a: Set<number>, b: Set<number>): boolean {
@@ -262,17 +285,24 @@ function handlePlayerUpdate(payload: {
 
   const store = useStore.getState();
 
-  // Check if any player actually changed before creating new Map references
-  let anyChanged = false;
+  // Separate structural changes (instant) from stats-only changes (throttled).
+  let hasStructuralChange = false;
+  let hasStatsChange = false;
   for (const p of payload.players) {
     if (!p) continue;
-    if (playerChanged(store.playersById.get(p.id), p)) {
-      anyChanged = true;
-      break;
-    }
+    const prev = store.playersById.get(p.id);
+    if (!prev) { hasStructuralChange = true; break; }
+    if (playerStructurallyChanged(prev, p)) { hasStructuralChange = true; break; }
+    if (!hasStatsChange && playerStatsChanged(prev, p)) hasStatsChange = true;
   }
 
-  if (anyChanged) {
+  const now = Date.now();
+  const shouldUpdate =
+    hasStructuralChange ||
+    (hasStatsChange && now - lastStatsUpdateMs >= STATS_THROTTLE_MS);
+
+  if (shouldUpdate) {
+    lastStatsUpdateMs = now;
     const newById = new Map(store.playersById);
     const newBySmallId = new Map(store.playersBySmallId);
     for (const p of payload.players) {
@@ -416,17 +446,25 @@ function handleRefresh(payload: { players: any[] }): void {
     }
   }
 
-  // Skip setPlayers if nothing actually changed (prevents re-renders every 3s)
-  let changed = newById.size !== store.playersById.size;
-  if (!changed) {
+  // Separate structural changes (instant) from stats-only changes (throttled).
+  let hasStructuralChange = newById.size !== store.playersById.size;
+  let hasStatsChange = false;
+  if (!hasStructuralChange) {
     for (const [id, p] of newById) {
-      if (playerChanged(store.playersById.get(id), p)) {
-        changed = true;
-        break;
-      }
+      const prev = store.playersById.get(id);
+      if (!prev) { hasStructuralChange = true; break; }
+      if (playerStructurallyChanged(prev, p)) { hasStructuralChange = true; break; }
+      if (!hasStatsChange && playerStatsChanged(prev, p)) hasStatsChange = true;
     }
   }
-  if (changed) {
+
+  const now = Date.now();
+  const shouldUpdate =
+    hasStructuralChange ||
+    (hasStatsChange && now - lastStatsUpdateMs >= STATS_THROTTLE_MS);
+
+  if (shouldUpdate) {
+    lastStatsUpdateMs = now;
     store.setPlayers(newById, newBySmallId, [...newById.values()]);
   }
 }

@@ -4,6 +4,22 @@ All notable changes to Hammer Control Panel will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [15.0.1] - 2026-03-15 "Stabilization"
+
+### Fixed
+
+- **Auto-troops threshold display always showed RECHARGING**: `estimateMaxTroops()` returns internal troop units (×10 of display), but the UI was comparing it against display-scale `dTroops()` values. The recharge bar and RECHARGING indicator were therefore always active regardless of actual troop levels. Fixed by dividing `getMaxAmount` by `TROOP_DISPLAY_DIV`.
+- **Auto-troops log and toast amounts were 10× too high**: Sending 1,000 display troops was logged and toasted as "10,000 troops". Fixed by applying `dTroops()` to convert internal→display before writing to the log and donation toast.
+- **Panel resize collapse loop**: Using CSS `resize: both` with a `ResizeObserver` that read `contentRect` (excludes border) caused a 2px-per-cycle shrink loop — the panel would collapse to `minWidth` the moment the user touched the resize handle. Fixed by reading `borderBoxSize` (full outer dimensions) instead, and using a functional `setManualSize` update that skips re-render when dimensions are unchanged.
+- **UI blink/flicker from continuous troop tick updates**: The game Worker sends player stat updates multiple times per second. Every update caused `setPlayers()` to rebuild `playersById` and `lastPlayers`, triggering re-renders across all views. Fixed with a 1-second throttle for stats-only changes (troops/gold ticking); structural changes (player joining/dying/team changing) still propagate instantly.
+- **Dashboard window blinking at idle**: The 500ms dashboard snapshot was sent unconditionally even when nothing changed. Added a diff check (JSON comparison to last sent snapshot) — the port message is now skipped when state is identical.
+- **Double render per second in Troop/Gold MGMT**: The `gainRate` `useEffect` fired a second `setState` on every `myAmount` change, causing two React renders per player update. Removed gain rate tracking entirely (the 2-sample slope was too noisy to be useful anyway).
+
+### Changed
+
+- **Troop MGMT / Gold MGMT status section redesigned**: Merged the Status Header + Live Preview + Controls sections into a single card. START/STOP button is now at the top (was buried below Settings and Targets). When running and ready, shows `READY → 450K t × 3 targets`. When below threshold, shows `RECHARGING` with a progress bar and `current / target` amounts. Removed the redundant Ratio/Threshold/CD echo and the noisy Rate display.
+- **City troop bonus wired to automation engine**: `cityLevelSumByOwner` (live Map updated on every Unit Worker message) is now imported directly by the auto-troops engine and UI. Previously both used an empty `new Map()`, ignoring city bonuses (each city level adds 250K internal = 25K display max troops).
+
 ## [15.0.0] - 2026-03-11 "Full Dashboard + Match Replay"
 
 ### Added

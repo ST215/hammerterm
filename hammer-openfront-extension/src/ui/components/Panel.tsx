@@ -56,18 +56,21 @@ export default function Panel({ header, children }: PanelProps) {
     if (!el || minimized) return;
     const observer = new ResizeObserver((entries) => {
       for (const entry of entries) {
-        const { width, height } = entry.contentRect;
-        if (
-          Math.abs(width - size.w) > 2 ||
-          Math.abs(height - size.h) > 2
-        ) {
-          setManualSize({ w: Math.round(width), h: Math.round(height) });
-        }
+        // Use borderBoxSize (includes borders) to avoid a shrink feedback loop
+        // where contentRect excludes borders, causing the panel to collapse 2px/cycle.
+        const bbs = entry.borderBoxSize?.[0];
+        if (!bbs) continue;
+        const w = Math.round(bbs.inlineSize);
+        const h = Math.round(bbs.blockSize);
+        setManualSize((prev) => {
+          if (prev && prev.w === w && prev.h === h) return prev;
+          return { w, h };
+        });
       }
     });
     observer.observe(el);
     return () => observer.disconnect();
-  }, [minimized, size.w, size.h]);
+  }, [minimized]);
 
   // Reset manual size when sizeIdx changes
   useEffect(() => {
@@ -92,8 +95,10 @@ export default function Panel({ header, children }: PanelProps) {
         width: panelW,
         height: panelH,
         zIndex: 2147483647,
-        overflow: minimized ? "hidden" : "visible",
+        overflow: "hidden",
         resize: minimized ? "none" : "both",
+        minWidth: 300,
+        minHeight: minimized ? undefined : 120,
         borderRadius: "4px",
         display: "flex",
         flexDirection: "column",
