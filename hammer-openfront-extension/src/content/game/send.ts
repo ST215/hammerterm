@@ -191,6 +191,24 @@ export function sendEmbargoStop(targetId: string): boolean {
   );
 }
 
+/** Embargo ALL players at once (server-side, single intent) */
+export function sendEmbargoAll(): boolean {
+  return enqueueIntent(
+    { action: "embargo_all", embargoAction: "start" },
+    "cmd", "embargo_all.start", {},
+    `[SEND] Embargo all (stop trading with everyone)`,
+  );
+}
+
+/** Resume trading with ALL players at once (server-side, single intent) */
+export function sendResumeAll(): boolean {
+  return enqueueIntent(
+    { action: "embargo_all", embargoAction: "stop" },
+    "cmd", "embargo_all.stop", {},
+    `[SEND] Resume all (resume trading with everyone)`,
+  );
+}
+
 // ---------- getPlayerView ----------
 
 /**

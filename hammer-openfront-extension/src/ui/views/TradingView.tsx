@@ -2,7 +2,7 @@ import { useState, useCallback, useMemo, memo } from "react";
 import { useStore } from "@store/index";
 import { useMyPlayer, useTeammates, useAllies } from "@ui/hooks/usePlayerHelpers";
 import { short, dTroops, num } from "@shared/utils";
-import { sendEmbargoStart, sendEmbargoStop } from "@content/game/send";
+import { sendEmbargoStart, sendEmbargoStop, sendEmbargoAll, sendResumeAll } from "@content/game/send";
 import type { PlayerData } from "@shared/types";
 
 // ---------------------------------------------------------------------------
@@ -244,27 +244,26 @@ export default function TradingView() {
     setResumeSelected(new Set());
   }, [resumeSelected]);
 
-  // Quick action: resume all players
+  // Quick action: resume all players (server-side single intent)
   const resumeAllPlayers = useCallback(() => {
-    for (const p of allPlayers) sendEmbargoStop(p.id);
+    sendResumeAll();
     setEmbargoed(new Set());
-  }, [allPlayers]);
+  }, []);
 
-  // Quick actions
+  // Quick actions — use server-side embargo_all (single intent, covers all non-team players)
   const embargoAllNonAllied = useCallback(() => {
-    const nonAllied = playerGroups.others;
-    for (const p of nonAllied) sendEmbargoStart(p.id);
+    sendEmbargoAll();
     setEmbargoed((prev) => {
       const next = new Set(prev);
-      for (const p of nonAllied) next.add(p.id);
+      for (const p of playerGroups.others) next.add(p.id);
       return next;
     });
   }, [playerGroups.others]);
 
   const resumeAll = useCallback(() => {
-    for (const id of embargoed) sendEmbargoStop(id);
+    sendResumeAll();
     setEmbargoed(new Set());
-  }, [embargoed]);
+  }, []);
 
   const embargoCount = embargoSelected.size;
   const resumeCount = resumeSelected.size;

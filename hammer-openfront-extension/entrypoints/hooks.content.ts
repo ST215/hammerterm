@@ -1186,6 +1186,30 @@ export default defineContentScript({
             success: false,
           });
         }
+      } else if (action === "embargo_all") {
+        // Embargo/resume ALL players — single server-side intent (OpenFront v0.30+)
+        const { embargoAction } = data;
+        if (gameSocket && gameSocket.readyState === 1 && currentClientID) {
+          gameSocket.send(
+            JSON.stringify({
+              type: "intent",
+              intent: {
+                type: "embargo_all",
+                clientID: currentClientID,
+                action: embargoAction, // "start" = stop all, "stop" = resume all
+              },
+            }),
+          );
+          emit("send-result", {
+            action: "embargo_all",
+            embargoAction,
+            success: true,
+            method: "websocket",
+          });
+        } else {
+          console.warn("[Hammer:Main] Embargo all failed: no gameSocket or clientID");
+          emit("send-result", { action: "embargo_all", embargoAction, success: false });
+        }
       } else if (action === "capture-mouse") {
         // ALT+M: resolve tile under mouse cursor, return owner info
         if (!targetCanvas || !worldTilesW || !worldTilesH) {
