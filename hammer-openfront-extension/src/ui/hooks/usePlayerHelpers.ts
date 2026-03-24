@@ -1,4 +1,3 @@
-import { useRef } from "react";
 import { useStore } from "@store/index";
 import {
   readMyPlayer,
@@ -8,9 +7,7 @@ import {
 import type { PlayerData } from "@shared/types";
 
 /**
- * Stable equality check for a single player object.
- * Returns the previous reference if all fields the UI cares about are unchanged,
- * preventing downstream re-renders from Map-reference churn.
+ * Zustand equality for a single player: skip re-render if all UI-visible fields match.
  */
 function playerEqual(a: PlayerData | null, b: PlayerData | null): boolean {
   if (a === b) return true;
@@ -29,10 +26,12 @@ function playerEqual(a: PlayerData | null, b: PlayerData | null): boolean {
 }
 
 /**
- * Stable equality for a player list: same length, same ids, same structural fields.
- * Ignores troops/gold changes (volatile stats) so the target picker doesn't blink.
+ * Zustand equality for a player list used in target pickers.
+ * Only compares structural fields (name, team, alive) — ignores volatile
+ * stats (troops, gold, tiles) so the target list doesn't blink.
  */
-function playerListStructurallyEqual(a: PlayerData[], b: PlayerData[]): boolean {
+function playerListEqual(a: PlayerData[], b: PlayerData[]): boolean {
+  if (a === b) return true;
   if (a.length !== b.length) return false;
   for (let i = 0; i < a.length; i++) {
     const pa = a[i], pb = b[i];
@@ -48,34 +47,40 @@ function playerListStructurallyEqual(a: PlayerData[], b: PlayerData[]): boolean 
   return true;
 }
 
+/**
+ * Returns the current user's player data. Re-renders only when the player's
+ * own fields change, not when unrelated players update.
+ */
 export function useMyPlayer() {
-  const prev = useRef<PlayerData | null>(null);
-  const result = useStore((s) =>
-    readMyPlayer(s.lastPlayers, s.playersById, s.currentClientID, s.mySmallID),
+  return useStore(
+    (s) => readMyPlayer(s.lastPlayers, s.playersById, s.currentClientID, s.mySmallID),
+    playerEqual,
   );
-  if (playerEqual(prev.current, result)) return prev.current;
-  prev.current = result;
-  return result;
 }
 
+/**
+ * Returns teammates (same-team, alive). Re-renders only on structural changes
+ * (join/leave/die/rename), not on troop/gold ticks.
+ */
 export function useTeammates() {
-  const prev = useRef<PlayerData[]>([]);
-  const result = useStore((s) => {
-    const me = readMyPlayer(s.lastPlayers, s.playersById, s.currentClientID, s.mySmallID);
-    return getTeammates(s.playersById, me);
-  });
-  if (playerListStructurallyEqual(prev.current, result)) return prev.current;
-  prev.current = result;
-  return result;
+  return useStore(
+    (s) => {
+      const me = readMyPlayer(s.lastPlayers, s.playersById, s.currentClientID, s.mySmallID);
+      return getTeammates(s.playersById, me);
+    },
+    playerListEqual,
+  );
 }
 
+/**
+ * Returns allies (alliance partners, alive). Re-renders only on structural changes.
+ */
 export function useAllies() {
-  const prev = useRef<PlayerData[]>([]);
-  const result = useStore((s) => {
-    const me = readMyPlayer(s.lastPlayers, s.playersById, s.currentClientID, s.mySmallID);
-    return getAllies(s.playersById, me, s.myAllies);
-  });
-  if (playerListStructurallyEqual(prev.current, result)) return prev.current;
-  prev.current = result;
-  return result;
+  return useStore(
+    (s) => {
+      const me = readMyPlayer(s.lastPlayers, s.playersById, s.currentClientID, s.mySmallID);
+      return getAllies(s.playersById, me, s.myAllies);
+    },
+    playerListEqual,
+  );
 }

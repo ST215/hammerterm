@@ -4,6 +4,17 @@ All notable changes to Hammer Control Panel will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [15.0.2] - 2026-03-24 "Rate Limits + Blink Fix"
+
+### Added
+
+- **Global intent rate limiter**: All game actions (troops, gold, emoji, alliance, embargo) now flow through a central queue enforcing max 8 intents/second and 120 intents/minute. Leaves headroom under OpenFront's server limits (10/sec, 150/min). Previously, auto-troops + auto-gold with many targets could burst 18+ intents at once, risking server-side rate limiting or kicks.
+
+### Fixed
+
+- **Teammates/allies blink completely eliminated**: `tilesOwned` was classified as a "structural" player change, causing every tile gain/loss (multiple per second) to bypass the 1-second stats throttle and trigger full store updates + re-renders. Moved to the volatile stats bucket alongside troops/gold.
+- **Zustand equality at subscription level**: Player hooks (`useMyPlayer`, `useTeammates`, `useAllies`) now pass custom equality functions directly to Zustand's `useStore()`, preventing re-renders before React even sees the change. Previously, ref-based equality ran after Zustand had already triggered the re-render.
+
 ## [15.0.1] - 2026-03-15 "Stabilization"
 
 ### Fixed

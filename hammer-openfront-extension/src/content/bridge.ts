@@ -246,18 +246,21 @@ function playerStructurallyChanged(prev: PlayerData, next: PlayerData): boolean 
     prev.team !== next.team ||
     prev.displayName !== next.displayName ||
     prev.name !== next.name ||
-    prev.clientID !== next.clientID ||
-    prev.tilesOwned !== next.tilesOwned
+    prev.clientID !== next.clientID
   );
 }
 
 /**
- * Volatile stats: troops and gold tick up constantly during gameplay.
+ * Volatile stats: troops, gold, and tiles tick constantly during gameplay.
  * These are throttled to at most once per STATS_THROTTLE_MS to prevent
- * continuous UI re-renders from every troop tick.
+ * continuous UI re-renders from every game tick.
  */
 function playerStatsChanged(prev: PlayerData, next: PlayerData): boolean {
-  return prev.troops !== next.troops || prev.gold !== next.gold;
+  return (
+    prev.troops !== next.troops ||
+    prev.gold !== next.gold ||
+    prev.tilesOwned !== next.tilesOwned
+  );
 }
 
 /** Combined check — used by bootstrap/refresh where we have no prior context. */
