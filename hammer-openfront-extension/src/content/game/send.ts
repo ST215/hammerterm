@@ -25,7 +25,6 @@ interface QueuedIntent {
   recordDetail: string;
   recordMeta: Record<string, unknown>;
   logMsg: string;
-  resolve: (sent: boolean) => void;
 }
 
 const intentQueue: QueuedIntent[] = [];
@@ -65,7 +64,6 @@ function drainQueue(): void {
   sentTimestamps.push(now);
   record(item.recordCategory, item.recordDetail, item.recordMeta);
   log(item.logMsg);
-  item.resolve(true);
 }
 
 function ensureDrainTimer(): void {
@@ -97,10 +95,9 @@ function enqueueIntent(
     return true;
   }
 
-  // Otherwise queue it
-  return new Promise<boolean>((resolve) => {
-    intentQueue.push({ payload, recordCategory, recordDetail, recordMeta, logMsg, resolve });
-  }) as unknown as boolean; // callers treat as sync boolean; queued = true
+  // Otherwise queue it — will be drained by the next interval tick
+  intentQueue.push({ payload, recordCategory, recordDetail, recordMeta, logMsg });
+  return true;
 }
 
 // ---------- Helpers ----------

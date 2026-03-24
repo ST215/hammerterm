@@ -197,8 +197,8 @@ function processReciprocateQueue(): void {
   const myTroops = Number(me.troops || 0);
   const now = Date.now();
 
-  // Take up to 3 items OUT of the queue (splice, not slice)
-  const batch = pendingQueue.splice(0, 3);
+  // Take 1 item per tick — global intent rate limiter in send.ts handles pacing
+  const batch = pendingQueue.splice(0, 1);
 
   for (const item of batch) {
     // Skip items still waiting for cooldown (silently re-queue)
