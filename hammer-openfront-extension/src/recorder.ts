@@ -63,7 +63,7 @@ export function getRecentEvents(n: number): RecorderEvent[] {
 
 export function exportRecording(): object {
   return {
-    version: "15.0.2-ext",
+    version: "15.0.3-ext",
     exportedAt: Date.now(),
     session: {
       startedAt,

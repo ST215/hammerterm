@@ -4,6 +4,7 @@ import { Section } from "@ui/components/ds";
 import { showStatus } from "@ui/components/StatusToast";
 import { exportMatchData } from "@store/slices/match-export";
 import { POSITION_GRID, type NotifPosition } from "@shared/notif-position";
+import { version as pkgVersion } from "../../../package.json";
 
 const TABS_HELP = [
   { title: "Summary", desc: "Your player stats, donations, port income, and session totals." },
@@ -273,7 +274,7 @@ export default function HelpView() {
         <div className="flex flex-col gap-0_5 text-2xs">
           <div className="flex items-center justify-between">
             <span className="text-hammer-muted">Version</span>
-            <span className="text-hammer-text">v11.0</span>
+            <span className="text-hammer-text">v{pkgVersion}</span>
           </div>
           <div className="flex items-center justify-between">
             <span className="text-hammer-muted">Player Data</span>

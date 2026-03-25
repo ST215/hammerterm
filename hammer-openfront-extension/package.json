@@ -1,6 +1,6 @@
 {
   "name": "hammer-openfront-extension",
-  "version": "15.0.2",
+  "version": "15.0.3",
   "private": true,
   "type": "module",
   "scripts": {

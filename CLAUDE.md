@@ -78,6 +78,17 @@
 - Dashboard pushes `LOCAL_KEYS` changes back to content script via `sync-local` port message.
 - Both directions must stay in sync — if you add a new user-configurable setting, add it to `LOCAL_KEYS`.
 
+## Versioning
+- **Bump the version on every commit** that changes behavior (features, fixes, UI changes). Use semver: major.minor.patch.
+- Version lives in 5 places — but only `package.json` needs manual bumping. The other 4 embed a `-ext` suffix:
+  - `package.json` → `"version": "X.Y.Z"` (source of truth, also imported by HelpView for the About page)
+  - `entrypoints/background.ts` → `"X.Y.Z-ext"`
+  - `entrypoints/hooks.content.ts` → `"X.Y.Z-ext"`
+  - `entrypoints/openfront.content/index.tsx` → `"X.Y.Z-ext"`
+  - `src/recorder.ts` → `"X.Y.Z-ext"`
+- The Help/About page reads the version from `package.json` at build time — no hardcoded string to update.
+- Tag releases with `vX.Y.Z` and push tags.
+
 ## Build Output
 - Extension builds to `hammer-openfront-extension/.output/chrome-mv3/` (NOT `hammerterm/.output/`).
 - Load in Chrome via `chrome://extensions` → "Load unpacked" → navigate to the full `.output/chrome-mv3/` path.

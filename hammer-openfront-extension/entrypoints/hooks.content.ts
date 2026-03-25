@@ -1312,7 +1312,7 @@ export default defineContentScript({
         timeoutIds.length = 0;
         intervalIds.length = 0;
       },
-      version: "15.0.2-ext",
+      version: "15.0.3-ext",
     };
 
     console.log("[Hammer:Main] Hooks installed at document_start");
