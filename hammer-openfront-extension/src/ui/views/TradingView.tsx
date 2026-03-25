@@ -2,7 +2,7 @@ import { useState, useCallback, useMemo, memo } from "react";
 import { useStore } from "@store/index";
 import { useMyPlayer, useTeammates, useAllies } from "@ui/hooks/usePlayerHelpers";
 import { short, dTroops, num } from "@shared/utils";
-import { sendEmbargoStart, sendEmbargoStop, sendEmbargoAll, sendResumeAll } from "@content/game/send";
+import { sendEmbargoStartNow, sendEmbargoStopNow } from "@content/game/send";
 import type { PlayerData } from "@shared/types";
 
 // ---------------------------------------------------------------------------
@@ -219,10 +219,10 @@ export default function TradingView() {
     });
   }, [playerGroups.teammates]);
 
-  // Actions
+  // Actions — all use immediate sends (no rate limiter delay)
   const doEmbargo = useCallback(() => {
     for (const id of embargoSelected) {
-      sendEmbargoStart(id);
+      sendEmbargoStartNow(id);
     }
     setEmbargoed((prev) => {
       const next = new Set(prev);
@@ -234,7 +234,7 @@ export default function TradingView() {
 
   const doResume = useCallback(() => {
     for (const id of resumeSelected) {
-      sendEmbargoStop(id);
+      sendEmbargoStopNow(id);
     }
     setEmbargoed((prev) => {
       const next = new Set(prev);
@@ -244,15 +244,15 @@ export default function TradingView() {
     setResumeSelected(new Set());
   }, [resumeSelected]);
 
-  // Quick action: resume all players (server-side single intent)
+  // Quick action: resume all players
   const resumeAllPlayers = useCallback(() => {
-    sendResumeAll();
+    for (const p of allPlayers) sendEmbargoStopNow(p.id);
     setEmbargoed(new Set());
-  }, []);
+  }, [allPlayers]);
 
-  // Quick actions — use server-side embargo_all (single intent, covers all non-team players)
+  // Quick actions — per-player immediate sends (excludes teammates + allies)
   const embargoAllNonAllied = useCallback(() => {
-    sendEmbargoAll();
+    for (const p of playerGroups.others) sendEmbargoStartNow(p.id);
     setEmbargoed((prev) => {
       const next = new Set(prev);
       for (const p of playerGroups.others) next.add(p.id);
@@ -261,9 +261,9 @@ export default function TradingView() {
   }, [playerGroups.others]);
 
   const resumeAll = useCallback(() => {
-    sendResumeAll();
+    for (const id of embargoed) sendEmbargoStopNow(id);
     setEmbargoed(new Set());
-  }, []);
+  }, [embargoed]);
 
   const embargoCount = embargoSelected.size;
   const resumeCount = resumeSelected.size;

@@ -100,6 +100,26 @@ function enqueueIntent(
   return true;
 }
 
+/**
+ * Send an intent immediately, bypassing the rate limiter queue.
+ * Use for manual user-initiated actions (UI button clicks) that need
+ * instant feedback. Do NOT use for automated loops.
+ */
+function sendIntentNow(
+  payload: any,
+  recordCategory: string,
+  recordDetail: string,
+  recordMeta: Record<string, unknown>,
+  logMsg: string,
+): void {
+  sendToMainWorld(payload);
+  const now = Date.now();
+  sentTimestamps.push(now);
+  pruneTimestamps(now);
+  record(recordCategory, recordDetail, recordMeta);
+  log(logMsg);
+}
+
 // ---------- Helpers ----------
 
 function log(...args: unknown[]): void {
@@ -173,7 +193,7 @@ export function sendBetray(recipientId: string): boolean {
 
 // ---------- sendEmbargo ----------
 
-/** Stop trading with a player (embargo start) */
+/** Stop trading with a player (embargo start) — rate-limited for automation */
 export function sendEmbargoStart(targetId: string): boolean {
   return enqueueIntent(
     { action: "embargo", targetId, embargoAction: "start" },
@@ -182,12 +202,30 @@ export function sendEmbargoStart(targetId: string): boolean {
   );
 }
 
-/** Resume trading with a player (embargo stop) */
+/** Resume trading with a player (embargo stop) — rate-limited for automation */
 export function sendEmbargoStop(targetId: string): boolean {
   return enqueueIntent(
     { action: "embargo", targetId, embargoAction: "stop" },
     "cmd", "embargo.stop", { targetId },
     `[SEND] Embargo stop (resume trading): ${targetId}`,
+  );
+}
+
+/** Stop trading — immediate (bypasses queue, for UI button clicks) */
+export function sendEmbargoStartNow(targetId: string): void {
+  sendIntentNow(
+    { action: "embargo", targetId, embargoAction: "start" },
+    "cmd", "embargo.start", { targetId },
+    `[SEND] Embargo start (immediate): ${targetId}`,
+  );
+}
+
+/** Resume trading — immediate (bypasses queue, for UI button clicks) */
+export function sendEmbargoStopNow(targetId: string): void {
+  sendIntentNow(
+    { action: "embargo", targetId, embargoAction: "stop" },
+    "cmd", "embargo.stop", { targetId },
+    `[SEND] Embargo stop (immediate): ${targetId}`,
   );
 }
 
