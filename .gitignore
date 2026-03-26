@@ -24,7 +24,9 @@ build/
 # Temp files
 *.tmp
 *.log
+OpenFrontIO
 OpenFrontIO/
+/package-lock.json
 
 # WXT build artifacts
 .wxt/

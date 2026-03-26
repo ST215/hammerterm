@@ -4,11 +4,11 @@
 - **Working directory**: `cd hammer-openfront-extension` before any npm commands
 - **Install**: `npm install`
 - **Build**: `npm run build` (production) or `npm run dev` (HMR)
-- **Test**: `npm test` (432+ tests, all should pass including game-contract tests via OpenFrontIO symlink)
+- **Test**: `npm test` (476+ tests, all should pass including game-contract tests via OpenFrontIO)
 - **Typecheck**: `npm run typecheck` (some pre-existing WXT auto-import errors are expected)
 - **Key entry points to read first**: `src/store/index.ts` (store shape), `src/content/bridge.ts` (data flow), `entrypoints/hooks.content.ts` (game hooks)
 - **Path aliases**: `@shared` = `src/shared`, `@content` = `src/content`, `@ui` = `src/ui`, `@store` = `src/store`
-- **OpenFrontIO game repo**: Symlinked at `hammerterm/OpenFrontIO` → `~/OpenFrontIO`. Needed for game-contract tests.
+- **OpenFrontIO game repo**: Cloned at `hammerterm/OpenFrontIO`. Needed for game-contract tests.
 
 ## Project Structure
 - `hammer-scripts/hammer.js` — legacy single-file browser console injection (v10.x). Not actively maintained.
@@ -64,12 +64,13 @@
 - Overlay mode renders in shadow DOM on game page. Window mode renders in dashboard popup.
 - `LOCAL_KEYS` in `entrypoints/dashboard/App.tsx` controls which store keys are user-interactive (not overwritten by game tab snapshots). Any new user-configurable setting must be added here.
 
-## Preventing UI Blink
-- **Player hooks** (`useMyPlayer`, `useTeammates`, `useAllies` in `src/ui/hooks/usePlayerHelpers.ts`) use Zustand equality functions to prevent re-renders from Map reference churn.
+## Preventing UI Blink (CRITICAL)
+- **NEVER subscribe directly to `playersById` or `lastPlayers`** in UI components. Always use hooks from `src/ui/hooks/usePlayerHelpers.ts`.
+- Available hooks: `useMyPlayer()`, `useTeammates()`, `useAllies()`, `useAllAlivePlayers()`, `usePlayersById()`. All use structural-only equality to prevent re-renders from volatile stat updates (troops/gold/tiles ticking every second).
 - **Stats throttle**: `bridge.ts` classifies player changes as structural (instant) vs volatile stats (1s throttle). `troops`, `gold`, and `tilesOwned` are volatile. `isAlive`, `team`, `name`, `clientID` are structural.
 - **Dashboard snapshot diff**: `sendSnapshot()` skips port messages when state JSON is identical to last sent.
 - **Panel resize**: Uses `borderBoxSize` from ResizeObserver, not `contentRect` (which excludes borders and causes collapse loops).
-- When adding new player-derived UI, always use the hooks from `usePlayerHelpers.ts` — never subscribe directly to `playersById` or `lastPlayers`.
+- If you need the full `playersById` Map for lookups, use `usePlayersById()` — it returns the same reference unless structural changes occurred.
 
 ## Dashboard Sync
 - Game tab content script syncs store snapshots to dashboard every 500ms via `chrome.runtime.Port`.
