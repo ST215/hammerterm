@@ -1,6 +1,6 @@
 import { useMemo, useCallback } from "react";
 import { useStore } from "@store/index";
-import { useMyPlayer } from "@ui/hooks/usePlayerHelpers";
+import { useMyPlayer, usePlayersById } from "@ui/hooks/usePlayerHelpers";
 import { short, comma } from "@shared/utils";
 import { computeRollingRates, computeRelationships, classifyAlerts } from "@shared/logic/cia";
 import { Section, StatCard, Badge, PresetButton } from "@ui/components/ds";
@@ -33,7 +33,7 @@ const FILTER_OPTIONS: { label: string; value: CIAFeedFilter }[] = [
 export default function CIAView() {
   const me = useMyPlayer();
   const ciaState = useStore((s) => s.ciaState);
-  const playersById = useStore((s) => s.playersById);
+  const playersById = usePlayersById();
   const myTeam = useStore((s) => s.myTeam);
   const myAllies = useStore((s) => s.myAllies);
   const ciaWindowMs = useStore((s) => s.ciaWindowMs);

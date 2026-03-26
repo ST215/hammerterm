@@ -1,6 +1,6 @@
 import { useState, useCallback, useMemo, memo } from "react";
 import { useStore } from "@store/index";
-import { useMyPlayer, useTeammates, useAllies } from "@ui/hooks/usePlayerHelpers";
+import { useMyPlayer, useTeammates, useAllies, usePlayersById } from "@ui/hooks/usePlayerHelpers";
 import { short, dTroops, num } from "@shared/utils";
 import { sendEmbargoStartNow, sendEmbargoStopNow } from "@content/game/send";
 import type { PlayerData } from "@shared/types";
@@ -90,7 +90,7 @@ const PlayerChip = memo(function PlayerChip({
 
 export default function TradingView() {
   const me = useMyPlayer();
-  const playersById = useStore((s) => s.playersById);
+  const playersById = usePlayersById();
   const teammates = useTeammates();
   const allies = useAllies();
 

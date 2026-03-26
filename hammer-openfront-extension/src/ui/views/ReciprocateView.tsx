@@ -1,5 +1,5 @@
 import { useStore } from "@store/index";
-import { useMyPlayer } from "@ui/hooks/usePlayerHelpers";
+import { useMyPlayer, usePlayersById } from "@ui/hooks/usePlayerHelpers";
 import { short, comma, dTroops, num } from "@shared/utils";
 import { handleQuickReciprocate } from "@content/automation/reciprocate-engine";
 import { Section, StatCard, PresetButton, Badge, PercentBar } from "@ui/components/ds";
@@ -101,7 +101,7 @@ export default function ReciprocateView() {
   const feedIn = useStore((s) => s.feedIn);
   const myTeam = useStore((s) => s.myTeam);
   const myAllies = useStore((s) => s.myAllies);
-  const playersById = useStore((s) => s.playersById);
+  const playersById = usePlayersById();
 
   const me = useMyPlayer();
   const myTroops = me ? dTroops(me.troops) : 0;

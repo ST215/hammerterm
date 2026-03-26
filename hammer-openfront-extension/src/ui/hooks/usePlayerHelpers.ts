@@ -26,9 +26,9 @@ function playerEqual(a: PlayerData | null, b: PlayerData | null): boolean {
 }
 
 /**
- * Zustand equality for a player list used in target pickers.
+ * Zustand equality for a player list used in target pickers / player grids.
  * Only compares structural fields (name, team, alive) — ignores volatile
- * stats (troops, gold, tiles) so the target list doesn't blink.
+ * stats (troops, gold, tiles) so the UI doesn't blink on every tick.
  */
 function playerListEqual(a: PlayerData[], b: PlayerData[]): boolean {
   if (a === b) return true;
@@ -41,7 +41,34 @@ function playerListEqual(a: PlayerData[], b: PlayerData[]): boolean {
       pa.team !== pb.team ||
       pa.displayName !== pb.displayName ||
       pa.name !== pb.name ||
-      pa.smallID !== pb.smallID
+      pa.smallID !== pb.smallID ||
+      pa.clientID !== pb.clientID
+    ) return false;
+  }
+  return true;
+}
+
+/**
+ * Zustand equality for the playersById Map. Only triggers re-render on
+ * structural changes (join/leave/die/rename/team), not volatile stats.
+ */
+function mapStructurallyEqual(
+  a: Map<string, PlayerData>,
+  b: Map<string, PlayerData>,
+): boolean {
+  if (a === b) return true;
+  if (a.size !== b.size) return false;
+  for (const [id, pa] of a) {
+    const pb = b.get(id);
+    if (!pb) return false;
+    if (
+      pa.id !== pb.id ||
+      pa.isAlive !== pb.isAlive ||
+      pa.team !== pb.team ||
+      pa.displayName !== pb.displayName ||
+      pa.name !== pb.name ||
+      pa.smallID !== pb.smallID ||
+      pa.clientID !== pb.clientID
     ) return false;
   }
   return true;
@@ -59,8 +86,7 @@ export function useMyPlayer() {
 }
 
 /**
- * Returns teammates (same-team, alive). Re-renders only on structural changes
- * (join/leave/die/rename), not on troop/gold ticks.
+ * Returns teammates (same-team, alive). Re-renders only on structural changes.
  */
 export function useTeammates() {
   return useStore(
@@ -83,4 +109,35 @@ export function useAllies() {
     },
     playerListEqual,
   );
+}
+
+/**
+ * Returns all alive players except me, sorted by name.
+ * Re-renders only on structural changes (join/leave/die/rename).
+ */
+export function useAllAlivePlayers() {
+  return useStore(
+    (s) => {
+      const me = readMyPlayer(s.lastPlayers, s.playersById, s.currentClientID, s.mySmallID);
+      const result: PlayerData[] = [];
+      for (const p of s.playersById.values()) {
+        if (me && p.id === me.id) continue;
+        if (!p.isAlive) continue;
+        result.push(p);
+      }
+      return result.sort((a, b) =>
+        (a.displayName || a.name || "").localeCompare(b.displayName || b.name || ""),
+      );
+    },
+    playerListEqual,
+  );
+}
+
+/**
+ * Returns the playersById Map with structural-only equality.
+ * Use this instead of `useStore((s) => s.playersById)` to avoid blink
+ * from volatile stat updates (troops/gold ticking).
+ */
+export function usePlayersById() {
+  return useStore((s) => s.playersById, mapStructurallyEqual);
 }

@@ -1,6 +1,6 @@
 import { useState, useCallback, useMemo, memo } from "react";
 import { useStore } from "@store/index";
-import { useMyPlayer, useTeammates, useAllies } from "@ui/hooks/usePlayerHelpers";
+import { useMyPlayer, useTeammates, useAllies, usePlayersById } from "@ui/hooks/usePlayerHelpers";
 import { short, dTroops, num } from "@shared/utils";
 import { sendEmoji, sendQuickChat, asSendTroops, asSendGold, sendAllianceRequest, sendBetray } from "@content/game/send";
 import { EMOJI_COMPACT } from "@shared/emoji-table";
@@ -231,7 +231,7 @@ export default function AlliancesView() {
   const teammates = useTeammates();
   const allies = useAllies();
   const me = useMyPlayer();
-  const playersById = useStore((s) => s.playersById);
+  const playersById = usePlayersById();
   const myTroops = dTroops(me?.troops);
   const myGold = num(me?.gold ?? 0);
 

@@ -1,6 +1,6 @@
 import { useState, useMemo } from "react";
 import { useStore } from "@store/index";
-import { useMyPlayer, useTeammates, useAllies } from "@ui/hooks/usePlayerHelpers";
+import { useMyPlayer, useTeammates, useAllies, useAllAlivePlayers, usePlayersById } from "@ui/hooks/usePlayerHelpers";
 import { sendEmoji, sendQuickChat } from "@content/game/send";
 import { EMOJI_TABLE } from "@shared/emoji-table";
 import { Section, PresetButton } from "@ui/components/ds";
@@ -82,9 +82,10 @@ export default function CommsView() {
   const commsTargets = useStore((s) => s.commsTargets);
   const commsGroupMode = useStore((s) => s.commsGroupMode);
   const commsRecentSent = useStore((s) => s.commsRecentSent);
-  const playersById = useStore((s) => s.playersById);
+  const playersById = usePlayersById();
   const myTeam = useStore((s) => s.myTeam);
   const myAllies = useStore((s) => s.myAllies);
+  const allAlivePlayers = useAllAlivePlayers();
 
   const addTarget = useStore((s) => s.addCommsTarget);
   const removeTarget = useStore((s) => s.removeCommsTarget);
@@ -100,6 +101,7 @@ export default function CommsView() {
   const [showOthers, setShowOthers] = useState(false);
   const [showBots, setShowBots] = useState(false);
   const [search, setSearch] = useState("");
+  const [targetSearch, setTargetSearch] = useState("");
 
   const { otherHumans, otherBots } = useMemo(() => {
     const humans: PlayerData[] = [];
@@ -132,9 +134,7 @@ export default function CommsView() {
     setGroupMode(mode);
     clearTargets();
     if (mode === "all") {
-      for (const p of playersById.values()) {
-        if (p.isAlive && me && p.id !== me.id) addTarget(p.id);
-      }
+      for (const p of allAlivePlayers) addTarget(p.id);
     } else if (mode === "team") {
       for (const p of teammates) addTarget(p.id);
     } else if (mode === "allies") {
@@ -188,9 +188,10 @@ export default function CommsView() {
 
   // Pending target picker overlay
   if (pendingQCKey) {
-    const allPlayers = [...playersById.values()].filter(
-      (p) => p.isAlive && me && p.id !== me.id,
-    );
+    const tq = targetSearch.toLowerCase();
+    const filteredTargets = tq
+      ? allAlivePlayers.filter((p) => (p.displayName || p.name || "").toLowerCase().includes(tq))
+      : allAlivePlayers;
     const label = pendingQCKey.split(".")[1] || pendingQCKey;
     return (
       <div>
@@ -198,15 +199,22 @@ export default function CommsView() {
           <div className="text-2xs text-hammer-muted mb-1">
             Select a player to target
           </div>
+          <input
+            type="text"
+            placeholder="Search players..."
+            value={targetSearch}
+            onChange={(e) => setTargetSearch(e.target.value)}
+            className="w-full bg-hammer-bg border border-hammer-border text-hammer-text text-2xs px-2 py-1 rounded mb-1 focus:outline-none focus:border-hammer-blue"
+          />
           <div className="flex flex-wrap gap-0.5">
-            {allPlayers.map((p) => {
+            {filteredTargets.map((p) => {
               const isTeam = p.team != null && myTeam != null && p.team === myTeam;
               const isAlly = p.smallID != null && myAllies.has(p.smallID);
               const color = isTeam ? "text-hammer-blue" : isAlly ? "text-hammer-green" : "text-hammer-text";
               return (
                 <button
                   key={p.id}
-                  onClick={() => handlePendingTarget(p.id)}
+                  onClick={() => { handlePendingTarget(p.id); setTargetSearch(""); }}
                   className={`px-1.5 py-0.5 text-2xs font-mono border border-hammer-border bg-hammer-bg cursor-pointer hover:bg-hammer-green/10 hover:text-hammer-green transition-colors rounded ${color}`}
                 >
                   {p.displayName || p.name || `#${p.smallID}`}
@@ -215,7 +223,7 @@ export default function CommsView() {
             })}
           </div>
           <button
-            onClick={() => setPendingQCKey(null)}
+            onClick={() => { setPendingQCKey(null); setTargetSearch(""); }}
             className="mt-1.5 px-2 py-0.5 text-2xs border border-hammer-red/40 bg-hammer-red/10 text-hammer-red rounded cursor-pointer"
           >
             Cancel
