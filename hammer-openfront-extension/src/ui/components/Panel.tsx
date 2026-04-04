@@ -10,6 +10,7 @@ interface PanelProps {
 export default function Panel({ header, children }: PanelProps) {
   const sizeIdx = useStore((s) => s.sizeIdx);
   const minimized = useStore((s) => s.minimized);
+  const setPanelWidth = useStore((s) => s.setPanelWidth);
 
   const size = SIZES[sizeIdx];
 
@@ -66,11 +67,13 @@ export default function Panel({ header, children }: PanelProps) {
           if (prev && prev.w === w && prev.h === h) return prev;
           return { w, h };
         });
+        // Publish width (rounded to 4px) for pretext layout calculations
+        setPanelWidth(Math.round(w / 4) * 4);
       }
     });
     observer.observe(el);
     return () => observer.disconnect();
-  }, [minimized]);
+  }, [minimized, setPanelWidth]);
 
   // Reset manual size when sizeIdx changes
   useEffect(() => {

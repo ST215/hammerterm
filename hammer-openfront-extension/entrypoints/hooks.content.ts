@@ -97,7 +97,7 @@ export default defineContentScript({
         name: String(readProp(p, "name") ?? ""),
         displayName: String(readProp(p, "displayName") || readProp(p, "name") || ""),
         isAlive: !!(readProp(p, "isAlive") ?? true),
-        team: Number(readProp(p, "team") ?? 0) || null,
+        team: readProp(p, "team") ?? null,
         troops: Number(readProp(p, "troops") || 0),
         gold: Number(typeof gold === "bigint" ? gold : gold || 0),
         tilesOwned: Number(readProp(p, "numTilesOwned") ?? readProp(p, "tilesOwned") ?? 0),
@@ -1312,7 +1312,7 @@ export default defineContentScript({
         timeoutIds.length = 0;
         intervalIds.length = 0;
       },
-      version: "15.1.0-ext",
+      version: "15.3.0-ext",
     };
 
     console.log("[Hammer:Main] Hooks installed at document_start");

@@ -12,7 +12,11 @@ import { useStore } from "@store/index";
 import type { PlayerData } from "@shared/types";
 import { serialize } from "@shared/serialize";
 import { processDisplayMessage, drainPendingMessages } from "./game/message-processor";
-import { record, startRecording, stopRecording } from "../recorder";
+import {
+  record, startRecording, stopRecording,
+  trackMetric, registerSnapshotProviders,
+  type PlayerSnapshot, type ConfigSnapshot,
+} from "../recorder";
 
 // ---------------------------------------------------------------------------
 // Hook status (for diagnostics UI)
@@ -42,7 +46,11 @@ function sendSnapshot(): void {
     const state = useStore.getState();
     const snapshot = serialize(state);
     const json = JSON.stringify(snapshot);
-    if (json === lastSnapshotJson) return; // nothing changed, skip re-render
+    if (json === lastSnapshotJson) {
+      trackMetric("dashboardSyncsSkipped");
+      return;
+    }
+    trackMetric("dashboardSyncs");
     lastSnapshotJson = json;
     dashboardPort.postMessage({ type: "snapshot", data: snapshot });
   } catch {
@@ -135,23 +143,13 @@ export function installBridge(): void {
       for (const [hook, found] of Object.entries(hookStatus)) {
         record("hook", hook + (found ? ".found" : ".missing"), { found, snapshot: true });
       }
+      record("state", "init", {
+        hooks: { ...hookStatus },
+        eventClasses: [...discoveredEventClasses],
+      });
       // Periodically refresh recorder data in the store (for dashboard sync)
-      let snapshotCounter = 0;
       recorderRefreshInterval = setInterval(() => {
         useStore.getState().refreshRecorderCount();
-        // Periodic game state snapshot every 30s
-        snapshotCounter++;
-        if (snapshotCounter % 30 === 0) {
-          const s = useStore.getState();
-          record("state", "snapshot", {
-            playerCount: s.playersById.size,
-            mySmallID: s.mySmallID,
-            myTeam: s.myTeam,
-            allies: [...s.myAllies],
-            hooks: { ...hookStatus },
-            eventClasses: [...discoveredEventClasses],
-          });
-        }
       }, 1000);
     } else {
       stopRecording();
@@ -163,6 +161,67 @@ export function installBridge(): void {
       useStore.getState().refreshRecorderCount();
     }
   });
+
+  // Register snapshot providers for the flight recorder
+  registerSnapshotProviders(
+    // Player snapshot provider
+    (): PlayerSnapshot[] => {
+      const s = useStore.getState();
+      const result: PlayerSnapshot[] = [];
+      for (const p of s.playersById.values()) {
+        result.push({
+          id: p.id,
+          sid: p.smallID ?? null,
+          name: p.displayName || p.name || "",
+          team: p.team ?? null,
+          alive: p.isAlive !== false,
+          troops: Number(p.troops || 0),
+          gold: Number(p.gold || 0),
+          tiles: p.tilesOwned ?? 0,
+          clientID: p.clientID ?? null,
+        });
+      }
+      return result;
+    },
+    // Config snapshot provider
+    (): ConfigSnapshot => {
+      const s = useStore.getState();
+      return {
+        asTroops: {
+          running: s.asTroopsRunning,
+          ratio: s.asTroopsRatio,
+          threshold: s.asTroopsThreshold,
+          cooldownSec: s.asTroopsCooldownSec,
+          allTeam: s.asTroopsAllTeamMode,
+          allAllies: s.asTroopsAllAlliesMode,
+          targetCount: s.asTroopsTargets.length,
+        },
+        asGold: {
+          running: s.asGoldRunning,
+          ratio: s.asGoldRatio,
+          threshold: s.asGoldThreshold,
+          cooldownSec: s.asGoldCooldownSec,
+          allTeam: s.asGoldAllTeamMode,
+          allAllies: s.asGoldAllAlliesMode,
+          targetCount: s.asGoldTargets.length,
+        },
+        reciprocate: {
+          enabled: s.reciprocateEnabled,
+          mode: s.reciprocateMode,
+          autoPct: s.reciprocateAutoPct,
+          palantirMin: s.palantirMinPct,
+          palantirMax: s.palantirMaxPct,
+          onTroops: s.reciprocateOnTroops,
+          onGold: s.reciprocateOnGold,
+        },
+        broadcast: {
+          enabled: s.broadcastEnabled,
+          useSequence: s.broadcastUseSequence,
+          sequenceLen: s.broadcastSequence.length,
+        },
+      };
+    },
+  );
 
   console.log("[Hammer:Bridge] Listening for main world messages");
 }
@@ -200,9 +259,11 @@ function onBridgeMessage(e: MessageEvent): void {
       record("cmd", "result", payload);
       break;
     case "ws-out":
+      trackMetric("wsMessagesOut");
       record("ws", "out", payload?.data ?? payload);
       break;
     case "ws-in":
+      trackMetric("wsMessagesIn");
       record("ws", "in", payload?.data ?? payload);
       break;
   }
@@ -304,7 +365,9 @@ function handlePlayerUpdate(payload: {
     hasStructuralChange ||
     (hasStatsChange && now - lastStatsUpdateMs >= STATS_THROTTLE_MS);
 
+  trackMetric("playerUpdatesReceived");
   if (shouldUpdate) {
+    trackMetric("playerUpdatesApplied");
     lastStatsUpdateMs = now;
     const newById = new Map(store.playersById);
     const newBySmallId = new Map(store.playersBySmallId);
@@ -315,6 +378,8 @@ function handlePlayerUpdate(payload: {
     }
     const list = [...newById.values()];
     store.setPlayers(newById, newBySmallId, list);
+  } else if (hasStatsChange) {
+    trackMetric("playerUpdatesThrottled");
   }
 
   // Identify our player
@@ -441,7 +506,12 @@ function handleRefresh(payload: { players: any[] }): void {
       store.currentClientID &&
       p.clientID === store.currentClientID
     ) {
-      if (p.smallID != null) store.setMyIdentity(p.smallID, p.team);
+      // Only set identity if not already established, or if team actually changed.
+      // Refresh can return team in a different format (string vs number),
+      // so don't overwrite a working identity with a potentially broken one.
+      if (p.smallID != null && store.mySmallID == null) {
+        store.setMyIdentity(p.smallID, p.team);
+      }
       if (!store.playerDataReady) {
         store.markPlayerDataReady();
         drainPendingMessages();
@@ -466,9 +536,13 @@ function handleRefresh(payload: { players: any[] }): void {
     hasStructuralChange ||
     (hasStatsChange && now - lastStatsUpdateMs >= STATS_THROTTLE_MS);
 
+  trackMetric("playerUpdatesReceived");
   if (shouldUpdate) {
+    trackMetric("playerUpdatesApplied");
     lastStatsUpdateMs = now;
     store.setPlayers(newById, newBySmallId, [...newById.values()]);
+  } else if (hasStatsChange) {
+    trackMetric("playerUpdatesThrottled");
   }
 }
 

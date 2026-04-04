@@ -11,7 +11,7 @@ import { MessageType } from "@shared/constants";
 import { parseAmt, num } from "@shared/utils";
 import { trackCIAEvent } from "@shared/logic/cia";
 import { findPlayer } from "@shared/logic/player-helpers";
-import { record } from "../../recorder";
+import { record, trackMetric } from "../../recorder";
 
 // ---------- Module-level state ----------
 
@@ -34,6 +34,8 @@ export function processDisplayMessage(msg: unknown): void {
   if (!raw || typeof raw.messageType !== "number") {
     return;
   }
+
+  trackMetric("displayEventsReceived");
 
   // Push to raw messages ring buffer (for diagnostics)
   const store = useStore.getState();
@@ -104,6 +106,7 @@ function handleReceivedTroops(
   const donorKey = `${name}:troops`;
   const lastProcessed = recentDonors.get(donorKey) || 0;
   if (Date.now() - lastProcessed < DEDUP_WINDOW_MS) {
+    trackMetric("displayEventsDeduped");
     record("msg", "deduped", { from: name, type: "troops", amt });
     return;
   }
@@ -131,6 +134,7 @@ function handleReceivedTroops(
     });
   }
 
+  trackMetric("displayEventsProcessed");
   record("msg", "received.troops", { from: name, amt });
   log("[RECEIVED] Troops from", name, ":", amt);
 
@@ -168,6 +172,7 @@ function handleSentTroops(params: Record<string, unknown>): void {
   const to = findPlayer(name, playersById);
   if (!to) return;
 
+  trackMetric("displayEventsProcessed");
   record("msg", "sent.troops", { to: name, amt });
   useStore.getState().recordOutbound(to.id, name!, "troops", amt);
 }
@@ -200,6 +205,7 @@ function handleReceivedGold(
   const donorKey = `${name}:gold`;
   const lastProcessed = recentDonors.get(donorKey) || 0;
   if (Date.now() - lastProcessed < DEDUP_WINDOW_MS) {
+    trackMetric("displayEventsDeduped");
     record("msg", "deduped", { from: name, type: "gold", amt });
     return;
   }
@@ -226,6 +232,7 @@ function handleReceivedGold(
     });
   }
 
+  trackMetric("displayEventsProcessed");
   record("msg", "received.gold", { from: name, amt });
   log("[RECEIVED] Gold from", name, ":", amt);
 
@@ -264,6 +271,7 @@ function handleSentGold(
   const to = findPlayer(name, playersById);
   if (!to) return;
 
+  trackMetric("displayEventsProcessed");
   record("msg", "sent.gold", { to: name, amt });
   useStore.getState().recordOutbound(to.id, name!, "gold", amt);
 }

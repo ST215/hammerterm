@@ -11,7 +11,7 @@
 
 import { useStore } from "@store/index";
 import { sendToMainWorld } from "../bridge";
-import { record } from "../../recorder";
+import { record, trackMetric } from "../../recorder";
 
 // ---------- Global intent rate limiter ----------
 
@@ -54,12 +54,19 @@ function drainQueue(): void {
   pruneTimestamps(now);
 
   // Check per-minute limit
-  if (countInWindow(now, 60_000) >= MAX_PER_MINUTE) return;
+  if (countInWindow(now, 60_000) >= MAX_PER_MINUTE) {
+    trackMetric("intentsRateLimited");
+    return;
+  }
 
   // Check per-second limit
-  if (countInWindow(now, 1_000) >= MAX_PER_SECOND) return;
+  if (countInWindow(now, 1_000) >= MAX_PER_SECOND) {
+    trackMetric("intentsRateLimited");
+    return;
+  }
 
   const item = intentQueue.shift()!;
+  trackMetric("intentsSent");
   sendToMainWorld(item.payload);
   sentTimestamps.push(now);
   record(item.recordCategory, item.recordDetail, item.recordMeta);
@@ -88,6 +95,7 @@ function enqueueIntent(
     countInWindow(now, 1_000) < MAX_PER_SECOND &&
     countInWindow(now, 60_000) < MAX_PER_MINUTE
   ) {
+    trackMetric("intentsSent");
     sendToMainWorld(payload);
     sentTimestamps.push(now);
     record(recordCategory, recordDetail, recordMeta);
@@ -96,6 +104,7 @@ function enqueueIntent(
   }
 
   // Otherwise queue it — will be drained by the next interval tick
+  trackMetric("intentsQueued");
   intentQueue.push({ payload, recordCategory, recordDetail, recordMeta, logMsg });
   return true;
 }

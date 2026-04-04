@@ -1,10 +1,13 @@
-import { useState, useCallback, useMemo, memo } from "react";
+import { useState, useCallback, useMemo, memo, useRef } from "react";
 import { useStore } from "@store/index";
-import { useMyPlayer, useTeammates, useAllies, usePlayersById } from "@ui/hooks/usePlayerHelpers";
+import { useMyPlayer, useMyPlayerStructural, useTeammates, useAllies, useAllAlivePlayers } from "@ui/hooks/usePlayerHelpers";
+import { record } from "../../recorder";
+import { useContentWidth } from "@ui/hooks/useContentWidth";
 import { short, dTroops, num } from "@shared/utils";
+import { readMyPlayer } from "@shared/logic/player-helpers";
 import { sendEmoji, sendQuickChat, asSendTroops, asSendGold, sendAllianceRequest, sendBetray } from "@content/game/send";
 import { EMOJI_COMPACT } from "@shared/emoji-table";
-import { StatCard } from "@ui/components/ds";
+import { StatCard, PretextText } from "@ui/components/ds";
 import type { PlayerData } from "@shared/types";
 
 const QUICK_ACTIONS = [
@@ -55,18 +58,21 @@ function CollapseSection({
 // Compact player tile — responsive card for teammates/allies
 // ---------------------------------------------------------------------------
 
+/** Read my current stats from the store at call time (not render time). */
+function getMyStats(): { troops: number; gold: number } {
+  const s = useStore.getState();
+  const me = readMyPlayer(s.lastPlayers, s.playersById, s.currentClientID, s.mySmallID);
+  return { troops: dTroops(me?.troops), gold: num(me?.gold ?? 0) };
+}
+
 const PlayerTile = memo(function PlayerTile({
   player,
   tag,
   tagColor,
-  myTroops,
-  myGold,
 }: {
   player: PlayerData;
   tag: string;
   tagColor: string;
-  myTroops: number;
-  myGold: number;
 }) {
   const [expanded, setExpanded] = useState(false);
   const setView = useStore((s) => s.setView);
@@ -92,7 +98,7 @@ const PlayerTile = memo(function PlayerTile({
         title={`${name} — ${short(troops)}t ${short(gold)}g`}
       >
         <span className={`text-2xs font-bold ${tagColor.replace("border-", "text-")} mb-0.5`}>[{tag}]</span>
-        <span className="text-xs text-hammer-text font-bold text-center leading-tight">{name}</span>
+        <PretextText text={name} size="xs" weight="semibold" maxWidth={80} className="text-hammer-text text-center leading-tight" as="span" />
         {!alive && <span className="text-2xs text-hammer-red">DEAD</span>}
         <div className="flex gap-1.5 mt-0.5 text-2xs">
           <span className="text-hammer-blue">{short(troops)}t</span>
@@ -106,7 +112,7 @@ const PlayerTile = memo(function PlayerTile({
     <div className={`rounded border ${tagColor} bg-hammer-raised p-1.5 w-full`}>
       <div className="flex items-center gap-1 mb-1">
         <span className={`text-2xs font-bold ${tagColor.replace("border-", "text-")} shrink-0`}>[{tag}]</span>
-        <span className="text-xs text-hammer-text font-bold truncate flex-1">{name}</span>
+        <PretextText text={name} size="xs" weight="semibold" maxWidth={200} className="text-hammer-text truncate flex-1" as="span" />
         <div className="flex gap-2 text-2xs shrink-0">
           <span className="text-hammer-blue">{short(troops)}t</span>
           <span className="text-hammer-gold">{short(gold)}g</span>
@@ -121,14 +127,14 @@ const PlayerTile = memo(function PlayerTile({
         {SEND_PCTS.map((pct) => (
           <button
             key={`t${pct}`}
-            onClick={() => asSendTroops(player.id, Math.floor(myTroops * pct / 100))}
+            onClick={() => { const s = getMyStats(); asSendTroops(player.id, Math.floor(s.troops * pct / 100)); }}
             className="text-2xs rounded py-0.5 px-1.5 border border-hammer-border bg-hammer-bg text-hammer-blue hover:border-hammer-blue transition-colors cursor-pointer"
           >{pct}%t</button>
         ))}
         {SEND_PCTS.map((pct) => (
           <button
             key={`g${pct}`}
-            onClick={() => asSendGold(player.id, Math.floor(myGold * pct / 100))}
+            onClick={() => { const s = getMyStats(); asSendGold(player.id, Math.floor(s.gold * pct / 100)); }}
             className="text-2xs rounded py-0.5 px-1.5 border border-hammer-border bg-hammer-bg text-hammer-gold hover:border-hammer-gold transition-colors cursor-pointer"
           >{pct}%g</button>
         ))}
@@ -228,12 +234,13 @@ const AllySelectChip = memo(function AllySelectChip({
 // ---------------------------------------------------------------------------
 
 export default function AlliancesView() {
+  const avRenders = useRef(0);
+  avRenders.current++;
+  record("render", "AlliancesView", { n: avRenders.current });
   const teammates = useTeammates();
   const allies = useAllies();
-  const me = useMyPlayer();
-  const playersById = usePlayersById();
-  const myTroops = dTroops(me?.troops);
-  const myGold = num(me?.gold ?? 0);
+  const me = useMyPlayerStructural();
+  const allAlive = useAllAlivePlayers();
 
   const [showBots, setShowBots] = useState(false);
   const [selected, setSelected] = useState<Set<string>>(new Set());
@@ -257,8 +264,8 @@ export default function AlliancesView() {
     const humans: PlayerData[] = [];
     const bots: PlayerData[] = [];
 
-    for (const p of playersById.values()) {
-      if (p.id === me.id || !p.isAlive) continue;
+    for (const p of allAlive) {
+      if (p.id === me.id) continue;
       if (tmIds.has(p.id) || allyIds.has(p.id)) continue;
       if (p.team != null && me.team != null && p.team === me.team) continue;
       (p.clientID ? humans : bots).push(p);
@@ -269,7 +276,7 @@ export default function AlliancesView() {
     humans.sort(sortFn);
     bots.sort(sortFn);
     return { humans, bots };
-  }, [playersById, me, teammates, allies]);
+  }, [allAlive, me, teammates, allies]);
 
   const visibleCandidates = useMemo(() => {
     const base = showBots
@@ -368,7 +375,7 @@ export default function AlliancesView() {
         <CollapseSection title="Teammates" count={teammates.length}>
           <div className="grid grid-cols-[repeat(auto-fill,minmax(80px,1fr))] gap-1">
             {teammates.map((p) => (
-              <PlayerTile key={p.id} player={p} tag="TM" tagColor="border-hammer-blue" myTroops={myTroops} myGold={myGold} />
+              <PlayerTile key={p.id} player={p} tag="TM" tagColor="border-hammer-blue"  />
             ))}
           </div>
         </CollapseSection>
@@ -379,7 +386,7 @@ export default function AlliancesView() {
         <CollapseSection title="Allies" count={allies.length}>
           <div className="grid grid-cols-[repeat(auto-fill,minmax(80px,1fr))] gap-1 mb-1.5">
             {allies.map((p) => (
-              <PlayerTile key={p.id} player={p} tag="AL" tagColor="border-hammer-green" myTroops={myTroops} myGold={myGold} />
+              <PlayerTile key={p.id} player={p} tag="AL" tagColor="border-hammer-green"  />
             ))}
           </div>
           {/* Betray controls */}

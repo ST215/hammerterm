@@ -1,9 +1,12 @@
-import { useState, useMemo } from "react";
+import { useState, useMemo, useRef } from "react";
 import { useStore } from "@store/index";
-import { useMyPlayer, useTeammates, useAllies, useAllAlivePlayers, usePlayersById } from "@ui/hooks/usePlayerHelpers";
+import { useMyPlayerStructural, useTeammates, useAllies, useAllAlivePlayers } from "@ui/hooks/usePlayerHelpers";
+import { record } from "../../recorder";
+import { useContentWidth } from "@ui/hooks/useContentWidth";
 import { sendEmoji, sendQuickChat } from "@content/game/send";
 import { EMOJI_TABLE } from "@shared/emoji-table";
-import { Section, PresetButton } from "@ui/components/ds";
+import { Section, PresetButton, PretextText } from "@ui/components/ds";
+import { TargetTag } from "@ui/components/TargetTag";
 import { timeAgo } from "@shared/ui-helpers";
 import type { PlayerData } from "@shared/types";
 
@@ -79,10 +82,14 @@ function keyToLabel(key: string): string {
 const GROUP_MODES = ["team", "allies", "all", "others", "clear"] as const;
 
 export default function CommsView() {
+  const cvRenders = useRef(0);
+  cvRenders.current++;
+  record("render", "CommsView", { n: cvRenders.current });
+
+  const contentWidth = useContentWidth();
   const commsTargets = useStore((s) => s.commsTargets);
   const commsGroupMode = useStore((s) => s.commsGroupMode);
   const commsRecentSent = useStore((s) => s.commsRecentSent);
-  const playersById = usePlayersById();
   const myTeam = useStore((s) => s.myTeam);
   const myAllies = useStore((s) => s.myAllies);
   const allAlivePlayers = useAllAlivePlayers();
@@ -93,7 +100,7 @@ export default function CommsView() {
   const setGroupMode = useStore((s) => s.setCommsGroupMode);
   const addRecentSent = useStore((s) => s.addCommsRecentSent);
 
-  const me = useMyPlayer();
+  const me = useMyPlayerStructural();
   const teammates = useTeammates();
   const allies = useAllies();
 
@@ -106,15 +113,19 @@ export default function CommsView() {
   const { otherHumans, otherBots } = useMemo(() => {
     const humans: PlayerData[] = [];
     const bots: PlayerData[] = [];
-    for (const p of playersById.values()) {
-      if (!p.isAlive || !me || p.id === me.id) continue;
+    for (const p of allAlivePlayers) {
+      if (!me || p.id === me.id) continue;
       if (p.team != null && myTeam != null && p.team === myTeam) continue;
       if (p.smallID != null && myAllies.has(p.smallID)) continue;
       if (p.clientID) humans.push(p);
       else bots.push(p);
     }
+    const sortName = (a: PlayerData, b: PlayerData) =>
+      (a.displayName || a.name || "").localeCompare(b.displayName || b.name || "");
+    humans.sort(sortName);
+    bots.sort(sortName);
     return { otherHumans: humans, otherBots: bots };
-  }, [playersById, me, myTeam, myAllies]);
+  }, [allAlivePlayers, me, myTeam, myAllies]);
 
   const others = showBots ? [...otherHumans, ...otherBots] : otherHumans;
 
@@ -124,10 +135,34 @@ export default function CommsView() {
   const filteredTeammates = teammates.filter(matchName);
   const filteredAllies = allies.filter(matchName);
   const filteredOthers = others.filter(matchName);
+  const shouldShowOthers = showOthers || (q.length > 0 && filteredOthers.length > 0);
+
+  const selectedPlayers = useMemo(() => {
+    if (commsTargets.size === 0) return [];
+    // Non-reactive read — only recomputes when commsTargets changes (user action)
+    const pMap = useStore.getState().playersById;
+    const result: { id: string; name: string; type?: "TM" | "AL" }[] = [];
+    for (const tid of commsTargets) {
+      const p = pMap.get(tid);
+      if (!p) continue;
+      const isTeam = p.team != null && myTeam != null && p.team === myTeam;
+      const isAlly = p.smallID != null && myAllies.has(p.smallID);
+      result.push({
+        id: p.id,
+        name: p.displayName || p.name || `#${p.smallID}`,
+        type: isTeam ? "TM" : isAlly ? "AL" : undefined,
+      });
+    }
+    return result.sort((a, b) => a.name.localeCompare(b.name));
+  }, [commsTargets, myTeam, myAllies]);
 
   function toggleTarget(id: string) {
-    if (commsTargets.has(id)) removeTarget(id);
-    else addTarget(id);
+    if (commsTargets.has(id)) {
+      removeTarget(id);
+    } else {
+      addTarget(id);
+      setSearch("");
+    }
   }
 
   function handleGroupSelect(mode: string) {
@@ -244,6 +279,23 @@ export default function CommsView() {
           onChange={(e) => setSearch(e.target.value)}
           className="w-full bg-hammer-bg border border-hammer-border text-hammer-text text-2xs px-2 py-1 rounded mb-1.5 focus:outline-none focus:border-hammer-blue"
         />
+        {selectedPlayers.length > 0 && (
+          <div className="flex flex-wrap gap-0.5 mb-1.5">
+            {selectedPlayers.map((t) => (
+              <TargetTag
+                key={t.id}
+                target={t}
+                onRemove={() => removeTarget(t.id)}
+              />
+            ))}
+            <button
+              onClick={clearTargets}
+              className="px-1 py-0.5 text-2xs text-hammer-red border border-hammer-red/30 rounded cursor-pointer hover:bg-hammer-red/10 transition-colors"
+            >
+              Clear All
+            </button>
+          </div>
+        )}
         <div className="flex items-center gap-1 mb-1.5">
           {GROUP_MODES.map((g) => (
             <PresetButton
@@ -304,9 +356,9 @@ export default function CommsView() {
                 onClick={() => setShowOthers(!showOthers)}
                 className="text-2xs text-hammer-muted hover:text-hammer-text bg-transparent border-none cursor-pointer p-0 font-mono"
               >
-                Others ({filteredOthers.length}) {showOthers ? "\u25BC" : "\u25B6"}
+                Others ({filteredOthers.length}) {shouldShowOthers ? "\u25BC" : "\u25B6"}
               </button>
-              {showOthers && otherBots.length > 0 && (
+              {shouldShowOthers && otherBots.length > 0 && (
                 <button
                   onClick={() => setShowBots((b) => !b)}
                   className={`px-1 py-0 rounded text-2xs border transition-colors cursor-pointer ${
@@ -319,7 +371,7 @@ export default function CommsView() {
                 </button>
               )}
             </div>
-            {showOthers && (
+            {shouldShowOthers && (
               <div className="flex flex-wrap gap-0.5 mt-0.5">
                 {filteredOthers.map((p) => (
                   <button
@@ -402,7 +454,7 @@ export default function CommsView() {
                 <span className="text-hammer-text">
                   {entry.type === "emoji" ? entry.label : `"${entry.label}"`}
                 </span>
-                <span className="text-hammer-dim">{"\u2192"} {entry.targetName}</span>
+                <PretextText text={`\u2192 ${entry.targetName}`} size="2xs" maxWidth={contentWidth * 0.4} className="text-hammer-dim" as="span" />
               </div>
             ))}
           </div>

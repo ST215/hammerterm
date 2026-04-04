@@ -1,8 +1,9 @@
 import { useMemo } from "react";
 import { useStore } from "@store/index";
 import { useMyPlayer } from "@ui/hooks/usePlayerHelpers";
+import { useContentWidth } from "@ui/hooks/useContentWidth";
 import { short, comma, dTroops, fmtSec } from "@shared/utils";
-import { Section, StatCard, PercentBar } from "@ui/components/ds";
+import { Section, StatCard, PercentBar, PretextText } from "@ui/components/ds";
 import type { DonationRecord, PortRecord } from "@shared/types";
 
 interface SortedEntry {
@@ -68,6 +69,8 @@ export default function SummaryView() {
   const sortedOutbound = useSortedEntries(outbound);
   const sortedPorts = useSortedPorts(ports);
 
+  const contentWidth = useContentWidth();
+
   const myName = me?.displayName || me?.name || "Unknown";
   const myTroops = dTroops(me?.troops);
   const myGold = Number(me?.gold ?? 0);
@@ -106,7 +109,7 @@ export default function SummaryView() {
       <Section title="Status">
         <div className="bg-hammer-raised rounded p-2 border border-hammer-border-subtle">
           <div className="flex items-center justify-between mb-1">
-            <span className="text-hammer-green text-sm font-semibold">{myName}</span>
+            <PretextText text={myName} size="sm" weight="semibold" maxWidth={contentWidth * 0.6} className="text-hammer-green" as="span" />
             <span className="text-2xs text-hammer-dim">{comma(myTiles)} tiles</span>
           </div>
           <div className="mb-0_5">
@@ -155,9 +158,9 @@ export default function SummaryView() {
       {/* Gold Rate */}
       <Section title="Gold Rate">
         <div className="grid grid-cols-3 gap-1">
-          <StatCard label="GPS (30s)" value={short(gps30)} color="text-hammer-gold" />
-          <StatCard label="GPM (60s)" value={short(gpm60)} color="text-hammer-gold" />
-          <StatCard label="GPM (120s)" value={short(gpm120)} color="text-hammer-gold" />
+          <StatCard label="GPS (30s)" value={short(gps30)} color="text-hammer-gold" cols={3} />
+          <StatCard label="GPM (60s)" value={short(gpm60)} color="text-hammer-gold" cols={3} />
+          <StatCard label="GPM (120s)" value={short(gpm120)} color="text-hammer-gold" cols={3} />
         </div>
       </Section>
 
@@ -172,7 +175,7 @@ export default function SummaryView() {
               >
                 <div className="flex items-center gap-1">
                   <span className="text-xs w-5 shrink-0">{MEDALS[i] ?? `${i + 1}.`}</span>
-                  <span className="text-hammer-text text-xs truncate">{e.name}</span>
+                  <PretextText text={e.name} size="xs" maxWidth={contentWidth * 0.5} className="text-hammer-text truncate" as="span" />
                 </div>
                 <div className="flex gap-2 shrink-0">
                   {e.gold > 0 && (
@@ -201,7 +204,7 @@ export default function SummaryView() {
                 key={e.name}
                 className="flex items-center justify-between bg-hammer-raised rounded px-2 py-0_5 border border-hammer-border-subtle"
               >
-                <span className="text-hammer-text truncate mr-2 text-xs">{e.name}</span>
+                <PretextText text={e.name} size="xs" maxWidth={contentWidth * 0.5} className="text-hammer-text truncate mr-2" as="span" />
                 <div className="flex gap-2 shrink-0">
                   {e.gold > 0 && (
                     <span className="text-hammer-gold text-2xs" title={comma(e.gold)}>
@@ -229,7 +232,7 @@ export default function SummaryView() {
                 key={e.name}
                 className="flex items-center justify-between bg-hammer-raised rounded px-2 py-0_5 border border-hammer-border-subtle"
               >
-                <span className="text-hammer-text truncate mr-2 text-xs">{e.name}</span>
+                <PretextText text={e.name} size="xs" maxWidth={contentWidth * 0.5} className="text-hammer-text truncate mr-2" as="span" />
                 <div className="flex gap-2 shrink-0">
                   {e.gold > 0 && (
                     <span className="text-hammer-gold text-2xs" title={comma(e.gold)}>
@@ -252,13 +255,14 @@ export default function SummaryView() {
       {sortedPorts.length > 0 && (
         <Section title="Port Income" count={sortedPorts.length}>
           <div className="grid grid-cols-3 gap-1 mb-1">
-            <StatCard label="Total Ports" value={String(sortedPorts.length)} color="text-hammer-blue" />
-            <StatCard label="Port Income" value={short(totals.portGold)} color="text-hammer-gold" />
+            <StatCard label="Total Ports" value={String(sortedPorts.length)} color="text-hammer-blue" cols={3} />
+            <StatCard label="Port Income" value={short(totals.portGold)} color="text-hammer-gold" cols={3} />
             <StatCard
               label="Best GPM"
               value={sortedPorts[0] ? sortedPorts[0].gpm.toFixed(1) : "0"}
               sub={sortedPorts[0]?.name}
               color="text-hammer-green"
+              cols={3}
             />
           </div>
           <div className="flex flex-col gap-0_5">
@@ -267,7 +271,7 @@ export default function SummaryView() {
                 key={p.name}
                 className="flex items-center justify-between bg-hammer-raised rounded px-2 py-0_5 border border-hammer-border-subtle"
               >
-                <span className="text-hammer-blue truncate mr-2 text-xs">{p.name}</span>
+                <PretextText text={p.name} size="xs" maxWidth={contentWidth * 0.4} className="text-hammer-blue truncate mr-2" as="span" />
                 <div className="flex gap-2 shrink-0">
                   <span className="text-hammer-gold text-2xs" title={comma(p.totalGold)}>
                     {short(p.totalGold)}g

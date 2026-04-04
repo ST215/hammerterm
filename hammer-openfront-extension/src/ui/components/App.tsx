@@ -1,5 +1,6 @@
-import { Component, type ReactNode } from "react";
+import { Component, useRef, type ReactNode } from "react";
 import { useStore } from "@store/index";
+import { record } from "../../recorder";
 import Panel from "./Panel";
 import HeaderButtons from "./HeaderButtons";
 import TabBar from "./TabBar";
@@ -69,6 +70,10 @@ const VIEW_MAP: Record<string, React.FC> = {
 };
 
 export default function App({ mode }: AppProps) {
+  const appRenders = useRef(0);
+  appRenders.current++;
+  record("render", "App", { n: appRenders.current, mode });
+
   const view = useStore((s) => s.view);
   const uiVisible = useStore((s) => s.uiVisible);
   const displayMode = useStore((s) => s.displayMode);

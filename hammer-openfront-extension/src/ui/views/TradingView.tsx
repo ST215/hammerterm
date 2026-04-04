@@ -1,6 +1,6 @@
 import { useState, useCallback, useMemo, memo } from "react";
 import { useStore } from "@store/index";
-import { useMyPlayer, useTeammates, useAllies, usePlayersById } from "@ui/hooks/usePlayerHelpers";
+import { useMyPlayer, useTeammates, useAllies, useAllAlivePlayers } from "@ui/hooks/usePlayerHelpers";
 import { short, dTroops, num } from "@shared/utils";
 import { sendEmbargoStartNow, sendEmbargoStopNow } from "@content/game/send";
 import type { PlayerData } from "@shared/types";
@@ -90,7 +90,7 @@ const PlayerChip = memo(function PlayerChip({
 
 export default function TradingView() {
   const me = useMyPlayer();
-  const playersById = usePlayersById();
+  const allAlive = useAllAlivePlayers();
   const teammates = useTeammates();
   const allies = useAllies();
 
@@ -108,14 +108,14 @@ export default function TradingView() {
     const tmIds = new Set(teammates.map((p) => p.id));
     const allyIds = new Set(allies.map((p) => p.id));
     const others: PlayerData[] = [];
-    for (const p of playersById.values()) {
-      if (p.id === me.id || !p.isAlive) continue;
+    for (const p of allAlive) {
+      if (p.id === me.id) continue;
       if (tmIds.has(p.id) || allyIds.has(p.id)) continue;
       others.push(p);
     }
     others.sort((a, b) => (a.displayName || a.name || "").localeCompare(b.displayName || b.name || ""));
     return { teammates, allies, others };
-  }, [playersById, me, teammates, allies]);
+  }, [allAlive, me, teammates, allies]);
 
   const allPlayers = useMemo(() =>
     [...playerGroups.teammates, ...playerGroups.allies, ...playerGroups.others],

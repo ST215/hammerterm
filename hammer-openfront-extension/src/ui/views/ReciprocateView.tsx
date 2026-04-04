@@ -1,8 +1,9 @@
 import { useStore } from "@store/index";
-import { useMyPlayer, usePlayersById } from "@ui/hooks/usePlayerHelpers";
+import { useMyPlayer } from "@ui/hooks/usePlayerHelpers";
+import { useContentWidth } from "@ui/hooks/useContentWidth";
 import { short, comma, dTroops, num } from "@shared/utils";
 import { handleQuickReciprocate } from "@content/automation/reciprocate-engine";
-import { Section, StatCard, PresetButton, Badge, PercentBar } from "@ui/components/ds";
+import { Section, StatCard, PresetButton, Badge, PercentBar, PretextText } from "@ui/components/ds";
 import { timeAgo as _timeAgo } from "@shared/ui-helpers";
 import type { PalantirDecision } from "@store/slices/reciprocate";
 
@@ -101,8 +102,10 @@ export default function ReciprocateView() {
   const feedIn = useStore((s) => s.feedIn);
   const myTeam = useStore((s) => s.myTeam);
   const myAllies = useStore((s) => s.myAllies);
-  const playersById = usePlayersById();
+  // Non-reactive read — only used for name tag lookups (cosmetic)
+  const playersById = useStore.getState().playersById;
 
+  const contentWidth = useContentWidth();
   const me = useMyPlayer();
   const myTroops = me ? dTroops(me.troops) : 0;
   const myGold = me ? num(me.gold) : 0;
@@ -289,7 +292,7 @@ export default function ReciprocateView() {
           <div className="flex flex-col gap-0.5">
             {pending.map((item, i) => (
               <div key={i} className="flex items-center justify-between bg-hammer-raised rounded px-2 py-0.5 border border-hammer-border-subtle text-2xs">
-                <span className="text-hammer-text">{item.donorName}</span>
+                <PretextText text={item.donorName} size="2xs" maxWidth={contentWidth * 0.3} className="text-hammer-text" as="span" />
                 <div className="flex items-center gap-2">
                   <span className={item.receivedType === "troops" ? "text-hammer-blue" : "text-hammer-gold"}>
                     {short(item.amountReceived)} {item.receivedType}
@@ -321,7 +324,7 @@ export default function ReciprocateView() {
                     {/* Header */}
                     <div className="flex items-center justify-between mb-0.5">
                       <div className="flex items-center gap-1">
-                        <span className="text-xs text-hammer-text font-bold">{entry.donorName}</span>
+                        <PretextText text={entry.donorName} size="xs" weight="semibold" maxWidth={contentWidth * 0.5} className="text-hammer-text" as="span" />
                         {tag && <span className={`text-2xs ${tag.color}`}>[{tag.label}]</span>}
                       </div>
                       <span className="text-2xs text-hammer-dim">{timeAgo(entry.timestamp)}</span>
@@ -330,9 +333,9 @@ export default function ReciprocateView() {
                     {/* Result line */}
                     <div className="flex items-center gap-1 text-2xs mb-0.5">
                       {p.skipped ? (
-                        <span className="text-hammer-red font-bold">✕ Filtered ({p.skipReason})</span>
+                        <PretextText text={`✕ Filtered (${p.skipReason})`} size="2xs" maxWidth={contentWidth * 0.7} className="text-hammer-red font-bold" as="span" />
                       ) : (
-                        <span className="text-hammer-green font-bold">→ Sent {sentLabel} ({Math.round(p.percentage)}%)</span>
+                        <PretextText text={`→ Sent ${sentLabel} (${Math.round(p.percentage)}%)`} size="2xs" maxWidth={contentWidth * 0.7} className="text-hammer-green font-bold" as="span" />
                       )}
                     </div>
 
@@ -363,7 +366,7 @@ export default function ReciprocateView() {
                   <div key={id} className="bg-hammer-raised rounded border border-hammer-border-subtle p-2">
                     <div className="flex items-center justify-between mb-1">
                       <div className="flex items-center gap-1">
-                        <span className="text-xs text-hammer-text font-bold">{name}</span>
+                        <PretextText text={name} size="xs" weight="semibold" maxWidth={contentWidth * 0.5} className="text-hammer-text" as="span" />
                         {tag && <span className={`text-2xs ${tag.color}`}>[{tag.label}]</span>}
                       </div>
                       {lastTs > 0 && <span className="text-2xs text-hammer-dim">{timeAgo(lastTs)}</span>}
@@ -429,7 +432,7 @@ export default function ReciprocateView() {
                 <div key={i} className="flex items-center justify-between text-2xs bg-hammer-raised rounded px-2 py-0.5 border border-hammer-border-subtle">
                   <div className="flex items-center gap-1.5">
                     <span className="text-hammer-dim">{timeAgo(entry.timestamp)}</span>
-                    <span className="text-hammer-text">{entry.donorName}</span>
+                    <PretextText text={entry.donorName} size="2xs" maxWidth={contentWidth * 0.25} className="text-hammer-text" as="span" />
                     <span className={
                       entry.mode === "palantir" ? "text-hammer-purple" :
                       entry.mode === "auto" ? "text-hammer-green" : "text-hammer-blue"

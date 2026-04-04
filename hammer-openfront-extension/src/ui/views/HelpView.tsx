@@ -1,6 +1,7 @@
 import { useCallback } from "react";
 import { useStore } from "@store/index";
-import { Section } from "@ui/components/ds";
+import { useContentWidth } from "@ui/hooks/useContentWidth";
+import { Section, PretextText } from "@ui/components/ds";
 import { showStatus } from "@ui/components/StatusToast";
 import { exportMatchData } from "@store/slices/match-export";
 import { POSITION_GRID, type NotifPosition } from "@shared/notif-position";
@@ -69,6 +70,7 @@ function PositionPicker({ value, onChange }: { value: NotifPosition; onChange: (
 }
 
 export default function HelpView() {
+  const contentWidth = useContentWidth();
   const playerDataReady = useStore((s) => s.playerDataReady);
   const currentClientID = useStore((s) => s.currentClientID);
   const playerSummary = useStore((s) => s.playerSummary);
@@ -116,7 +118,7 @@ export default function HelpView() {
           {TABS_HELP.map((t) => (
             <div key={t.title} className="flex gap-2 text-2xs py-0_5">
               <span className="text-hammer-blue font-semibold shrink-0 w-16">{t.title}</span>
-              <span className="text-hammer-muted">{t.desc}</span>
+              <PretextText text={t.desc} size="2xs" maxWidth={contentWidth - 80} className="text-hammer-muted" as="span" />
             </div>
           ))}
         </div>
@@ -150,7 +152,7 @@ export default function HelpView() {
           {TIPS.map((tip, i) => (
             <div key={i} className="flex items-start gap-1 text-2xs">
               <span className="text-hammer-gold shrink-0">*</span>
-              <span className="text-hammer-muted">{tip}</span>
+              <PretextText text={tip} size="2xs" maxWidth={contentWidth - 20} className="text-hammer-muted" as="span" />
             </div>
           ))}
         </div>
@@ -190,7 +192,7 @@ export default function HelpView() {
       </Section>
 
       <Section title="Activity Feed (Donation Toast)">
-        <div className="text-2xs text-hammer-muted mb-2">Top-screen card showing donation details when someone sends</div>
+        <div className="text-2xs text-hammer-muted mb-2">Card showing donation details when someone sends</div>
         <div className="flex items-start gap-4 mb-2">
           <div className="flex flex-col gap-1">
             <span className="text-2xs text-hammer-muted">Position</span>

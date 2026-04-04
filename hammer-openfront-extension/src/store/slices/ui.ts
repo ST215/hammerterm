@@ -31,6 +31,8 @@ export interface UISlice {
   setStatusToastScale: (v: number) => void;
   setReciprocatePosition: (v: NotifPosition) => void;
   setDonationPosition: (v: NotifPosition) => void;
+  panelWidth: number;
+  setPanelWidth: (w: number) => void;
 }
 
 export const createUISlice: StateCreator<UISlice, [], [], UISlice> = (set) => ({
@@ -46,8 +48,8 @@ export const createUISlice: StateCreator<UISlice, [], [], UISlice> = (set) => ({
   toastOutboundGold: true,
   toastScale: 1.0,
   statusToastScale: 1.0,
-  reciprocatePosition: "top-right",
-  donationPosition: "top-center",
+  reciprocatePosition: "center-right",
+  donationPosition: "center-right",
 
   setView: (view) => set({ view }),
   togglePaused: () => set((s) => ({ paused: !s.paused })),
@@ -63,4 +65,6 @@ export const createUISlice: StateCreator<UISlice, [], [], UISlice> = (set) => ({
   setStatusToastScale: (v) => set({ statusToastScale: v }),
   setReciprocatePosition: (v) => set({ reciprocatePosition: v }),
   setDonationPosition: (v) => set({ donationPosition: v }),
+  panelWidth: 850,
+  setPanelWidth: (w) => set((s) => s.panelWidth === w ? s : { panelWidth: w }),
 });
