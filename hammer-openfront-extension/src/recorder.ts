@@ -284,7 +284,7 @@ export function getRecentEvents(n: number): RecorderEvent[] {
 
 export function exportRecording(): object {
   return {
-    version: "15.3.0-ext",
+    version: "15.4.0-ext",
     format: 2, // v2 = full match recording with snapshots
     exportedAt: Date.now(),
     session: {

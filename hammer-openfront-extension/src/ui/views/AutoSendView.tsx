@@ -9,6 +9,8 @@ import { useState, useCallback, useMemo, useEffect, useRef } from "react";
 import { useStore } from "@store/index";
 import { useMyPlayer, useMyPlayerStructural, useTeammates, useAllies } from "@ui/hooks/usePlayerHelpers";
 import { short, comma } from "@shared/utils";
+import { troopGrowthPerSec, timeToReach, palantirTroopAmount, OPTIMAL_REGEN_PCT } from "@shared/logic/troop-math";
+import { PALANTIR_RATIO } from "@store/slices/auto-troops";
 import { TargetTag } from "@ui/components/TargetTag";
 import { record } from "../../recorder";
 
@@ -77,7 +79,7 @@ export interface ResourceConfig {
 // Shared sub-components
 // ---------------------------------------------------------------------------
 
-const RATIO_PRESETS = [5, 10, 15, 20, 25, 33, 42, 50, 75, 100];
+const RATIO_PRESETS = [5, 10, 15, 20, 25, 33, 50, 75, 100];
 
 function Section({ title, children }: { title: string; children: React.ReactNode }) {
   return (
@@ -90,14 +92,16 @@ function Section({ title, children }: { title: string; children: React.ReactNode
   );
 }
 
-function PresetButton({ label, active, onClick }: { label: string; active: boolean; onClick: () => void }) {
+function PresetButton({ label, active, onClick, accent }: { label: string; active: boolean; onClick: () => void; accent?: "green" | "purple" }) {
+  const a = accent || "green";
+  const activeCls = a === "purple"
+    ? "bg-hammer-purple/20 border-hammer-purple text-hammer-purple"
+    : "bg-hammer-green/20 border-hammer-green text-hammer-green";
   return (
     <button
       onClick={onClick}
       className={`px-1_5 py-0_5 rounded text-2xs border transition-colors cursor-pointer ${
-        active
-          ? "bg-hammer-green/20 border-hammer-green text-hammer-green"
-          : "bg-hammer-surface border-hammer-border text-hammer-muted hover:text-hammer-text hover:border-hammer-text"
+        active ? activeCls : "bg-hammer-surface border-hammer-border text-hammer-muted hover:text-hammer-text hover:border-hammer-text"
       }`}
     >
       {label}
@@ -121,19 +125,28 @@ function simulateSends(
   const perTarget: number[] = [];
   let remaining = amount;
 
-  for (let i = 0; i < targetCount; i++) {
-    const toSend = Math.max(1, Math.floor(remaining * (ratio / 100)));
-    if (toSend <= 0) break;
-
-    if (thresholdMode === "pct") {
-      const remainingPct = maxAmount > 0 ? ((remaining - toSend) / maxAmount) * 100 : 0;
-      if (remainingPct < threshold) break;
-    } else {
-      if (remaining - toSend < threshold) break;
+  if (ratio === PALANTIR_RATIO) {
+    // Palantir: send surplus above 42% floor, split evenly
+    const perT = palantirTroopAmount(amount, maxAmount, targetCount);
+    if (perT > 0) {
+      for (let i = 0; i < targetCount; i++) perTarget.push(perT);
+      remaining -= perT * targetCount;
     }
+  } else {
+    for (let i = 0; i < targetCount; i++) {
+      const toSend = Math.max(1, Math.floor(remaining * (ratio / 100)));
+      if (toSend <= 0) break;
 
-    perTarget.push(toSend);
-    remaining -= toSend;
+      if (thresholdMode === "pct") {
+        const remainingPct = maxAmount > 0 ? ((remaining - toSend) / maxAmount) * 100 : 0;
+        if (remainingPct < threshold) break;
+      } else {
+        if (remaining - toSend < threshold) break;
+      }
+
+      perTarget.push(toSend);
+      remaining -= toSend;
+    }
   }
 
   const totalSent = perTarget.reduce((sum, v) => sum + v, 0);
@@ -163,65 +176,61 @@ function StatusPanel({
   activeTargetCount: number;
 }) {
   const me = useMyPlayer();
-  // Subscribe to volatile data HERE (not in parent) to isolate re-renders
   const log = useStore(config.selectLog);
   const nextSend = useStore(config.selectNextSend);
 
-  // Render tracking for diagnostics
   const spRenders = useRef(0);
   spRenders.current++;
   record("render", "StatusPanel", { n: spRenders.current, label: config.label });
+
   const myAmount = config.getMyAmount(me);
   const maxAmount = config.getMaxAmount ? config.getMaxAmount(me) : 0;
+  const pctOfMax = maxAmount > 0 ? (myAmount / maxAmount) * 100 : 0;
+  const isPalantir = ratio === PALANTIR_RATIO;
 
-  const { perTarget, totalSent, kept, effectivePct } = simulateSends(
+  const { perTarget, totalSent, kept } = simulateSends(
     myAmount, ratio, activeTargetCount, config.thresholdMode, threshold, maxAmount,
   );
 
-  const belowThreshold =
-    config.thresholdMode === "pct"
-      ? maxAmount > 0 && (myAmount / maxAmount) * 100 < threshold
+  // Growth rate (troops only — gold has fixed generation)
+  const growthSec = config.thresholdMode === "pct" && maxAmount > 0
+    ? troopGrowthPerSec(myAmount, maxAmount)
+    : 0;
+
+  // Time to reach send threshold (or Palantir floor)
+  const sendTarget = isPalantir
+    ? maxAmount * OPTIMAL_REGEN_PCT
+    : config.thresholdMode === "pct" ? (threshold / 100) * maxAmount : threshold;
+  const belowSendPoint = isPalantir
+    ? myAmount < sendTarget
+    : config.thresholdMode === "pct"
+      ? maxAmount > 0 && pctOfMax < threshold
       : myAmount < threshold;
+  const timeToSend = belowSendPoint && growthSec > 0
+    ? timeToReach(myAmount, sendTarget, maxAmount)
+    : 0;
 
-  const rechargeTarget =
-    config.thresholdMode === "pct"
-      ? (threshold / 100) * maxAmount
-      : threshold;
-
-  // Countdown to next send cycle
-  const [now, setNow] = useState(Date.now());
-  useEffect(() => {
-    if (!running) return;
-    const id = setInterval(() => setNow(Date.now()), 500);
-    return () => clearInterval(id);
-  }, [running]);
-
+  // Countdown to next cooldown expiry
   const nextSendMs = useMemo(() => {
     const times = Object.values(nextSend);
     if (times.length === 0) return 0;
-    return Math.max(0, Math.min(...times) - now);
-  }, [nextSend, now]);
+    return Math.max(0, Math.min(...times) - Date.now());
+  }, [nextSend]);
 
-  // Session totals from log
-  const sessionTotal = useMemo(() => {
-    return log.reduce((sum, e) => sum + e.amount, 0);
-  }, [log]);
-
-  const pctOfMax = maxAmount > 0 ? (myAmount / maxAmount) * 100 : 0;
+  const sessionTotal = useMemo(() => log.reduce((sum, e) => sum + e.amount, 0), [log]);
 
   return (
-    <div className="bg-hammer-surface rounded p-2 border border-hammer-border">
-      {/* Row 1: state indicator + start/stop */}
+    <div className="bg-hammer-surface rounded p-2 border border-hammer-border" style={{ minHeight: 90 }}>
+      {/* Row 1: state + start/stop — always present */}
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-2">
-          <span
-            className={`inline-block w-2.5 h-2.5 rounded-full flex-shrink-0 ${
-              running ? "bg-hammer-green animate-pulse" : "bg-hammer-red"
-            }`}
-          />
+          <span className={`inline-block w-2.5 h-2.5 rounded-full shrink-0 ${running ? "bg-hammer-green animate-pulse" : "bg-hammer-red"}`} />
           <span className={`text-sm font-bold ${running ? "text-hammer-green" : "text-hammer-red"}`}>
             {running ? "RUNNING" : "STOPPED"}
           </span>
+          {running && isPalantir && (
+            <span className="text-2xs text-hammer-purple font-bold">[PALANTIR]</span>
+          )}
         </div>
         <button
           onClick={() => (running ? config.stop() : config.start())}
@@ -235,123 +244,71 @@ function StatusPanel({
         </button>
       </div>
 
-      {/* Stats grid */}
+      {/* Rows 2-4: stable layout — always present when running, no conditional mount/unmount */}
       {running && (
-        <div className="mt-2 space-y-1_5">
-          {belowThreshold ? (
-            /* --- RECHARGING --- */
-            <div>
-              <div className="flex items-center justify-between text-xs mb-1">
-                <span className="text-hammer-warn font-bold">RECHARGING</span>
-                {config.thresholdMode === "pct" && maxAmount > 0 && (
-                  <span className="text-hammer-muted">
-                    {Math.round(pctOfMax)}% / {threshold}% of max
+        <div className="mt-1 space-y-0_5 text-2xs">
+          {/* Growth line */}
+          {growthSec > 0 ? (
+            <div className="flex justify-between">
+              <span className="text-hammer-muted">Growth</span>
+              <span className="text-hammer-text">
+                <span className="text-hammer-green font-bold">+{short(Math.round(growthSec))}</span>/sec
+                {belowSendPoint && timeToSend > 0 && (
+                  <span className="text-hammer-warn ml-2">
+                    {Math.round(pctOfMax)}% → {isPalantir ? "42" : threshold}% in {timeToSend.toFixed(0)}s
                   </span>
                 )}
-              </div>
-              <div className="flex items-baseline gap-1_5">
-                <span className={`text-lg font-bold text-${config.accentColor}`}>
-                  {short(myAmount)}
-                </span>
-                <span className="text-hammer-muted text-xs">/</span>
-                <span className="text-lg font-bold text-hammer-text">
-                  {short(rechargeTarget)}
-                </span>
-                <span className="text-xs text-hammer-muted">{config.unit}</span>
-              </div>
-              {rechargeTarget > 0 && (
-                <div className="text-2xs text-hammer-muted mt-0_5">
-                  Need {short(Math.max(0, rechargeTarget - myAmount))} more {config.unit} to resume sending
-                </div>
-              )}
-            </div>
-          ) : activeTargetCount > 0 ? (
-            /* --- READY with targets --- */
-            <div>
-              <div className="flex items-center gap-2 text-xs mb-1_5">
-                <span className="text-hammer-green font-bold">READY</span>
-                {nextSendMs > 0 && (
-                  <span className="text-hammer-muted">
-                    next in {Math.ceil(nextSendMs / 1000)}s
-                  </span>
+                {!belowSendPoint && (
+                  <span className="text-hammer-dim ml-2">{Math.round(pctOfMax)}% of max</span>
                 )}
-              </div>
-
-              {/* Main breakdown */}
-              <div className="space-y-0_5 text-xs">
-                <div className="flex justify-between">
-                  <span className="text-hammer-muted">Have</span>
-                  <span className={`font-bold text-${config.accentColor}`}>
-                    {comma(myAmount)} {config.unit}
-                    {config.thresholdMode === "pct" && maxAmount > 0 && (
-                      <span className="text-hammer-muted font-normal ml-1">
-                        ({Math.round(pctOfMax)}%)
-                      </span>
-                    )}
-                  </span>
-                </div>
-
-                <div className="flex justify-between">
-                  <span className="text-hammer-muted">
-                    Send {perTarget.length < activeTargetCount ? `${perTarget.length}/${activeTargetCount}` : perTarget.length} target{perTarget.length !== 1 ? "s" : ""}
-                  </span>
-                  <span className="font-bold text-hammer-green">
-                    -{comma(totalSent)} {config.unit}
-                    <span className="text-hammer-muted font-normal ml-1">
-                      ({Math.round(effectivePct)}%)
-                    </span>
-                  </span>
-                </div>
-
-                {/* Per-target range when multiple */}
-                {perTarget.length > 1 && (
-                  <div className="flex justify-between text-2xs">
-                    <span className="text-hammer-dim">Per target</span>
-                    <span className="text-hammer-dim">
-                      {short(perTarget[perTarget.length - 1])} ~ {short(perTarget[0])} {config.unit} each
-                    </span>
-                  </div>
-                )}
-
-                <div className="border-t border-hammer-border my-0_5" />
-
-                <div className="flex justify-between">
-                  <span className="text-hammer-muted">Keep</span>
-                  <span className="font-bold text-hammer-text">
-                    {comma(kept)} {config.unit}
-                    {config.thresholdMode === "pct" && maxAmount > 0 && (
-                      <span className="text-hammer-muted font-normal ml-1">
-                        ({Math.round((kept / maxAmount) * 100)}%)
-                      </span>
-                    )}
-                  </span>
-                </div>
-              </div>
-
-              {/* Compounding note */}
-              {perTarget.length > 1 && (
-                <div className="text-2xs text-hammer-dim mt-1 italic">
-                  {ratio}% of remaining to each target = {Math.round(effectivePct)}% total
-                </div>
-              )}
+              </span>
             </div>
           ) : (
-            /* --- READY but no targets --- */
-            <div className="text-xs">
-              <span className="text-hammer-green font-bold">READY</span>
-              <span className="text-hammer-muted ml-2">-- no targets configured</span>
+            <div className="flex justify-between">
+              <span className="text-hammer-muted">Have</span>
+              <span className={`font-bold text-${config.accentColor}`}>{comma(myAmount)} {config.unit}</span>
             </div>
           )}
 
-          {/* Session stats (only when we have log data) */}
+          {/* Send line */}
+          <div className="flex justify-between">
+            <span className="text-hammer-muted">
+              {activeTargetCount > 0
+                ? `Send ${activeTargetCount} target${activeTargetCount !== 1 ? "s" : ""}`
+                : "No targets"}
+            </span>
+            {totalSent > 0 ? (
+              <span className="text-hammer-green font-bold">
+                -{short(totalSent)} {config.unit}
+                {perTarget.length > 1 && (
+                  <span className="text-hammer-dim font-normal ml-1">
+                    ({short(perTarget[perTarget.length - 1])}~{short(perTarget[0])} each)
+                  </span>
+                )}
+              </span>
+            ) : belowSendPoint ? (
+              <span className="text-hammer-warn">recharging</span>
+            ) : (
+              <span className="text-hammer-dim">—</span>
+            )}
+          </div>
+
+          {/* Keep line */}
+          {totalSent > 0 && (
+            <div className="flex justify-between">
+              <span className="text-hammer-muted">Keep</span>
+              <span className="text-hammer-text font-bold">
+                {short(kept)} {config.unit}
+                {maxAmount > 0 && <span className="text-hammer-dim font-normal ml-1">({Math.round(kept / maxAmount * 100)}%)</span>}
+              </span>
+            </div>
+          )}
+
+          {/* Session line */}
           {log.length > 0 && (
-            <div className="border-t border-hammer-border pt-1">
-              <div className="flex justify-between text-2xs">
-                <span className="text-hammer-dim">Session</span>
-                <span className="text-hammer-muted">
-                  {comma(sessionTotal)} {config.unit} sent across {log.length} send{log.length !== 1 ? "s" : ""}
-                </span>
-              </div>
+            <div className="flex justify-between border-t border-hammer-border-subtle pt-0_5 mt-0_5">
+              <span className="text-hammer-dim">Session</span>
+              <span className="text-hammer-muted">{comma(sessionTotal)} {config.unit} · {log.length} send{log.length !== 1 ? "s" : ""}</span>
             </div>
           )}
         </div>
@@ -466,6 +423,14 @@ export default function AutoSendView({ config }: { config: ResourceConfig }) {
             {RATIO_PRESETS.map((r) => (
               <PresetButton key={r} label={`${r}%`} active={ratio === r} onClick={() => setRatio(r)} />
             ))}
+            {config.thresholdMode === "pct" && (
+              <PresetButton
+                label="Palantir"
+                active={ratio === PALANTIR_RATIO}
+                onClick={() => setRatio(PALANTIR_RATIO)}
+                accent="purple"
+              />
+            )}
           </div>
           <div className="flex items-center gap-0_5 mt-1">
             <input

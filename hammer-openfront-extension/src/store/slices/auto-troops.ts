@@ -14,6 +14,9 @@ export interface AutoTroopsTarget {
 
 const LOG_CAP = 50;
 
+/** Sentinel value: when asTroopsRatio === PALANTIR_RATIO, use Palantir algorithm. */
+export const PALANTIR_RATIO = -1;
+
 export interface AutoTroopsSlice {
   asTroopsRunning: boolean;
   asTroopsTargets: AutoTroopsTarget[];

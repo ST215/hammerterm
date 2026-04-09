@@ -17,6 +17,8 @@ import { resolveAutoSendTargets, type ResolvedTarget } from "@shared/logic/auto-
 import { estimateMaxTroops } from "@shared/logic/city";
 import { cityLevelSumByOwner } from "@content/hooks/worker-hook";
 import { dTroops, short } from "@shared/utils";
+import { palantirTroopAmount, OPTIMAL_REGEN_PCT } from "@shared/logic/troop-math";
+import { PALANTIR_RATIO } from "@store/slices/auto-troops";
 import { asSendTroops } from "../game/send";
 import { registerInterval } from "../cleanup";
 import { record } from "../../recorder";
@@ -74,9 +76,17 @@ function asTroopsTick(): void {
   const maxT = estimateMaxTroops(me.tilesOwned ?? 0, me.smallID ?? 0, cityLevelSumByOwner);
   const troopPct = maxT > 0 ? (troops / maxT) * 100 : 0;
 
-  if (!maxT || troopPct < s.asTroopsThreshold) {
-    record("auto-t", "skipped", { reason: "threshold", troopPct: Math.round(troopPct) });
-    return;
+  // Palantir manages its own floor (42%); fixed ratio uses the threshold setting
+  if (s.asTroopsRatio === PALANTIR_RATIO) {
+    if (!maxT || troopPct < OPTIMAL_REGEN_PCT * 100) {
+      record("auto-t", "skipped", { reason: "palantir-below-floor", troopPct: Math.round(troopPct) });
+      return;
+    }
+  } else {
+    if (!maxT || troopPct < s.asTroopsThreshold) {
+      record("auto-t", "skipped", { reason: "threshold", troopPct: Math.round(troopPct) });
+      return;
+    }
   }
 
   for (const target of targets) {
@@ -88,14 +98,25 @@ function asTroopsTick(): void {
     const nextSend = last + cooldownMs;
 
     if (now >= nextSend) {
-      // Recompute amount each iteration (troops decrease after each send)
-      const toSend = Math.max(1, Math.floor(troops * (s.asTroopsRatio / 100)));
-      // Don't send if remaining troops would drop below threshold
-      const remainingPct = maxT > 0 ? ((troops - toSend) / maxT) * 100 : 0;
-      if (remainingPct < s.asTroopsThreshold) {
-        record("auto-t", "skipped", { target: target.name, reason: "below-threshold", remainingPct: Math.round(remainingPct) });
-        log(`[AUTO-TROOPS] Skipping ${target.name}: would drop below threshold (${remainingPct.toFixed(0)}%)`);
-        continue;
+      let toSend: number;
+
+      if (s.asTroopsRatio === PALANTIR_RATIO) {
+        // Palantir: send surplus above optimal regen floor (42%), split across targets
+        toSend = palantirTroopAmount(troops, maxT, targets.length);
+        if (toSend <= 0) {
+          record("auto-t", "skipped", { target: target.name, reason: "palantir-below-floor", troopPct: Math.round((troops / maxT) * 100) });
+          continue;
+        }
+      } else {
+        // Fixed ratio: send X% of current troops
+        toSend = Math.max(1, Math.floor(troops * (s.asTroopsRatio / 100)));
+        // Don't send if remaining troops would drop below threshold
+        const remainingPct = maxT > 0 ? ((troops - toSend) / maxT) * 100 : 0;
+        if (remainingPct < s.asTroopsThreshold) {
+          record("auto-t", "skipped", { target: target.name, reason: "below-threshold", remainingPct: Math.round(remainingPct) });
+          log(`[AUTO-TROOPS] Skipping ${target.name}: would drop below threshold (${remainingPct.toFixed(0)}%)`);
+          continue;
+        }
       }
 
       if (asSendTroops(target.id, toSend)) {
