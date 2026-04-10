@@ -64,20 +64,20 @@
   --font-weight-medium: 500;
   --font-weight-semibold: 600;
 
-  /* Hammer color palette — core */
+  /* Hammer color palette — core (WCAG AA contrast optimized) */
   --color-hammer-bg: #0b1220;
-  --color-hammer-surface: #0d1520;
-  --color-hammer-border: #1a3050;
-  --color-hammer-text: #c8d6e5;
-  --color-hammer-muted: #5a7a9a;
+  --color-hammer-surface: #0e1625;
+  --color-hammer-border: #1e3558;
+  --color-hammer-text: #d4e0ed;
+  --color-hammer-muted: #7694b0;
   --color-hammer-header: #0a0f1a;
 
   /* Elevation layers */
-  --color-hammer-raised: #111d2e;
-  --color-hammer-overlay: #162236;
-  --color-hammer-border-subtle: #142640;
-  --color-hammer-border-strong: #2a4a70;
-  --color-hammer-dim: #3a5a7a;
+  --color-hammer-raised: #121f30;
+  --color-hammer-overlay: #1a2a40;
+  --color-hammer-border-subtle: #1a3050;
+  --color-hammer-border-strong: #305880;
+  --color-hammer-dim: #4e7090;
 
   /* Semantic accents */
   --color-hammer-green: #7ff2a3;

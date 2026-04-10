@@ -62,6 +62,53 @@ export function asIsAlly(
   return false;
 }
 
+// ---------------------------------------------------------------------------
+// Team aggregate stats
+// ---------------------------------------------------------------------------
+
+export interface TeamStats {
+  team: any;
+  players: number;
+  alive: number;
+  troops: number;
+  gold: number;
+  tiles: number;
+  cityLevels: number;
+}
+
+export function getTeamStats(
+  playersById: Map<string, PlayerData>,
+  cityLevelSumByOwner?: Map<number, number>,
+): Map<any, TeamStats> {
+  const stats = new Map<any, TeamStats>();
+
+  for (const p of playersById.values()) {
+    if (p.team == null) continue;
+
+    let ts = stats.get(p.team);
+    if (!ts) {
+      ts = { team: p.team, players: 0, alive: 0, troops: 0, gold: 0, tiles: 0, cityLevels: 0 };
+      stats.set(p.team, ts);
+    }
+
+    ts.players++;
+    if (p.isAlive !== false) ts.alive++;
+    ts.troops += Number(p.troops || 0);
+    ts.gold += Number(p.gold || 0);
+    ts.tiles += p.tilesOwned || 0;
+
+    if (p.smallID != null && cityLevelSumByOwner) {
+      ts.cityLevels += cityLevelSumByOwner.get(p.smallID) || 0;
+    }
+  }
+
+  return stats;
+}
+
+// ---------------------------------------------------------------------------
+// Teammate / ally helpers
+// ---------------------------------------------------------------------------
+
 export function getTeammates(
   playersById: Map<string, PlayerData>,
   me: PlayerData | null,
