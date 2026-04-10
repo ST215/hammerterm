@@ -64,15 +64,18 @@ export default function DashboardApp() {
 
     async function connect() {
       try {
-        const response = await chrome.runtime.sendMessage({
-          type: "GET_GAME_TAB",
-        });
+        let response: any;
+        try {
+          response = await chrome.runtime.sendMessage({ type: "GET_GAME_TAB" });
+        } catch {
+          // "Receiving end does not exist" — background not ready yet
+          throw new Error("Background service not ready");
+        }
 
         if (disposed) return;
 
         if (!response?.ok || !response.tabId) {
-          setError("No active game tab found. Open OpenFront.io first.");
-          return;
+          throw new Error("No active game tab found. Open OpenFront.io first.");
         }
 
         port = chrome.tabs.connect(response.tabId, {
@@ -122,9 +125,15 @@ export default function DashboardApp() {
         });
 
         port.onDisconnect.addListener(() => {
+          // Null out port immediately so the subscribe listener stops using it
+          const deadPort = port;
+          port = null;
+          // Unsubscribe from store to prevent further postMessage on dead port
+          unsub?.();
+          unsub = null;
+
           if (!disposed) {
             setConnected(false);
-            // Retry connection instead of showing error immediately
             if (attempt < maxAttempts) {
               setTimeout(tryConnect, 1000);
             } else {
@@ -142,7 +151,7 @@ export default function DashboardApp() {
             for (const n of state.reciprocateNotifications) {
               const old = prev.reciprocateNotifications.find((p) => p.id === n.id);
               if (n.dismissed && old && !old.dismissed) {
-                port.postMessage({ type: "dismiss-notification", id: n.id });
+                try { port.postMessage({ type: "dismiss-notification", id: n.id }); } catch { /* port died */ }
               }
             }
           }
@@ -151,8 +160,6 @@ export default function DashboardApp() {
           for (const key of LOCAL_KEYS) {
             const curr = (state as any)[key];
             const old = (prev as any)[key];
-            // Deep equality for Maps/Sets to avoid feedback loops from
-            // deserialize() creating new instances with identical content
             if (curr instanceof Map && old instanceof Map) {
               if (!mapsEqual(curr, old)) changes[key] = curr;
             } else if (curr instanceof Set && old instanceof Set) {
@@ -162,7 +169,7 @@ export default function DashboardApp() {
             }
           }
           if (Object.keys(changes).length > 0) {
-            port.postMessage({ type: "sync-local", data: changes });
+            try { port.postMessage({ type: "sync-local", data: changes }); } catch { /* port died */ }
           }
         });
 

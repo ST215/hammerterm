@@ -82,26 +82,32 @@ export default function App({ mode }: AppProps) {
   const uiVisible = useStore((s) => s.uiVisible);
   const displayMode = useStore((s) => s.displayMode);
 
-  // ── OVERLAY: window mode active ──
-  // StreamWidget + notifications ALWAYS render on the game page,
-  // even if uiVisible is false. This is the on-screen presence
-  // while the full dashboard is on another monitor.
-  if (mode === "overlay" && displayMode === "window") {
-    return (
+  // ── OVERLAY ──
+  if (mode === "overlay") {
+    // Notifications ALWAYS render on the game page — in every mode, every state.
+    const notifications = (
       <>
-        <StreamWidget />
         <DonationToast />
         <ReciprocatePopup />
         <StatusToast />
         <GrowthHUD />
       </>
     );
-  }
 
-  // ── OVERLAY: normal mode ──
-  if (mode === "overlay") {
-    if (!uiVisible) return null;
+    // Window mode: show stream widget + notifications (no panel)
+    if (displayMode === "window") {
+      return (
+        <>
+          <StreamWidget />
+          {notifications}
+        </>
+      );
+    }
 
+    // Panel hidden: still show notifications
+    if (!uiVisible) return notifications;
+
+    // Normal overlay: panel + notifications
     const ActiveView = VIEW_MAP[view] ?? HammerView;
     return (
       <>
@@ -113,16 +119,13 @@ export default function App({ mode }: AppProps) {
             </ViewErrorBoundary>
           </div>
         </Panel>
-        <DonationToast />
-        <ReciprocatePopup />
-        <StatusToast />
-        <GrowthHUD />
+        {notifications}
       </>
     );
   }
 
   // ── WINDOW: external dashboard ──
-  // NO notifications here — they render on the game page overlay.
+  // No notifications — they render on the game page overlay.
   const ActiveView = VIEW_MAP[view] ?? HammerView;
   return (
     <div className="flex flex-col w-full h-screen bg-hammer-bg text-hammer-text font-mono text-base">
