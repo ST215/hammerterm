@@ -82,9 +82,10 @@ export default function App({ mode }: AppProps) {
   const uiVisible = useStore((s) => s.uiVisible);
   const displayMode = useStore((s) => s.displayMode);
 
-  if (!uiVisible) return null;
-
-  // In window mode, the overlay shows a minimal stream widget + notifications
+  // ── OVERLAY: window mode active ──
+  // StreamWidget + notifications ALWAYS render on the game page,
+  // even if uiVisible is false. This is the on-screen presence
+  // while the full dashboard is on another monitor.
   if (mode === "overlay" && displayMode === "window") {
     return (
       <>
@@ -97,24 +98,20 @@ export default function App({ mode }: AppProps) {
     );
   }
 
-  const ActiveView = VIEW_MAP[view] ?? HammerView;
-
-  const content = (
-    <>
-      <TabBar mode={mode} />
-      <div className="p-2">
-        <ViewErrorBoundary>
-          <ActiveView />
-        </ViewErrorBoundary>
-      </div>
-    </>
-  );
-
+  // ── OVERLAY: normal mode ──
   if (mode === "overlay") {
+    if (!uiVisible) return null;
+
+    const ActiveView = VIEW_MAP[view] ?? HammerView;
     return (
       <>
         <Panel header={<HeaderButtons />}>
-          {content}
+          <TabBar mode="overlay" />
+          <div className="p-2">
+            <ViewErrorBoundary>
+              <ActiveView />
+            </ViewErrorBoundary>
+          </div>
         </Panel>
         <DonationToast />
         <ReciprocatePopup />
@@ -124,22 +121,25 @@ export default function App({ mode }: AppProps) {
     );
   }
 
-  // Window mode — full viewport, all tabs visible
+  // ── WINDOW: external dashboard ──
+  // NO notifications here — they render on the game page overlay.
+  const ActiveView = VIEW_MAP[view] ?? HammerView;
   return (
-    <>
-      <div className="flex flex-col w-full h-screen bg-hammer-bg text-hammer-text font-mono text-base">
-        <div className="flex items-center justify-between bg-hammer-header px-2 py-1 border-b border-hammer-border">
-          <span className="text-hammer-green text-sm font-bold">HAMMER</span>
-          <div className="flex items-center gap-1">
-            <HeaderButtons />
-          </div>
-        </div>
-
-        <div className="flex-1 overflow-y-auto overflow-x-hidden">
-          {content}
+    <div className="flex flex-col w-full h-screen bg-hammer-bg text-hammer-text font-mono text-base">
+      <div className="flex items-center justify-between bg-hammer-header px-2 py-1 border-b border-hammer-border">
+        <span className="text-hammer-green text-sm font-bold">HAMMER</span>
+        <div className="flex items-center gap-1">
+          <HeaderButtons />
         </div>
       </div>
-      <StatusToast />
-    </>
+      <div className="flex-1 overflow-y-auto overflow-x-hidden">
+        <TabBar mode="window" />
+        <div className="p-2">
+          <ViewErrorBoundary>
+            <ActiveView />
+          </ViewErrorBoundary>
+        </div>
+      </div>
+    </div>
   );
 }
