@@ -1,6 +1,7 @@
 import { Component, useRef, type ReactNode } from "react";
 import { useStore } from "@store/index";
 import { record } from "../../recorder";
+import GrowthHUD from "./GrowthHUD";
 import Panel from "./Panel";
 import HeaderButtons from "./HeaderButtons";
 import TabBar from "./TabBar";
@@ -88,6 +89,7 @@ export default function App({ mode }: AppProps) {
         <DonationToast />
         <ReciprocatePopup />
         <StatusToast />
+        <GrowthHUD />
       </>
     );
   }
@@ -114,6 +116,7 @@ export default function App({ mode }: AppProps) {
         <DonationToast />
         <ReciprocatePopup />
         <StatusToast />
+        <GrowthHUD />
       </>
     );
   }

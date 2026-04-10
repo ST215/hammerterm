@@ -416,9 +416,9 @@ export default function AutoSendView({ config }: { config: ResourceConfig }) {
 
       {/* Settings */}
       <Section title="Settings">
-        {/* Send Ratio */}
+        {/* Send Mode */}
         <div className="mb-2">
-          <div className="text-2xs text-hammer-muted mb-0_5">Send Ratio</div>
+          <div className="text-2xs text-hammer-muted mb-0_5">Send Mode</div>
           <div className="flex flex-wrap gap-0_5">
             {RATIO_PRESETS.map((r) => (
               <PresetButton key={r} label={`${r}%`} active={ratio === r} onClick={() => setRatio(r)} />
@@ -432,51 +432,59 @@ export default function AutoSendView({ config }: { config: ResourceConfig }) {
               />
             )}
           </div>
-          <div className="flex items-center gap-0_5 mt-1">
-            <input
-              type="number"
-              value={customRatio}
-              onChange={(e) => setCustomRatio(e.target.value)}
-              onKeyDown={(e) => e.key === "Enter" && handleCustomRatioSubmit()}
-              placeholder="Custom %"
-              min={1}
-              max={100}
-              className="w-16 bg-hammer-bg border border-hammer-border rounded px-1 py-0_5 text-2xs text-hammer-text outline-none focus:border-hammer-green"
-            />
-            <button
-              onClick={handleCustomRatioSubmit}
-              className="px-1 py-0_5 rounded text-2xs bg-hammer-surface border border-hammer-border text-hammer-muted hover:text-hammer-green hover:border-hammer-green transition-colors cursor-pointer"
-            >
-              Set
-            </button>
-          </div>
+          {ratio !== PALANTIR_RATIO && (
+            <div className="flex items-center gap-0_5 mt-1">
+              <input
+                type="number"
+                value={customRatio}
+                onChange={(e) => setCustomRatio(e.target.value)}
+                onKeyDown={(e) => e.key === "Enter" && handleCustomRatioSubmit()}
+                placeholder="Custom %"
+                min={1}
+                max={100}
+                className="w-16 bg-hammer-bg border border-hammer-border rounded px-1 py-0_5 text-2xs text-hammer-text outline-none focus:border-hammer-green"
+              />
+              <button
+                onClick={handleCustomRatioSubmit}
+                className="px-1 py-0_5 rounded text-2xs bg-hammer-surface border border-hammer-border text-hammer-muted hover:text-hammer-green hover:border-hammer-green transition-colors cursor-pointer"
+              >
+                Set
+              </button>
+            </div>
+          )}
+          {ratio === PALANTIR_RATIO && (
+            <div className="text-2xs text-hammer-purple mt-1 border border-hammer-purple/20 bg-hammer-purple/5 rounded p-1_5">
+              Palantir sends everything above 42% (peak regen). Oscillates 57% {"\u2192"} 42% {"\u2192"} 57% every 10s. No threshold or ratio needed.
+            </div>
+          )}
         </div>
 
-        {/* Threshold */}
-        <div className="mb-2">
-          <div className="text-2xs text-hammer-muted mb-0_5">{config.thresholdLabel}</div>
-          <div className="flex flex-wrap gap-0_5">
-            {config.thresholdPresets.map((t) => (
-              <PresetButton
-                key={t}
-                label={config.fmtThresholdPreset(t)}
-                active={threshold === t}
-                onClick={() => {
-                  setThreshold(t);
-                  if (config.thresholdMode === "abs") setCustomThreshold(String(t));
-                }}
-              />
-            ))}
-          </div>
-          {config.thresholdMode === "abs" && (
+        {/* Threshold — hidden when Palantir is active (it manages its own floor) */}
+        {ratio !== PALANTIR_RATIO && (
+          <div className="mb-2">
+            <div className="text-2xs text-hammer-muted mb-0_5">{config.thresholdLabel}</div>
+            <div className="flex flex-wrap gap-0_5">
+              {config.thresholdPresets.map((t) => (
+                <PresetButton
+                  key={t}
+                  label={config.fmtThresholdPreset(t)}
+                  active={threshold === t}
+                  onClick={() => {
+                    setThreshold(t);
+                    setCustomThreshold(String(t));
+                  }}
+                />
+              ))}
+            </div>
             <div className="flex items-center gap-0_5 mt-1">
               <input
                 type="number"
                 value={customThreshold}
                 onChange={(e) => setCustomThreshold(e.target.value)}
                 onKeyDown={(e) => e.key === "Enter" && handleCustomThresholdSubmit()}
-                placeholder="Custom amount"
+                placeholder={config.thresholdMode === "pct" ? "Custom %" : "Custom amount"}
                 min={0}
+                max={config.thresholdMode === "pct" ? 99 : undefined}
                 className="w-20 bg-hammer-bg border border-hammer-border rounded px-1 py-0_5 text-2xs text-hammer-text outline-none focus:border-hammer-green"
               />
               <button
@@ -486,8 +494,8 @@ export default function AutoSendView({ config }: { config: ResourceConfig }) {
                 Set
               </button>
             </div>
-          )}
-        </div>
+          </div>
+        )}
 
         {/* Cooldown */}
         <div>

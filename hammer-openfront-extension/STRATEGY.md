@@ -142,6 +142,10 @@ Palantir is better for multi-target because it splits evenly. Fixed ratio favors
 
 Longer waits spend more time in the slow-growth zone near capacity.
 
+**Always send every 10s.** Even when backline and safe, the math doesn't change. Safe backline = more reason to dump troops to teammates who need them. Stockpiling wastes growth — every second above 42% is slower regen than it could be.
+
+The only exception: if you're about to be attacked and need to stockpile for defense. That's a tactical decision, not a math one.
+
 ## Attack Mechanics
 
 Source: `DefaultConfig.ts`

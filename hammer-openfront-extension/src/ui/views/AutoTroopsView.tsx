@@ -12,7 +12,7 @@ const TROOPS_CONFIG: ResourceConfig = {
   getMyAmount: (me) => dTroops(me?.troops),
   getMaxAmount: (me) => estimateMaxTroops(me?.tilesOwned ?? 0, me?.smallID ?? 0, cityLevelSumByOwner) / TROOP_DISPLAY_DIV,
   thresholdMode: "pct",
-  thresholdPresets: [0, 25, 50, 75],
+  thresholdPresets: [0, 25, 42, 50, 60, 75],
   thresholdLabel: "Threshold (min troops %)",
   fmtThresholdPreset: (val) => `${val}%`,
   selectRunning: (s) => s.asTroopsRunning,
