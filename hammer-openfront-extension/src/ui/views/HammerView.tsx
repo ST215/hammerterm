@@ -1,12 +1,12 @@
 /**
- * HammerView — Boot sequence + live tactical dashboard.
+ * HammerView — Boot sequence + immersive idle + live tactical dashboard.
  *
- * Phase 1: Terminal boot animation with typewriter lines
- * Phase 2: Dynamic idle effect while awaiting game signal
- * Phase 3: Live stats dashboard (stream-friendly, no sensitive controls)
+ * Phase 1: Terminal boot animation
+ * Phase 2: MARS command feed — themed war dispatches while awaiting signal
+ * Phase 3: Live stats dashboard (stream-friendly)
  */
 
-import { useState, useEffect, useRef, useMemo } from "react";
+import { useState, useEffect, useRef } from "react";
 import { useStore } from "@store/index";
 import { useMyPlayer } from "@ui/hooks/usePlayerHelpers";
 import { short, comma, dTroops } from "@shared/utils";
@@ -16,7 +16,7 @@ import { troopGrowthPerSec, OPTIMAL_REGEN_PCT } from "@shared/logic/troop-math";
 import { version as pkgVersion } from "../../../package.json";
 
 // ---------------------------------------------------------------------------
-// Boot sequence lines
+// Boot lines
 // ---------------------------------------------------------------------------
 
 const BOOT_LINES = [
@@ -30,52 +30,97 @@ const BOOT_LINES = [
   "INTELLIGENCE CORE READY.....OK",
 ];
 
-const LINE_DELAY_MS = 160;
-const BOOT_TOTAL_MS = BOOT_LINES.length * LINE_DELAY_MS + 600;
+const LINE_DELAY = 160;
+const BOOT_TOTAL = BOOT_LINES.length * LINE_DELAY + 600;
 
 // ---------------------------------------------------------------------------
-// Matrix rain characters (for idle effect)
+// War dispatches — themed messages for the idle feed
 // ---------------------------------------------------------------------------
 
-const MATRIX_CHARS = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789@#$%&*<>{}[]|/\\";
-const COLUMNS = 40;
-const ROWS = 12;
+const DISPATCHES = [
+  "[MARS] FORWARD OPERATING BASE ESTABLISHED",
+  "[MARS] RECON DIVISION MAPPING COASTAL ROUTES",
+  "[MARS] GOLD RESERVES SECURED AT NORTHERN VAULT",
+  "[MARS] NAVAL FLEET ASSEMBLED --- AWAITING ORDERS",
+  "[MARS] TROOP REINFORCEMENTS EN ROUTE TO FRONT LINE",
+  "[MARS] ALLIED SUPPLY CHAIN CONFIRMED OPERATIONAL",
+  "[MARS] THREAT ASSESSMENT: EASTERN BORDER CONTESTED",
+  "[MARS] DIPLOMATIC CHANNEL OPEN --- ALLIANCES FORMING",
+  "[MARS] TERRITORIAL EXPANSION: PHASE 2 AUTHORIZED",
+  "[MARS] ARTILLERY COORDINATES LOCKED --- STANDING BY",
+  "[MARS] RESOURCE PIPELINE ONLINE --- GOLD FLOWING",
+  "[MARS] COUNTER-INTELLIGENCE SWEEP COMPLETE",
+  "[MARS] WARSHIP PRODUCTION ACCELERATED",
+  "[MARS] FRONTLINE COMMANDERS REPORT: ALL CLEAR",
+  "[MARS] STRATEGIC RESERVE DEPLOYED TO SECTOR 7",
+  "[MARS] INTERCEPTED TRANSMISSION --- DECODING",
+  "[MARS] EMBARGO PROTOCOLS ENGAGED ON HOSTILE TRADE",
+  "[MARS] LONG-RANGE RECON: NEW TERRITORY IDENTIFIED",
+  "[MARS] FIELD MEDICS DISPATCHED TO ALLIED FORCES",
+  "[MARS] COMMAND OVERRIDE: MAXIMIZE TROOP OUTPUT",
+  "[MARS] NAVAL BLOCKADE ESTABLISHED --- CHOKEPOINT HELD",
+  "[MARS] INTELLIGENCE REPORT: ENEMY STRENGTH DECLINING",
+  "[MARS] ALLIED VICTORY CONFIRMED IN WESTERN THEATRE",
+  "[MARS] REINFORCEMENT WAVE INCOMING --- 30 SECONDS",
+  "[MARS] GOLD SHIPMENT INTERCEPTED --- REROUTING",
+  "[MARS] FORWARD SCOUTS REPORT: UNDEFENDED COASTLINE",
+  "[MARS] ORBITAL SCAN COMPLETE --- MAP UPDATED",
+  "[MARS] SIEGE ENGINES ASSEMBLED --- TARGET ACQUIRED",
+  "[MARS] COMMUNICATIONS ENCRYPTED --- CHANNEL SECURE",
+  "[MARS] DOMINION EXPANDING --- RESISTANCE CRUMBLING",
+];
 
-function randomChar(): string {
-  return MATRIX_CHARS[Math.floor(Math.random() * MATRIX_CHARS.length)];
+function randomDispatch(exclude: string): string {
+  let msg: string;
+  do { msg = DISPATCHES[Math.floor(Math.random() * DISPATCHES.length)]; } while (msg === exclude);
+  return msg;
 }
 
-/** Generates a grid of random characters that shifts over time. */
-function useMatrixGrid(active: boolean): string[][] {
-  const [grid, setGrid] = useState<string[][]>(() =>
-    Array.from({ length: ROWS }, () =>
-      Array.from({ length: COLUMNS }, () => randomChar()),
-    ),
-  );
-  const frameRef = useRef(0);
+// ---------------------------------------------------------------------------
+// Idle feed hook
+// ---------------------------------------------------------------------------
+
+interface FeedLine {
+  id: number;
+  ts: string;
+  text: string;
+}
+
+function useDispatchFeed(active: boolean): FeedLine[] {
+  const [lines, setLines] = useState<FeedLine[]>([]);
+  const counter = useRef(0);
+  const lastMsg = useRef("");
 
   useEffect(() => {
-    if (!active) return;
+    if (!active) { setLines([]); return; }
+
+    // Seed 3 initial lines
+    const seed: FeedLine[] = [];
+    for (let i = 0; i < 3; i++) {
+      const msg = randomDispatch(lastMsg.current);
+      lastMsg.current = msg;
+      seed.push({ id: counter.current++, ts: fmtTime(), text: msg });
+    }
+    setLines(seed);
+
+    // Add a new line every 2.5s
     const id = setInterval(() => {
-      frameRef.current++;
-      setGrid((prev) => {
-        const next = prev.map((row) => [...row]);
-        // Mutate ~15% of cells per frame for a flowing effect
-        for (let r = 0; r < ROWS; r++) {
-          for (let c = 0; c < COLUMNS; c++) {
-            if (Math.random() < 0.15) {
-              next[r][c] = randomChar();
-            }
-          }
-        }
-        return next;
-      });
-    }, 120); // ~8fps — smooth enough, no perf hit
+      const msg = randomDispatch(lastMsg.current);
+      lastMsg.current = msg;
+      setLines((prev) => [...prev.slice(-14), { id: counter.current++, ts: fmtTime(), text: msg }]);
+    }, 2500);
+
     return () => clearInterval(id);
   }, [active]);
 
-  return grid;
+  return lines;
 }
+
+function fmtTime(): string {
+  const d = new Date();
+  return `${pad2(d.getHours())}:${pad2(d.getMinutes())}:${pad2(d.getSeconds())}`;
+}
+function pad2(n: number): string { return n < 10 ? "0" + n : String(n); }
 
 // ---------------------------------------------------------------------------
 // Component
@@ -93,17 +138,17 @@ export default function HammerView() {
   const hasSignal = playerDataReady && !!me;
   const showIdle = bootDone && !hasSignal;
   const showDashboard = bootDone && hasSignal;
-  const matrixGrid = useMatrixGrid(showIdle);
+  const feedLines = useDispatchFeed(showIdle);
 
-  // Boot: reveal lines one at a time
+  // Boot animation
   useEffect(() => {
     setVisibleLines(0);
     setBootDone(false);
     const timers: ReturnType<typeof setTimeout>[] = [];
     for (let i = 0; i < BOOT_LINES.length; i++) {
-      timers.push(setTimeout(() => setVisibleLines(i + 1), (i + 1) * LINE_DELAY_MS));
+      timers.push(setTimeout(() => setVisibleLines(i + 1), (i + 1) * LINE_DELAY));
     }
-    timers.push(setTimeout(() => setBootDone(true), BOOT_TOTAL_MS));
+    timers.push(setTimeout(() => setBootDone(true), BOOT_TOTAL));
     return () => timers.forEach(clearTimeout);
   }, []);
 
@@ -127,8 +172,9 @@ export default function HammerView() {
 
   return (
     <div className="relative font-mono select-none" style={{ minHeight: 320 }}>
+
       {/* ── BOOT SEQUENCE ── */}
-      <div style={{ minHeight: bootDone && hasSignal ? 0 : undefined }}>
+      <div>
         {BOOT_LINES.slice(0, visibleLines).map((line, i) => (
           <div
             key={i}
@@ -159,40 +205,54 @@ export default function HammerView() {
         )}
       </div>
 
-      {/* ── IDLE: Matrix rain effect while waiting for game signal ── */}
+      {/* ── IDLE: War dispatch feed ── */}
       {showIdle && (
         <div className="mt-3 animate-fade-in">
+          {/* MARS header */}
+          <div className="flex items-center gap-2 mb-2">
+            <div className="h-px flex-1" style={{ background: "linear-gradient(90deg, rgba(127,242,163,0.3), transparent)" }} />
+            <span className="text-2xs text-hammer-green font-bold tracking-widest">MARS COMMAND FEED</span>
+            <div className="h-px flex-1" style={{ background: "linear-gradient(270deg, rgba(127,242,163,0.3), transparent)" }} />
+          </div>
+
+          {/* Dispatch lines */}
           <div
             className="overflow-hidden rounded"
             style={{
-              background: "rgba(0,0,0,0.3)",
-              padding: "8px 6px",
-              lineHeight: "14px",
-              fontSize: 11,
-              letterSpacing: "2px",
+              background: "rgba(0,0,0,0.25)",
+              border: "1px solid rgba(127, 242, 163, 0.08)",
+              padding: "6px 10px",
             }}
           >
-            {matrixGrid.map((row, r) => (
-              <div key={r} className="whitespace-nowrap" style={{ height: 14 }}>
-                {row.map((ch, c) => {
-                  // Create depth: bright leading edge, dim trail
-                  const brightness = Math.random();
-                  const color = brightness > 0.92
-                    ? "rgba(127, 242, 163, 0.9)"  // bright green
-                    : brightness > 0.7
-                      ? "rgba(127, 242, 163, 0.4)" // medium
-                      : brightness > 0.4
-                        ? "rgba(127, 242, 163, 0.15)" // dim
-                        : "rgba(127, 242, 163, 0.05)"; // ghost
-                  return (
-                    <span key={c} style={{ color }}>{ch}</span>
-                  );
-                })}
+            {feedLines.map((line) => (
+              <div
+                key={line.id}
+                className="text-2xs py-px animate-fade-in flex gap-2"
+              >
+                <span className="text-hammer-dim shrink-0">{line.ts}</span>
+                <span style={{
+                  color: line.text.includes("VICTORY") || line.text.includes("DOMINION")
+                    ? "var(--color-hammer-green)"
+                    : line.text.includes("THREAT") || line.text.includes("ENEMY") || line.text.includes("INTERCEPTED")
+                      ? "var(--color-hammer-warn)"
+                      : line.text.includes("GOLD") || line.text.includes("RESOURCE")
+                        ? "var(--color-hammer-gold)"
+                        : line.text.includes("NAVAL") || line.text.includes("WARSHIP") || line.text.includes("FLEET")
+                          ? "var(--color-hammer-blue)"
+                          : "var(--color-hammer-text)",
+                }}>
+                  {line.text}
+                </span>
               </div>
             ))}
           </div>
-          <div className="text-2xs text-hammer-dim mt-2 text-center animate-fade-in">
-            Scanning for active game session...
+
+          {/* Bottom status line */}
+          <div className="flex items-center justify-between text-2xs mt-2">
+            <span className="text-hammer-dim">Scanning for active game session...</span>
+            <span className="text-hammer-green" style={{ animation: "glow-text 1.5s ease-in-out infinite" }}>
+              STANDBY
+            </span>
           </div>
         </div>
       )}

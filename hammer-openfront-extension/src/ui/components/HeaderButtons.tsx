@@ -32,11 +32,12 @@ export default function HeaderButtons() {
 
   const handleModeToggle = () => {
     if (displayMode === "window") {
-      // In dashboard — switch back to overlay and close window
+      // Switch back to overlay — close dashboard window
       setDisplayMode("overlay");
       chrome.runtime.sendMessage({ type: "CLOSE_DASHBOARD" });
     } else {
-      // In overlay — open dashboard alongside (panel stays visible)
+      // Switch to window — open dashboard, overlay becomes stream widget
+      setDisplayMode("window");
       chrome.runtime.sendMessage({ type: "OPEN_DASHBOARD" });
     }
   };
