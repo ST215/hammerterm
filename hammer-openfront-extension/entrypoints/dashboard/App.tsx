@@ -123,7 +123,12 @@ export default function DashboardApp() {
         port.onDisconnect.addListener(() => {
           if (!disposed) {
             setConnected(false);
-            setError("Connection to game tab lost. Close and reopen.");
+            // Retry connection instead of showing error immediately
+            if (attempt < maxAttempts) {
+              setTimeout(tryConnect, 1000);
+            } else {
+              setError("Connection to game tab lost. Close and reopen.");
+            }
           }
         });
 
@@ -169,7 +174,22 @@ export default function DashboardApp() {
       }
     }
 
-    connect();
+    // Retry connection up to 5 times with 1s delay.
+    // The content script may not have its onConnect listener ready yet.
+    let attempt = 0;
+    const maxAttempts = 5;
+
+    function tryConnect() {
+      if (disposed) return;
+      attempt++;
+      connect().catch(() => {
+        if (!disposed && attempt < maxAttempts) {
+          setTimeout(tryConnect, 1000);
+        }
+      });
+    }
+
+    tryConnect();
 
     return () => {
       disposed = true;
