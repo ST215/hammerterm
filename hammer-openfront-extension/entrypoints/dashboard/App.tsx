@@ -41,9 +41,10 @@ const LOCAL_KEYS = new Set([
 export default function DashboardApp() {
   const [connected, setConnected] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [unlocked, setUnlocked] = useState(false);
+  const [retryKey, setRetryKey] = useState(0);
 
-  // Dashboard always runs in window mode — set this immediately so the
-  // HeaderButtons toggle shows the correct "close dashboard" icon from the start.
+  // Dashboard always runs in window mode
   useEffect(() => {
     useStore.setState({ displayMode: "window" });
   }, []);
@@ -197,30 +198,46 @@ export default function DashboardApp() {
       window.removeEventListener("message", interceptPostMessage);
       port?.disconnect();
     };
-  }, []);
+  }, [retryKey]);
 
   if (error) {
     return (
       <div
         style={{
           display: "flex",
+          flexDirection: "column",
           alignItems: "center",
           justifyContent: "center",
           height: "100vh",
           backgroundColor: "#0b1220",
-          color: "#ff6b6b",
-          fontFamily: "JetBrains Mono, monospace",
-          fontSize: 16,
+          color: "#7694b0",
+          fontFamily: "'JetBrains Mono', ui-monospace, monospace",
+          fontSize: 14,
           padding: 24,
           textAlign: "center",
+          gap: 16,
         }}
       >
-        <div>
-          <div style={{ fontSize: 21, marginBottom: 12, color: "#7ff2a3" }}>
-            {">"}_ Hammer Terminal
-          </div>
-          <div>{error}</div>
+        <div style={{ fontSize: 21, color: "#7ff2a3" }}>
+          {">"}_ Hammer Terminal
         </div>
+        <div style={{ color: "#ff6b6b" }}>{error}</div>
+        <button
+          onClick={() => { setError(null); setConnected(false); setRetryKey((k) => k + 1); }}
+          style={{
+            padding: "8px 20px",
+            fontSize: 13,
+            fontFamily: "'JetBrains Mono', monospace",
+            fontWeight: 600,
+            color: "#7ff2a3",
+            background: "rgba(127, 242, 163, 0.08)",
+            border: "1px solid rgba(127, 242, 163, 0.3)",
+            borderRadius: 6,
+            cursor: "pointer",
+          }}
+        >
+          RETRY CONNECTION
+        </button>
       </div>
     );
   }
@@ -234,12 +251,53 @@ export default function DashboardApp() {
           justifyContent: "center",
           height: "100vh",
           backgroundColor: "#0b1220",
-          color: "#6b7a99",
-          fontFamily: "JetBrains Mono, monospace",
-          fontSize: 16,
+          color: "#7694b0",
+          fontFamily: "'JetBrains Mono', ui-monospace, monospace",
+          fontSize: 14,
         }}
       >
-        Connecting to game...
+        Connecting to game tab...
+      </div>
+    );
+  }
+
+  // Dashboard starts locked — tabs hidden until user reveals
+  if (!unlocked) {
+    return (
+      <div
+        style={{
+          display: "flex",
+          flexDirection: "column",
+          alignItems: "center",
+          justifyContent: "center",
+          height: "100vh",
+          backgroundColor: "#0b1220",
+          fontFamily: "'JetBrains Mono', ui-monospace, monospace",
+          gap: 20,
+        }}
+      >
+        <div style={{ fontSize: 21, fontWeight: 700, color: "#7ff2a3", animation: "glow-text 2s ease-in-out infinite" }}>
+          HAMMER COMMAND CENTER
+        </div>
+        <div style={{ fontSize: 12, color: "#7694b0" }}>
+          Connected to game tab. Move this window off-screen before revealing controls.
+        </div>
+        <button
+          onClick={() => setUnlocked(true)}
+          style={{
+            padding: "12px 32px",
+            fontSize: 14,
+            fontFamily: "'JetBrains Mono', monospace",
+            fontWeight: 700,
+            color: "#7ff2a3",
+            background: "rgba(127, 242, 163, 0.08)",
+            border: "1px solid rgba(127, 242, 163, 0.3)",
+            borderRadius: 6,
+            cursor: "pointer",
+          }}
+        >
+          REVEAL CONTROLS
+        </button>
       </div>
     );
   }

@@ -20,7 +20,11 @@ export default function StreamWidget() {
   const playerDataReady = useStore((s) => s.playerDataReady);
   const myTeam = useStore((s) => s.myTeam);
   const [hidden, setHidden] = useState(false);
-  const [pos, setPos] = useState({ left: 16, top: 200 });
+  // Center-left: left edge, vertically centered
+  const [pos, setPos] = useState(() => ({
+    left: 16,
+    top: Math.max(60, Math.round(window.innerHeight / 2 - 180)),
+  }));
   const dragging = useRef(false);
   const dragOffset = useRef({ x: 0, y: 0 });
 
