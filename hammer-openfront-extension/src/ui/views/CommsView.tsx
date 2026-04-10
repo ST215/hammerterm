@@ -3,6 +3,7 @@ import { useStore } from "@store/index";
 import { useMyPlayerStructural, useTeammates, useAllies, useAllAlivePlayers } from "@ui/hooks/usePlayerHelpers";
 import { record } from "../../recorder";
 import { useContentWidth } from "@ui/hooks/useContentWidth";
+import { groupByClanTag } from "@shared/logic/clan-tags";
 import { sendEmoji, sendQuickChat } from "@content/game/send";
 import { EMOJI_TABLE } from "@shared/emoji-table";
 import { Section, PresetButton, PretextText } from "@ui/components/ds";
@@ -348,6 +349,42 @@ export default function CommsView() {
             </div>
           </div>
         )}
+
+        {/* Clan tag groups (2+ members) — between allies and others */}
+        {(() => {
+          const allNonTeam = [...filteredAllies, ...filteredOthers];
+          const clans = groupByClanTag(allNonTeam);
+          if (clans.length === 0) return null;
+          return (
+            <div className="mb-1">
+              <div className="text-2xs text-hammer-purple font-bold mb-0.5">Clans</div>
+              <div className="flex flex-wrap gap-0.5">
+                {clans.map((cg) => {
+                  const allSelected = cg.players.every((p) => commsTargets.has(p.id));
+                  return (
+                    <button
+                      key={cg.tag}
+                      onClick={() => {
+                        if (allSelected) {
+                          for (const p of cg.players) removeTarget(p.id);
+                        } else {
+                          for (const p of cg.players) addTarget(p.id);
+                        }
+                      }}
+                      className={`px-1.5 py-0.5 text-2xs font-mono border rounded cursor-pointer transition-colors ${
+                        allSelected
+                          ? "bg-hammer-purple/20 border-hammer-purple text-hammer-purple"
+                          : "bg-hammer-bg border-hammer-border text-hammer-muted hover:border-hammer-purple hover:text-hammer-purple"
+                      }`}
+                    >
+                      [{cg.tag}] ({cg.players.length})
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          );
+        })()}
 
         {(otherHumans.length > 0 || otherBots.length > 0) && (
           <div>

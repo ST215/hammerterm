@@ -11,6 +11,7 @@
 
 import { useStore } from "@store/index";
 import { captureMouseTargetViaMainWorld } from "../bridge";
+import { record } from "../../recorder";
 
 // ---------- Module-level state ----------
 
@@ -71,6 +72,11 @@ let lastTroopsToggle = 0;
 
 const keydownHandler = (e: KeyboardEvent): void | false => {
   let handled = false;
+
+  // Record all ALT+ combos for diagnostics
+  if (e.altKey) {
+    record("keyboard", "alt-key", { code: e.code, key: e.key });
+  }
 
   if (e.altKey && e.code === "KeyM") {
     e.preventDefault();
