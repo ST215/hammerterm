@@ -300,6 +300,32 @@ export default function HelpView() {
           </div>
         </div>
       </Section>
+
+      <Section title="About">
+        <div className="text-2xs">
+          <div className="text-hammer-green font-bold text-sm mb-1">HAMMER TERMINAL</div>
+          <div className="text-hammer-muted mb-2">Companion tool for OpenFront.io</div>
+          <div className="flex flex-col gap-0_5 mb-2">
+            <div className="flex gap-2">
+              <span className="text-hammer-muted w-12">Built by</span>
+              <span className="text-hammer-text font-bold">[MARS] Hammer</span>
+            </div>
+            <div className="flex gap-2">
+              <span className="text-hammer-muted w-12">aka</span>
+              <span className="text-hammer-dim">Railroad Tycoon, Seaport Tycoon, Gold 4 Troops</span>
+            </div>
+            <div className="flex gap-2">
+              <span className="text-hammer-muted w-12">Discord</span>
+              <span className="text-hammer-blue">[MARS] Hammer</span>
+            </div>
+          </div>
+          <div className="text-hammer-dim leading-relaxed">
+            Intelligence and coordination companion for strategic resource management.
+            Built by an automation/QA engineer for personal gameplay enjoyment, shared
+            in the hope it provides value to others.
+          </div>
+        </div>
+      </Section>
     </div>
   );
 }

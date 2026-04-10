@@ -36,7 +36,7 @@ export interface UISlice {
 }
 
 export const createUISlice: StateCreator<UISlice, [], [], UISlice> = (set) => ({
-  view: "summary",
+  view: "hammer",
   paused: false,
   minimized: false,
   sizeIdx: 1,

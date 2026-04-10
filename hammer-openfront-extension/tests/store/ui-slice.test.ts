@@ -10,9 +10,9 @@ describe("UISlice", () => {
   // ───────────────────────────────────────────────────────
   // Default state
   // ───────────────────────────────────────────────────────
-  test('default view is "summary"', () => {
+  test('default view is "hammer"', () => {
     const store = createTestStore();
-    expect(store.getState().view).toBe("summary");
+    expect(store.getState().view).toBe("hammer");
   });
 
   test("default paused is false", () => {

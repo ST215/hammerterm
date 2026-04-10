@@ -2,6 +2,7 @@ import { Component, useRef, type ReactNode } from "react";
 import { useStore } from "@store/index";
 import { record } from "../../recorder";
 import GrowthHUD from "./GrowthHUD";
+import StreamWidget from "./StreamWidget";
 import Panel from "./Panel";
 import HeaderButtons from "./HeaderButtons";
 import TabBar from "./TabBar";
@@ -51,12 +52,14 @@ import HelpView from "../views/HelpView";
 import RecorderView from "../views/RecorderView";
 import TradingView from "../views/TradingView";
 import BroadcastView from "../views/BroadcastView";
+import HammerView from "../views/HammerView";
 
 interface AppProps {
   mode: "overlay" | "window";
 }
 
 const VIEW_MAP: Record<string, React.FC> = {
+  hammer: HammerView,
   summary: SummaryView,
   alliances: AlliancesView,
   trading: TradingView,
@@ -81,11 +84,11 @@ export default function App({ mode }: AppProps) {
 
   if (!uiVisible) return null;
 
-  // In window mode, the overlay hides the panel but keeps notifications
-  // so they still appear over the game page.
+  // In window mode, the overlay shows a minimal stream widget + notifications
   if (mode === "overlay" && displayMode === "window") {
     return (
       <>
+        <StreamWidget />
         <DonationToast />
         <ReciprocatePopup />
         <StatusToast />
@@ -94,11 +97,11 @@ export default function App({ mode }: AppProps) {
     );
   }
 
-  const ActiveView = VIEW_MAP[view] ?? SummaryView;
+  const ActiveView = VIEW_MAP[view] ?? HammerView;
 
   const content = (
     <>
-      <TabBar />
+      <TabBar mode={mode} />
       <div className="p-2">
         <ViewErrorBoundary>
           <ActiveView />
@@ -121,11 +124,10 @@ export default function App({ mode }: AppProps) {
     );
   }
 
-  // Window mode — simple flex column, full viewport
+  // Window mode — full viewport, all tabs visible
   return (
     <>
       <div className="flex flex-col w-full h-screen bg-hammer-bg text-hammer-text font-mono text-base">
-        {/* Header bar */}
         <div className="flex items-center justify-between bg-hammer-header px-2 py-1 border-b border-hammer-border">
           <span className="text-hammer-green text-sm font-bold">HAMMER</span>
           <div className="flex items-center gap-1">

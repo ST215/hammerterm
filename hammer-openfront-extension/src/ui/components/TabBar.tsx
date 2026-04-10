@@ -1,6 +1,7 @@
 import { useStore } from "@store/index";
 
-const TABS: { id: string; label: string }[] = [
+const ALL_TABS: { id: string; label: string }[] = [
+  { id: "hammer", label: "Hammer" },
   { id: "summary", label: "Summary" },
   { id: "alliances", label: "Alliances" },
   { id: "trading", label: "Trading" },
@@ -14,19 +15,26 @@ const TABS: { id: string; label: string }[] = [
   { id: "help", label: "Help" },
 ];
 
-export default function TabBar() {
+// In overlay mode, only show the Hammer tab by default.
+// All other tabs are accessible in the external dashboard.
+const OVERLAY_TABS = ALL_TABS.filter((t) => t.id === "hammer");
+
+export default function TabBar({ mode }: { mode?: "overlay" | "window" }) {
   const view = useStore((s) => s.view);
   const setView = useStore((s) => s.setView);
   const minimized = useStore((s) => s.minimized);
 
   if (minimized) return null;
 
+  // External dashboard shows all tabs. Overlay shows only Hammer.
+  const tabs = mode === "window" ? ALL_TABS : OVERLAY_TABS;
+
   return (
     <div
       className="flex flex-wrap gap-0 border-b border-hammer-border bg-hammer-bg"
       style={{ flexShrink: 0 }}
     >
-      {TABS.map((tab) => {
+      {tabs.map((tab) => {
         const isActive = view === tab.id;
         return (
           <button

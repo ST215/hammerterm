@@ -53,7 +53,7 @@ export default function GrowthHUD() {
       className="fixed font-mono pointer-events-none"
       style={{
         bottom: 80,
-        right: 16,
+        left: 16,
         background: "linear-gradient(135deg, rgba(11, 18, 32, 0.95), rgba(22, 34, 54, 0.90))",
         backdropFilter: "blur(8px)",
         borderRadius: 8,
