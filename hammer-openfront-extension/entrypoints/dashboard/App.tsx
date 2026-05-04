@@ -8,7 +8,7 @@ import HammerApp from "@ui/components/App";
 // the 500ms sync clobbering their interactions.
 const LOCAL_KEYS = new Set([
   // UI navigation
-  "view", "paused", "minimized", "sizeIdx", "displayMode", "uiVisible",
+  "view", "paused", "minimized", "sizeIdx", "displayMode", "uiVisible", "externalOpen",
   // Comms selections (user picks targets in dashboard)
   "commsTargets", "commsGroupMode", "commsOthersExpanded",
   "commsPendingQC", "commsRecentSent", "allianceCommsExpanded",
@@ -44,9 +44,10 @@ export default function DashboardApp() {
   const [unlocked, setUnlocked] = useState(false);
   const [retryKey, setRetryKey] = useState(0);
 
-  // Dashboard always runs in window mode
+  // Mark this context as the external popup. The overlay's displayMode
+  // (panel-vs-widget) is independent and stays as the user set it.
   useEffect(() => {
-    useStore.setState({ displayMode: "window" });
+    useStore.setState({ externalOpen: true });
   }, []);
 
   useEffect(() => {
@@ -268,10 +269,13 @@ export default function DashboardApp() {
     );
   }
 
-  // Dashboard starts locked — tabs hidden until user reveals
+  // Click-to-enter gate. Looks like a generic loading screen so screen
+  // viewers don't immediately notice the tool. User clicks anywhere
+  // (including the small Continue button) to enter.
   if (!unlocked) {
     return (
       <div
+        onClick={() => setUnlocked(true)}
         style={{
           display: "flex",
           flexDirection: "column",
@@ -280,30 +284,25 @@ export default function DashboardApp() {
           height: "100vh",
           backgroundColor: "#0b1220",
           fontFamily: "'JetBrains Mono', ui-monospace, monospace",
-          gap: 20,
+          gap: 16,
+          cursor: "pointer",
         }}
       >
-        <div style={{ fontSize: 21, fontWeight: 700, color: "#7ff2a3", animation: "glow-text 2s ease-in-out infinite" }}>
-          HAMMER COMMAND CENTER
-        </div>
-        <div style={{ fontSize: 12, color: "#7694b0" }}>
-          Connected to game tab. Move this window off-screen before revealing controls.
-        </div>
+        <div style={{ fontSize: 13, color: "#5a7090" }}>_</div>
         <button
-          onClick={() => setUnlocked(true)}
+          onClick={(e) => { e.stopPropagation(); setUnlocked(true); }}
           style={{
-            padding: "12px 32px",
-            fontSize: 14,
+            padding: "6px 18px",
+            fontSize: 12,
             fontFamily: "'JetBrains Mono', monospace",
-            fontWeight: 700,
-            color: "#7ff2a3",
-            background: "rgba(127, 242, 163, 0.08)",
-            border: "1px solid rgba(127, 242, 163, 0.3)",
-            borderRadius: 6,
+            color: "#7694b0",
+            background: "transparent",
+            border: "1px solid #1e3558",
+            borderRadius: 4,
             cursor: "pointer",
           }}
         >
-          REVEAL CONTROLS
+          Continue
         </button>
       </div>
     );

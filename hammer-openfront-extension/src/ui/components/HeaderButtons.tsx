@@ -16,6 +16,8 @@ export default function HeaderButtons() {
   const toggleRecorder = useStore((s) => s.toggleRecorder);
   const displayMode = useStore((s) => s.displayMode);
   const setDisplayMode = useStore((s) => s.setDisplayMode);
+  const externalOpen = useStore((s) => s.externalOpen);
+  const setExternalOpen = useStore((s) => s.setExternalOpen);
 
   const handleSize = () => {
     setSizeIdx((sizeIdx + 1) % SIZES.length);
@@ -30,28 +32,42 @@ export default function HeaderButtons() {
     }
   };
 
-  const handleModeToggle = () => {
-    if (displayMode === "window") {
-      // Switch back to overlay — close dashboard window
-      setDisplayMode("overlay");
+  // Independent: panel visibility (overlay = panel, window = StreamWidget)
+  const handlePanelToggle = () => {
+    setDisplayMode(displayMode === "window" ? "overlay" : "window");
+  };
+
+  // Independent: external dashboard popup window
+  const handleExternalToggle = () => {
+    if (externalOpen) {
+      setExternalOpen(false);
       chrome.runtime.sendMessage({ type: "CLOSE_DASHBOARD" });
     } else {
-      // Switch to window — open dashboard, overlay becomes stream widget
-      setDisplayMode("window");
+      setExternalOpen(true);
       chrome.runtime.sendMessage({ type: "OPEN_DASHBOARD" });
     }
   };
 
   return (
     <>
-      {/* Display mode toggle */}
+      {/* Panel visibility toggle (panel ↔ stream widget) */}
       <button
         className={btnClass}
-        onClick={handleModeToggle}
-        title={displayMode === "window" ? "Close dashboard / switch to overlay" : "Open dashboard window"}
+        onClick={handlePanelToggle}
+        title={displayMode === "window" ? "Show panel" : "Hide panel (show widget only)"}
         style={{ minWidth: 28, textAlign: "center" }}
       >
-        {displayMode === "window" ? "\u2612" : "\u29C9"}
+        {displayMode === "window" ? "▢" : "▤"}
+      </button>
+
+      {/* External dashboard popup toggle */}
+      <button
+        className={btnClass}
+        onClick={handleExternalToggle}
+        title={externalOpen ? "Close external window" : "Open in external window (for second monitor)"}
+        style={{ minWidth: 28, textAlign: "center" }}
+      >
+        {externalOpen ? "☒" : "⧉"}
       </button>
 
       {/* Size toggle */}
@@ -71,7 +87,7 @@ export default function HeaderButtons() {
         title={minimized ? "Expand" : "Minimize"}
         style={{ minWidth: 20, textAlign: "center" }}
       >
-        {minimized ? "\u25B2" : "\u25BC"}
+        {minimized ? "▲" : "▼"}
       </button>
 
       {/* Record toggle */}
@@ -80,7 +96,7 @@ export default function HeaderButtons() {
         onClick={toggleRecorder}
         title={recorderOn ? "Stop recording" : "Start recording"}
       >
-        {recorderOn ? "\u25CF REC" : "REC"}
+        {recorderOn ? "● REC" : "REC"}
       </button>
 
       {/* Pause / Resume */}

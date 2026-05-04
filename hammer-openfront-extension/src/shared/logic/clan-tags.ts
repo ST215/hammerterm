@@ -19,7 +19,7 @@ export interface ClanGroup {
 }
 
 /**
- * Group players by clan tag. Only returns groups with 2+ members.
+ * Group players by clan tag. Returns ALL clan tags (any size).
  * Sorted by group size (largest first), then alphabetically.
  */
 export function groupByClanTag(players: PlayerData[]): ClanGroup[] {
@@ -35,9 +35,41 @@ export function groupByClanTag(players: PlayerData[]): ClanGroup[] {
   }
 
   return [...map.entries()]
-    .filter(([, list]) => list.length >= 2)
     .map(([tag, players]) => ({ tag, players }))
     .sort((a, b) => b.players.length - a.players.length || a.tag.localeCompare(b.tag));
+}
+
+export interface SplitGroups {
+  /** Clans with 2+ members — shown as individual chips */
+  multi: ClanGroup[];
+  /** Players whose clan tag has only 1 member in this list */
+  solo: PlayerData[];
+  /** Players with no [TAG] prefix at all */
+  untagged: PlayerData[];
+}
+
+/**
+ * Split players into three buckets for tiered selection UI:
+ *   - multi:   clans with 2+ members (each gets its own chip)
+ *   - solo:    one-member-clan players (lumped into a "Solo Clans" chip)
+ *   - untagged: players with no [TAG] (lumped into a "No Tag" chip)
+ */
+export function splitClanGroups(players: PlayerData[]): SplitGroups {
+  const all = groupByClanTag(players);
+  const multi: ClanGroup[] = [];
+  const solo: PlayerData[] = [];
+  const untagged: PlayerData[] = [];
+
+  for (const p of players) {
+    const name = p.displayName || p.name || "";
+    if (!parseClanTag(name)) untagged.push(p);
+  }
+  for (const g of all) {
+    if (g.players.length >= 2) multi.push(g);
+    else solo.push(...g.players);
+  }
+
+  return { multi, solo, untagged };
 }
 
 export interface TeamGroup {

@@ -33,6 +33,8 @@ export interface UISlice {
   setDonationPosition: (v: NotifPosition) => void;
   panelWidth: number;
   setPanelWidth: (w: number) => void;
+  externalOpen: boolean;
+  setExternalOpen: (v: boolean) => void;
 }
 
 export const createUISlice: StateCreator<UISlice, [], [], UISlice> = (set) => ({
@@ -67,4 +69,6 @@ export const createUISlice: StateCreator<UISlice, [], [], UISlice> = (set) => ({
   setDonationPosition: (v) => set({ donationPosition: v }),
   panelWidth: 850,
   setPanelWidth: (w) => set((s) => s.panelWidth === w ? s : { panelWidth: w }),
+  externalOpen: false,
+  setExternalOpen: (v) => set({ externalOpen: v }),
 });

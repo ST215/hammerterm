@@ -4,7 +4,7 @@ import { useMyPlayerStructural, useTeammates, useAllies, useAllAlivePlayers } fr
 import { record } from "../../recorder";
 import { short, dTroops, num } from "@shared/utils";
 import { readMyPlayer } from "@shared/logic/player-helpers";
-import { groupByClanTag, groupByTeam } from "@shared/logic/clan-tags";
+import { splitClanGroups, groupByTeam } from "@shared/logic/clan-tags";
 import { sendEmoji, sendQuickChat, asSendTroops, asSendGold, sendAllianceRequest, sendBetray } from "@content/game/send";
 import { EMOJI_COMPACT } from "@shared/emoji-table";
 import { StatCard } from "@ui/components/ds";
@@ -204,8 +204,8 @@ export default function AlliancesView() {
     return base.filter((p) => (p.displayName || p.name || "").toLowerCase().includes(q));
   }, [allianceCandidates, showBots, search]);
 
-  // Clan tag groups (2+ members only)
-  const clanGroups = useMemo(() => groupByClanTag(visibleCandidates), [visibleCandidates]);
+  // Three-tier clan groups
+  const clanSplit = useMemo(() => splitClanGroups(visibleCandidates), [visibleCandidates]);
   // Team groups
   const teamGroups = useMemo(() => groupByTeam(visibleCandidates), [visibleCandidates]);
 
@@ -343,15 +343,32 @@ export default function AlliancesView() {
           </div>
         )}
 
-        {/* Quick select: by clan tag (2+ members) */}
-        {clanGroups.length > 0 && (
+        {/* Quick select: multi-member clan tags */}
+        {clanSplit.multi.length > 0 && (
           <div className="flex flex-wrap gap-0.5 mb-1">
             <span className="text-2xs text-hammer-dim mr-1">Clans:</span>
-            {clanGroups.map((cg) => (
+            {clanSplit.multi.map((cg) => (
               <button key={cg.tag} onClick={() => selectClan(cg.players)}
                 className="px-1.5 py-0.5 rounded text-2xs border border-hammer-blue/30 bg-hammer-surface text-hammer-blue hover:bg-hammer-blue/10 transition-colors cursor-pointer"
               >[{cg.tag}] ({cg.players.length})</button>
             ))}
+          </div>
+        )}
+
+        {/* Quick select: solo-clan + untagged buckets */}
+        {(clanSplit.solo.length > 0 || clanSplit.untagged.length > 0) && (
+          <div className="flex flex-wrap gap-0.5 mb-1">
+            <span className="text-2xs text-hammer-dim mr-1">Other:</span>
+            {clanSplit.solo.length > 0 && (
+              <button onClick={() => selectClan(clanSplit.solo)}
+                className="px-1.5 py-0.5 rounded text-2xs border border-hammer-purple/30 bg-hammer-surface text-hammer-purple hover:bg-hammer-purple/10 transition-colors cursor-pointer"
+              >Solo Clans ({clanSplit.solo.length})</button>
+            )}
+            {clanSplit.untagged.length > 0 && (
+              <button onClick={() => selectClan(clanSplit.untagged)}
+                className="px-1.5 py-0.5 rounded text-2xs border border-hammer-border bg-hammer-surface text-hammer-muted hover:text-hammer-text hover:border-hammer-muted transition-colors cursor-pointer"
+              >No Tag ({clanSplit.untagged.length})</button>
+            )}
           </div>
         )}
 

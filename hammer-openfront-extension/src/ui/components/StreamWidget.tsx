@@ -20,6 +20,7 @@ export default function StreamWidget() {
   const playerDataReady = useStore((s) => s.playerDataReady);
   const myTeam = useStore((s) => s.myTeam);
   const setDisplayMode = useStore((s) => s.setDisplayMode);
+  const setExternalOpen = useStore((s) => s.setExternalOpen);
   const [minimized, setMinimized] = useState(false);
   const [pos, setPos] = useState(() => ({
     left: 16,
@@ -56,10 +57,12 @@ export default function StreamWidget() {
     return getTeamStats(pMap, cityLevelSumByOwner);
   }, [me]);
 
+  // Reverse the dual-monitor flow: show panel AND close external popup
   const handleBackToOverlay = useCallback(() => {
     setDisplayMode("overlay");
+    setExternalOpen(false);
     chrome.runtime.sendMessage({ type: "CLOSE_DASHBOARD" });
-  }, [setDisplayMode]);
+  }, [setDisplayMode, setExternalOpen]);
 
   if (!playerDataReady || !me) return null;
 

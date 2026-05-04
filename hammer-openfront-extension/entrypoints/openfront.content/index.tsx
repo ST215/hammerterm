@@ -57,7 +57,7 @@ export default defineContentScript({
         ui.remove();
         delete (window as any).__HAMMER__;
       },
-      version: "15.12.0-ext",
+      version: "15.13.0-ext",
     };
 
     // Listen for messages from popup/background

@@ -3,7 +3,7 @@ import { useStore } from "@store/index";
 import { useMyPlayerStructural, useTeammates, useAllies, useAllAlivePlayers } from "@ui/hooks/usePlayerHelpers";
 import { record } from "../../recorder";
 import { useContentWidth } from "@ui/hooks/useContentWidth";
-import { groupByClanTag } from "@shared/logic/clan-tags";
+import { splitClanGroups, groupByTeam } from "@shared/logic/clan-tags";
 import { sendEmoji, sendQuickChat } from "@content/game/send";
 import { EMOJI_TABLE } from "@shared/emoji-table";
 import { Section, PresetButton, PretextText } from "@ui/components/ds";
@@ -350,37 +350,85 @@ export default function CommsView() {
           </div>
         )}
 
-        {/* Clan tag groups (2+ members) — between allies and others */}
+        {/* Team-color chips: chat a specific team. Includes own team. */}
         {(() => {
-          const allNonTeam = [...filteredAllies, ...filteredOthers];
-          const clans = groupByClanTag(allNonTeam);
-          if (clans.length === 0) return null;
+          const teams = groupByTeam([...filteredTeammates, ...filteredAllies, ...filteredOthers]);
+          if (teams.length < 2) return null;
           return (
             <div className="mb-1">
-              <div className="text-2xs text-hammer-purple font-bold mb-0.5">Clans</div>
+              <div className="text-2xs text-hammer-cyan font-bold mb-0.5">Teams</div>
               <div className="flex flex-wrap gap-0.5">
-                {clans.map((cg) => {
-                  const allSelected = cg.players.every((p) => commsTargets.has(p.id));
+                {teams.map((tg) => {
+                  const allSelected = tg.players.every((p) => commsTargets.has(p.id));
                   return (
                     <button
-                      key={cg.tag}
+                      key={String(tg.team)}
                       onClick={() => {
                         if (allSelected) {
-                          for (const p of cg.players) removeTarget(p.id);
+                          for (const p of tg.players) removeTarget(p.id);
                         } else {
-                          for (const p of cg.players) addTarget(p.id);
+                          for (const p of tg.players) addTarget(p.id);
                         }
                       }}
                       className={`px-1.5 py-0.5 text-2xs font-mono border rounded cursor-pointer transition-colors ${
                         allSelected
-                          ? "bg-hammer-purple/20 border-hammer-purple text-hammer-purple"
-                          : "bg-hammer-bg border-hammer-border text-hammer-muted hover:border-hammer-purple hover:text-hammer-purple"
+                          ? "bg-hammer-cyan/20 border-hammer-cyan text-hammer-cyan"
+                          : "bg-hammer-bg border-hammer-border text-hammer-muted hover:border-hammer-cyan hover:text-hammer-cyan"
                       }`}
                     >
+                      {String(tg.team)} ({tg.players.length})
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          );
+        })()}
+
+        {/* Three-tier clan groups: multi-member clans, solo clans, no tag */}
+        {(() => {
+          const allNonTeam = [...filteredAllies, ...filteredOthers];
+          const split = splitClanGroups(allNonTeam);
+          if (split.multi.length === 0 && split.solo.length === 0 && split.untagged.length === 0) return null;
+          const buttonClass = (selected: boolean) =>
+            `px-1.5 py-0.5 text-2xs font-mono border rounded cursor-pointer transition-colors ${
+              selected
+                ? "bg-hammer-purple/20 border-hammer-purple text-hammer-purple"
+                : "bg-hammer-bg border-hammer-border text-hammer-muted hover:border-hammer-purple hover:text-hammer-purple"
+            }`;
+          const toggle = (players: typeof split.solo) => {
+            const allSelected = players.every((p) => commsTargets.has(p.id));
+            if (allSelected) for (const p of players) removeTarget(p.id);
+            else for (const p of players) addTarget(p.id);
+          };
+          return (
+            <div className="mb-1">
+              <div className="text-2xs text-hammer-purple font-bold mb-0.5">Clans</div>
+              <div className="flex flex-wrap gap-0.5">
+                {split.multi.map((cg) => {
+                  const allSelected = cg.players.every((p) => commsTargets.has(p.id));
+                  return (
+                    <button key={cg.tag} onClick={() => toggle(cg.players)} className={buttonClass(allSelected)}>
                       [{cg.tag}] ({cg.players.length})
                     </button>
                   );
                 })}
+                {split.solo.length > 0 && (() => {
+                  const allSelected = split.solo.every((p) => commsTargets.has(p.id));
+                  return (
+                    <button onClick={() => toggle(split.solo)} className={buttonClass(allSelected)}>
+                      Solo Clans ({split.solo.length})
+                    </button>
+                  );
+                })()}
+                {split.untagged.length > 0 && (() => {
+                  const allSelected = split.untagged.every((p) => commsTargets.has(p.id));
+                  return (
+                    <button onClick={() => toggle(split.untagged)} className={buttonClass(allSelected)}>
+                      No Tag ({split.untagged.length})
+                    </button>
+                  );
+                })()}
               </div>
             </div>
           );

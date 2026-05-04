@@ -75,12 +75,12 @@ function startDashboardSync(port: chrome.runtime.Port): void {
       clearInterval(syncTimer);
       syncTimer = null;
     }
-    // When dashboard disconnects, always revert to overlay mode.
-    // This fixes the race condition where the dashboard's sync-local
-    // message (setting displayMode="overlay") might not arrive before
-    // the port closes.
-    if (useStore.getState().displayMode === "window") {
-      useStore.setState({ displayMode: "overlay" });
+    // When the external popup closes (manually or by Chrome), reflect that
+    // in the store. Leave displayMode (panel-vs-widget) as the user set it —
+    // they may want widget mode without the popup, or panel mode while the
+    // popup was open.
+    if (useStore.getState().externalOpen) {
+      useStore.setState({ externalOpen: false });
     }
     record("bridge", "dashboard.disconnect");
     console.log("[Hammer:Bridge] Dashboard disconnected");

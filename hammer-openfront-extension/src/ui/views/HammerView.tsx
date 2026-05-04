@@ -134,6 +134,8 @@ export default function HammerView() {
   const playerDataReady = useStore((s) => s.playerDataReady);
   const displayMode = useStore((s) => s.displayMode);
   const setDisplayMode = useStore((s) => s.setDisplayMode);
+  const externalOpen = useStore((s) => s.externalOpen);
+  const setExternalOpen = useStore((s) => s.setExternalOpen);
 
   const hasSignal = playerDataReady && !!me;
   const showIdle = bootDone && !hasSignal;
@@ -165,8 +167,10 @@ export default function HammerView() {
   const displayGrowth = dTroops(Math.round(growthSec));
   const atPeak = pctOfMax >= (OPTIMAL_REGEN_PCT * 100 - 5) && pctOfMax <= (OPTIMAL_REGEN_PCT * 100 + 5);
 
+  // Dual-monitor flow: hide panel AND open external popup
   const handleGoExternal = () => {
     setDisplayMode("window");
+    setExternalOpen(true);
     chrome.runtime.sendMessage({ type: "OPEN_DASHBOARD" });
   };
 
@@ -312,13 +316,14 @@ export default function HammerView() {
 
           <div className="border-t border-hammer-border-subtle mb-3" />
 
-          {/* Go External */}
-          {displayMode === "overlay" && (
+          {/* Dual-monitor: hide panel + open external popup in one click */}
+          {displayMode === "overlay" && !externalOpen && (
             <button
               onClick={handleGoExternal}
               className="w-full px-3 py-2 text-xs font-bold font-mono border border-hammer-green/30 bg-hammer-green/5 text-hammer-green rounded cursor-pointer hover:bg-hammer-green/15 transition-colors"
+              title="Hide this panel and open Hammer in a separate window (for second monitor)"
             >
-              OPEN COMMAND CENTER
+              OPEN ON SECOND MONITOR
             </button>
           )}
         </div>
