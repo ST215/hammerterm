@@ -8,7 +8,7 @@ import HammerApp from "@ui/components/App";
 // the 500ms sync clobbering their interactions.
 const LOCAL_KEYS = new Set([
   // UI navigation
-  "view", "paused", "minimized", "sizeIdx", "displayMode", "uiVisible", "externalOpen",
+  "view", "paused", "minimized", "sizeIdx", "displayMode", "uiVisible", "externalOpen", "tabsRevealed",
   // Comms selections (user picks targets in dashboard)
   "commsTargets", "commsGroupMode", "commsOthersExpanded",
   "commsPendingQC", "commsRecentSent", "allianceCommsExpanded",

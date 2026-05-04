@@ -2,7 +2,6 @@ import { Component, useRef, type ReactNode } from "react";
 import { useStore } from "@store/index";
 import { record } from "../../recorder";
 import GrowthHUD from "./GrowthHUD";
-import StreamWidget from "./StreamWidget";
 import Panel from "./Panel";
 import HeaderButtons from "./HeaderButtons";
 import TabBar from "./TabBar";
@@ -80,11 +79,11 @@ export default function App({ mode }: AppProps) {
 
   const view = useStore((s) => s.view);
   const uiVisible = useStore((s) => s.uiVisible);
-  const displayMode = useStore((s) => s.displayMode);
 
-  // ── OVERLAY ──
+  // ── OVERLAY (in-browser, on the game page) ──
   if (mode === "overlay") {
-    // Notifications ALWAYS render on the game page — in every mode, every state.
+    // Notifications ALWAYS render on the game page — every state, every mode.
+    // They're non-intrusive and the user wants them visible regardless.
     const notifications = (
       <>
         <DonationToast />
@@ -94,17 +93,7 @@ export default function App({ mode }: AppProps) {
       </>
     );
 
-    // Window mode: show stream widget + notifications (no panel)
-    if (displayMode === "window") {
-      return (
-        <>
-          <StreamWidget />
-          {notifications}
-        </>
-      );
-    }
-
-    // Panel hidden: still show notifications
+    // Panel hidden (close button clicked): only notifications stay
     if (!uiVisible) return notifications;
 
     // Normal overlay: panel + notifications
@@ -124,8 +113,8 @@ export default function App({ mode }: AppProps) {
     );
   }
 
-  // ── WINDOW: external dashboard ──
-  // No notifications — they render on the game page overlay.
+  // ── WINDOW: external dashboard popup ──
+  // No notifications here — they always show on the game page overlay.
   const ActiveView = VIEW_MAP[view] ?? HammerView;
   return (
     <div className="flex flex-col w-full h-screen bg-hammer-bg text-hammer-text font-mono text-base">

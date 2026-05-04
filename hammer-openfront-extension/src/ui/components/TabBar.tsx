@@ -15,19 +15,19 @@ const ALL_TABS: { id: string; label: string }[] = [
   { id: "help", label: "Help" },
 ];
 
-// In overlay mode, only show the Hammer tab by default.
-// All other tabs are accessible in the external dashboard.
-const OVERLAY_TABS = ALL_TABS.filter((t) => t.id === "hammer");
+const HAMMER_ONLY = ALL_TABS.filter((t) => t.id === "hammer");
 
 export default function TabBar({ mode }: { mode?: "overlay" | "window" }) {
   const view = useStore((s) => s.view);
   const setView = useStore((s) => s.setView);
   const minimized = useStore((s) => s.minimized);
+  const tabsRevealed = useStore((s) => s.tabsRevealed);
 
   if (minimized) return null;
 
-  // External dashboard shows all tabs. Overlay shows only Hammer.
-  const tabs = mode === "window" ? ALL_TABS : OVERLAY_TABS;
+  // Window (external popup) always shows all tabs (already gated by Continue screen).
+  // Overlay (in-browser) shows only Hammer until the user reveals the rest.
+  const tabs = mode === "window" || tabsRevealed ? ALL_TABS : HAMMER_ONLY;
 
   return (
     <div

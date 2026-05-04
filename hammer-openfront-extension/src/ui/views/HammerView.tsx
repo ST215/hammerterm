@@ -132,10 +132,10 @@ export default function HammerView() {
 
   const me = useMyPlayer();
   const playerDataReady = useStore((s) => s.playerDataReady);
-  const displayMode = useStore((s) => s.displayMode);
-  const setDisplayMode = useStore((s) => s.setDisplayMode);
   const externalOpen = useStore((s) => s.externalOpen);
   const setExternalOpen = useStore((s) => s.setExternalOpen);
+  const tabsRevealed = useStore((s) => s.tabsRevealed);
+  const setTabsRevealed = useStore((s) => s.setTabsRevealed);
 
   const hasSignal = playerDataReady && !!me;
   const showIdle = bootDone && !hasSignal;
@@ -167,9 +167,11 @@ export default function HammerView() {
   const displayGrowth = dTroops(Math.round(growthSec));
   const atPeak = pctOfMax >= (OPTIMAL_REGEN_PCT * 100 - 5) && pctOfMax <= (OPTIMAL_REGEN_PCT * 100 + 5);
 
-  // Dual-monitor flow: hide panel AND open external popup
-  const handleGoExternal = () => {
-    setDisplayMode("window");
+  // Reveal the in-browser tabs (still hidden behind a click for stream paranoia)
+  const handleRevealTabs = () => setTabsRevealed(true);
+
+  // Open in a separate browser window (popup has its own gate)
+  const handleLaunchExternal = () => {
     setExternalOpen(true);
     chrome.runtime.sendMessage({ type: "OPEN_DASHBOARD" });
   };
@@ -316,16 +318,36 @@ export default function HammerView() {
 
           <div className="border-t border-hammer-border-subtle mb-3" />
 
-          {/* Dual-monitor: hide panel + open external popup in one click */}
-          {displayMode === "overlay" && !externalOpen && (
-            <button
-              onClick={handleGoExternal}
-              className="w-full px-3 py-2 text-xs font-bold font-mono border border-hammer-green/30 bg-hammer-green/5 text-hammer-green rounded cursor-pointer hover:bg-hammer-green/15 transition-colors"
-              title="Hide this panel and open Hammer in a separate window (for second monitor)"
-            >
-              OPEN ON SECOND MONITOR
-            </button>
-          )}
+          {/* Inconspicuous control bar — looks like a status footer.
+              Two equal-width buttons: reveal in-browser controls, launch external. */}
+          <div className="flex items-center justify-between gap-2 text-2xs">
+            {!tabsRevealed ? (
+              <button
+                onClick={handleRevealTabs}
+                className="flex-1 px-2 py-1 text-2xs font-mono border border-hammer-border bg-hammer-surface text-hammer-muted hover:text-hammer-green hover:border-hammer-green/40 rounded cursor-pointer transition-colors"
+                title="Show controls"
+              >
+                _
+              </button>
+            ) : (
+              <span className="flex-1 text-2xs text-hammer-dim text-center">
+                {">"} controls visible
+              </span>
+            )}
+            {!externalOpen ? (
+              <button
+                onClick={handleLaunchExternal}
+                className="flex-1 px-2 py-1 text-2xs font-mono border border-hammer-border bg-hammer-surface text-hammer-muted hover:text-hammer-blue hover:border-hammer-blue/40 rounded cursor-pointer transition-colors"
+                title="Launch in external window"
+              >
+                {"->"}
+              </button>
+            ) : (
+              <span className="flex-1 text-2xs text-hammer-dim text-center">
+                {">"} external open
+              </span>
+            )}
+          </div>
         </div>
       )}
     </div>

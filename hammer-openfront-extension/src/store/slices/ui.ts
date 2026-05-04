@@ -35,6 +35,9 @@ export interface UISlice {
   setPanelWidth: (w: number) => void;
   externalOpen: boolean;
   setExternalOpen: (v: boolean) => void;
+  /** When false, in-browser overlay shows only the Hammer tab. Click to reveal the rest. */
+  tabsRevealed: boolean;
+  setTabsRevealed: (v: boolean) => void;
 }
 
 export const createUISlice: StateCreator<UISlice, [], [], UISlice> = (set) => ({
@@ -71,4 +74,6 @@ export const createUISlice: StateCreator<UISlice, [], [], UISlice> = (set) => ({
   setPanelWidth: (w) => set((s) => s.panelWidth === w ? s : { panelWidth: w }),
   externalOpen: false,
   setExternalOpen: (v) => set({ externalOpen: v }),
+  tabsRevealed: false,
+  setTabsRevealed: (v) => set({ tabsRevealed: v }),
 });

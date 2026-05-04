@@ -14,8 +14,6 @@ export default function HeaderButtons() {
   const setUIVisible = useStore((s) => s.setUIVisible);
   const recorderOn = useStore((s) => s.recorderOn);
   const toggleRecorder = useStore((s) => s.toggleRecorder);
-  const displayMode = useStore((s) => s.displayMode);
-  const setDisplayMode = useStore((s) => s.setDisplayMode);
   const externalOpen = useStore((s) => s.externalOpen);
   const setExternalOpen = useStore((s) => s.setExternalOpen);
 
@@ -32,12 +30,7 @@ export default function HeaderButtons() {
     }
   };
 
-  // Independent: panel visibility (overlay = panel, window = StreamWidget)
-  const handlePanelToggle = () => {
-    setDisplayMode(displayMode === "window" ? "overlay" : "window");
-  };
-
-  // Independent: external dashboard popup window
+  // External popup toggle. Independent of in-browser tab reveal.
   const handleExternalToggle = () => {
     if (externalOpen) {
       setExternalOpen(false);
@@ -50,24 +43,14 @@ export default function HeaderButtons() {
 
   return (
     <>
-      {/* Panel visibility toggle (panel ↔ stream widget) */}
-      <button
-        className={btnClass}
-        onClick={handlePanelToggle}
-        title={displayMode === "window" ? "Show panel" : "Hide panel (show widget only)"}
-        style={{ minWidth: 28, textAlign: "center" }}
-      >
-        {displayMode === "window" ? "▢" : "▤"}
-      </button>
-
       {/* External dashboard popup toggle */}
       <button
         className={btnClass}
         onClick={handleExternalToggle}
-        title={externalOpen ? "Close external window" : "Open in external window (for second monitor)"}
+        title={externalOpen ? "Close external window" : "Open in external window"}
         style={{ minWidth: 28, textAlign: "center" }}
       >
-        {externalOpen ? "☒" : "⧉"}
+        {externalOpen ? "[x]" : "[ext]"}
       </button>
 
       {/* Size toggle */}
@@ -87,7 +70,7 @@ export default function HeaderButtons() {
         title={minimized ? "Expand" : "Minimize"}
         style={{ minWidth: 20, textAlign: "center" }}
       >
-        {minimized ? "▲" : "▼"}
+        {minimized ? "+" : "-"}
       </button>
 
       {/* Record toggle */}
@@ -96,7 +79,7 @@ export default function HeaderButtons() {
         onClick={toggleRecorder}
         title={recorderOn ? "Stop recording" : "Start recording"}
       >
-        {recorderOn ? "● REC" : "REC"}
+        {recorderOn ? "REC" : "rec"}
       </button>
 
       {/* Pause / Resume */}
