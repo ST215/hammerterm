@@ -75,12 +75,12 @@ function startDashboardSync(port: chrome.runtime.Port): void {
       clearInterval(syncTimer);
       syncTimer = null;
     }
-    // When the external popup closes (manually or by Chrome), reflect that
-    // in the store. Leave displayMode (panel-vs-widget) as the user set it —
-    // they may want widget mode without the popup, or panel mode while the
-    // popup was open.
+    // Secondary safety net: if the port drops while we still think the external
+    // window is open, clear it via the action so the externalOpen⇒hidden
+    // invariant restores the in-game overlay to its disguised card. (The
+    // background's windows.onRemoved → EXTERNAL_STATE is the primary path.)
     if (useStore.getState().externalOpen) {
-      useStore.setState({ externalOpen: false });
+      useStore.getState().setExternalOpen(false);
     }
     record("bridge", "dashboard.disconnect");
     console.log("[Hammer:Bridge] Dashboard disconnected");
@@ -348,6 +348,25 @@ function setsEqual(a: Set<number>, b: Set<number>): boolean {
   return true;
 }
 
+/**
+ * Merge a partial PlayerUpdate delta onto a prior full record.
+ *
+ * OpenFront v0.32+ (PR #3967) sends player updates as field-level deltas:
+ * a delta always carries `id` (and `type`) but only the fields that changed
+ * since the game last emitted for that player; absent fields mean "unchanged".
+ * Blindly storing the delta would wipe gold/troops/team/allies/name off the
+ * record. We mirror the game's own `applyStateUpdate` — copy only the keys
+ * present on the delta onto the prior record. (Pre-v0.32 full snapshots carry
+ * every key, so this is a no-op overwrite there — safe for both protocols.)
+ */
+function mergePlayerDelta(prev: PlayerData, delta: any): PlayerData {
+  const next: any = { ...prev };
+  for (const k in delta) {
+    if (delta[k] !== undefined) next[k] = delta[k];
+  }
+  return next;
+}
+
 function handlePlayerUpdate(payload: {
   players: any[];
   tick?: number;
@@ -356,53 +375,65 @@ function handlePlayerUpdate(payload: {
 
   const store = useStore.getState();
 
-  // Separate structural changes (instant) from stats-only changes (throttled).
+  // Merge each delta onto its prior record FIRST, then diff the merged result.
+  // Change-detection must compare against the full merged record, not the raw
+  // delta — a delta that omits `team` does not mean the team became undefined.
+  const newById = new Map(store.playersById);
+  const newBySmallId = new Map(store.playersBySmallId);
+  const merged: PlayerData[] = [];
   let hasStructuralChange = false;
   let hasStatsChange = false;
+
   for (const p of payload.players) {
-    if (!p) continue;
-    const prev = store.playersById.get(p.id);
-    if (!prev) { hasStructuralChange = true; break; }
-    if (playerStructurallyChanged(prev, p)) { hasStructuralChange = true; break; }
-    if (!hasStatsChange && playerStatsChanged(prev, p)) hasStatsChange = true;
+    if (!p || p.id == null) continue;
+    const prev = newById.get(p.id);
+    const next = prev ? mergePlayerDelta(prev, p) : (p as PlayerData);
+    if (!prev) {
+      hasStructuralChange = true;
+    } else {
+      if (playerStructurallyChanged(prev, next)) hasStructuralChange = true;
+      if (playerStatsChanged(prev, next)) hasStatsChange = true;
+    }
+    newById.set(next.id, next);
+    if (next.smallID != null) newBySmallId.set(next.smallID, next);
+    merged.push(next);
   }
 
   const now = Date.now();
-  const shouldUpdate =
-    hasStructuralChange ||
-    (hasStatsChange && now - lastStatsUpdateMs >= STATS_THROTTLE_MS);
+  // In a replay, ticks fast-forward; subject EVEN structural changes to the
+  // throttle so we don't copy two 400+-entry Maps on every coalesced batch.
+  // The 3s refreshPlayers poll heals any briefly-stale state.
+  const throttled = now - lastStatsUpdateMs < STATS_THROTTLE_MS;
+  const shouldUpdate = store.isReplay
+    ? (hasStructuralChange || hasStatsChange) && !throttled
+    : hasStructuralChange || (hasStatsChange && !throttled);
 
   trackMetric("playerUpdatesReceived");
   if (shouldUpdate) {
     trackMetric("playerUpdatesApplied");
     lastStatsUpdateMs = now;
-    const newById = new Map(store.playersById);
-    const newBySmallId = new Map(store.playersBySmallId);
-    for (const p of payload.players) {
-      if (!p) continue;
-      newById.set(p.id, p);
-      if (p.smallID != null) newBySmallId.set(p.smallID, p);
-    }
+    // Stat-only deltas that get throttled here are dropped (not committed),
+    // so a stat field can lag up to the 3s refreshPlayers poll that re-reads
+    // full state. Acceptable: structural changes always commit immediately,
+    // and the poll heals stale stats.
     const list = [...newById.values()];
     store.setPlayers(newById, newBySmallId, list);
   } else if (hasStatsChange) {
     trackMetric("playerUpdatesThrottled");
   }
 
-  // Identify our player
+  // Identify our player — scan the MERGED full records. Our delta may omit
+  // clientID/smallID on later ticks (they never change), so matching against
+  // raw payload deltas would miss us; merged records always carry them.
   let my: any = null;
   if (store.currentClientID) {
-    my = payload.players.find(
-      (p: any) => p.clientID === store.currentClientID,
-    );
+    my = merged.find((p: any) => p.clientID === store.currentClientID);
   }
   if (!my && store.mySmallID === null) {
-    my = payload.players.find((p: any) => p.isAlive);
+    my = merged.find((p: any) => p.isAlive);
   }
   if (!my && store.mySmallID !== null) {
-    my = payload.players.find(
-      (p: any) => p.smallID === store.mySmallID,
-    );
+    my = merged.find((p: any) => p.smallID === store.mySmallID);
   }
 
   if (my) {
@@ -539,9 +570,13 @@ function handleRefresh(payload: { players: any[] }): void {
   }
 
   const now = Date.now();
-  const shouldUpdate =
-    hasStructuralChange ||
-    (hasStatsChange && now - lastStatsUpdateMs >= STATS_THROTTLE_MS);
+  // In a replay, ticks fast-forward; subject EVEN structural changes to the
+  // throttle so we don't copy two 400+-entry Maps on every coalesced batch.
+  // The 3s refreshPlayers poll heals any briefly-stale state.
+  const throttled = now - lastStatsUpdateMs < STATS_THROTTLE_MS;
+  const shouldUpdate = store.isReplay
+    ? (hasStructuralChange || hasStatsChange) && !throttled
+    : hasStructuralChange || (hasStatsChange && !throttled);
 
   trackMetric("playerUpdatesReceived");
   if (shouldUpdate) {
@@ -563,7 +598,20 @@ function handleStatus(payload: {
   hook: string;
   found: boolean;
   classes?: string[];
+  isReplay?: boolean;
 }): void {
+  // Replay detection from MAIN world. Entering replay lifts the no-self
+  // ingestion gate so analytics flow even when we weren't a participant.
+  if (payload?.hook === "replay") {
+    const store = useStore.getState();
+    store.setReplay(!!payload.isReplay);
+    if (payload.isReplay && !store.playerDataReady) {
+      store.markPlayerDataReady();
+      drainPendingMessages();
+    }
+    record("hook", "replay", { isReplay: !!payload.isReplay });
+    return;
+  }
   if (payload?.hook) {
     hookStatus[payload.hook] = !!payload.found;
     record("hook", payload.hook + (payload.found ? ".found" : ".missing"), {

@@ -14,13 +14,16 @@ import { estimateMaxTroops } from "@shared/logic/city";
 import { cityLevelSumByOwner } from "@content/hooks/worker-hook";
 import { troopGrowthPerSec, OPTIMAL_REGEN_PCT } from "@shared/logic/troop-math";
 import { PALANTIR_RATIO } from "@store/slices/auto-troops";
+import { notifPositionStyle } from "@shared/notif-position";
 
 export default function GrowthHUD() {
+  const enabled = useStore((s) => s.growthHudEnabled);
   const running = useStore((s) => s.asTroopsRunning);
   const ratio = useStore((s) => s.asTroopsRatio);
+  const position = useStore((s) => s.growthPosition);
   const me = useMyPlayer();
 
-  if (!running || !me) return null;
+  if (!enabled || !running || !me) return null;
 
   const troops = Number(me.troops || 0);
   const maxT = estimateMaxTroops(me.tilesOwned ?? 0, me.smallID ?? 0, cityLevelSumByOwner);
@@ -50,10 +53,9 @@ export default function GrowthHUD() {
 
   return (
     <div
-      className="fixed font-mono pointer-events-none"
+      className="font-mono pointer-events-none"
       style={{
-        bottom: 80,
-        left: 16,
+        ...notifPositionStyle(position, 1),
         background: "linear-gradient(135deg, rgba(11, 18, 32, 0.95), rgba(22, 34, 54, 0.90))",
         backdropFilter: "blur(8px)",
         borderRadius: 8,
@@ -61,7 +63,6 @@ export default function GrowthHUD() {
         padding: "8px 14px",
         minWidth: 180,
         boxShadow: "0 4px 24px rgba(0,0,0,0.6), inset 0 1px 0 rgba(255,255,255,0.05)",
-        zIndex: 2147483647,
       }}
     >
       {/* Growth rate */}

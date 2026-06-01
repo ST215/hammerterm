@@ -86,6 +86,7 @@ export interface BridgeMetrics {
   intentsSent: number;             // total intents dispatched
   intentsQueued: number;           // intents that went to queue (not immediate)
   intentsRateLimited: number;      // times rate limiter blocked drain
+  intentsBlockedReplay: number;    // intents blocked because game is a replay
   dashboardSyncs: number;          // snapshots sent to dashboard
   dashboardSyncsSkipped: number;   // skipped due to no change
 }
@@ -118,6 +119,7 @@ const metrics: BridgeMetrics = {
   intentsSent: 0,
   intentsQueued: 0,
   intentsRateLimited: 0,
+  intentsBlockedReplay: 0,
   dashboardSyncs: 0,
   dashboardSyncsSkipped: 0,
 };
@@ -284,7 +286,7 @@ export function getRecentEvents(n: number): RecorderEvent[] {
 
 export function exportRecording(): object {
   return {
-    version: "15.14.0-ext",
+    version: "15.17.0-ext",
     format: 2, // v2 = full match recording with snapshots
     exportedAt: Date.now(),
     session: {

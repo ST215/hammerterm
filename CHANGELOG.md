@@ -4,6 +4,55 @@ All notable changes to Hammer Control Panel will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [15.17.0] - 2026-06-01 "Replay Support + Notifications Anywhere"
+
+### Added
+
+- **Replay support** — Hammer now detects when you're watching a match replay (via the game's `config().isReplay()`) and adapts automatically:
+  - **Throttles hard** so the fast-forwarded replay no longer lags the tool. MAIN-world player/tile updates are coalesced and flushed every 250ms instead of one cross-world `postMessage` per tick, and structural player changes are throttled (not just stats), so the expensive 400-player map copies stop firing every tick.
+  - **Pauses all automation** — no troops/gold/reciprocate/broadcast intents are sent into read-only playback. Enforced at a single choke point in `send.ts` plus an early-return in each engine tick.
+  - **No-self ingestion** — you can load a replay of a match you did NOT play (e.g. one a friend sent you) purely to pull the analytics. Previously the tool sat at "awaiting signal" forever because no "my player" resolved; now the readiness gate is lifted in replay so CIA/Summary populate from the global transfer data. Self-relative sections render empty gracefully.
+- **Settings tab** — dedicated tab for all popup/notification configuration (moved out of Help). For each of the four popups (Reciprocate, Donation Toast, Status Toast, Growth HUD): enable toggle, 3×3 position picker, scale slider, and a **Test** button to fire a sample so you can place it before going live. Donation toast has four test variants (in/out × troops/gold).
+- **Master popup switch** (`popupsEnabled`) plus per-popup enable toggles.
+
+### Changed
+
+- **Popups render in every view mode** — notifications now appear on the game screen regardless of whether the in-game panel is disguised, revealed, or hidden. Previously they were suppressed entirely in hidden mode.
+- **All four popups are now positionable** — Status Toast (was hardcoded center) and Growth HUD (was hardcoded bottom-left) now use the same position picker as Reciprocate/Donation.
+- New popup/notification keys persist (config-only) and sync to the dashboard via `LOCAL_KEYS`.
+
+## [15.16.0] - 2026-06-01 "View State Machine"
+
+### Added
+
+- **`inGameView` state machine** — the in-game overlay now has one canonical presentation state: `disguised` (innocuous "match analytics" card, default), `revealed` (full terminal), or `hidden` (nothing on screen). Replaces the tangle of `uiVisible`/`minimized`/`tabsRevealed`/`displayMode` flags.
+- **Disguised analytics card** — the default in-game view is a plain, non-covert "Hammer Terminal — match analytics · WIP" card with three buttons: **Reveal** (expand to full controls), **Launch→** (open external window), and **Hide**.
+- **Extension-icon control center** — clicking the toolbar icon is now the always-available master control: live status (game tab / in-game / external), show/hide in-game, launch/focus/close external, and a **Reset views** recovery button that works even when a view is stuck.
+- **Settings persistence + hydration** — user config (ratios, targets, positions, panel size) persists across game-tab refresh and tool close/reopen; presentation state and live automation toggles deliberately do not (so the overlay always reopens disguised and automation never silently resumes on a streamed reload).
+
+### Fixed
+
+- **External window reliability** — the background service worker is now the single authority for the external window: a race guard prevents duplicate windows from rapid clicks, failed `windows.create` reports honestly instead of faking success, and `windows.onRemoved` clears `externalOpen` so the in-game overlay always comes back. This is the long-standing "external launched, no way back to in-game" bug.
+- **Invariant** — `externalOpen ⇒ in-game hidden`; closing external restores the disguised card, enforced in one place.
+- Dashboard error screen gains a **Return to in-game** button so a failed external never traps you.
+
+### Removed
+
+- Dead `StreamWidget` component and the stale covert "Mode" toggle in the popup.
+
+## [15.15.0] - 2026-05-31 "OpenFront v0.32 Sync"
+
+### Fixed
+
+- **PlayerUpdate deltas (v0.32)** — OpenFront switched player updates from full per-tick snapshots to field-level deltas. The extension was blind-replacing player records, which would wipe `gold`/`troops`/`team`/`allies` off players between the 3-second heal poll (causing automation misfires and re-render blink). Player updates are now merged (only defined fields applied), mirroring the game's own `applyStateUpdate`.
+- **WebGL2 map renderer (v0.32)** — the map moved to a WebGL2 canvas, killing the old 2D-canvas hook that powered ALT+M tile targeting and the Growth HUD. ALT+M now resolves the tile through the game's own `TransformHandler.screenToWorldCoordinates → ref → ownerID` (reached via the HUD custom elements), with the legacy 2D math as fallback.
+- **GameUpdateType enum** re-synced to v0.32 (Railroad split into Destruction/Construction/Snap, Conquest=19, Embargo=20, plus new members).
+
+### Notes
+
+- Local `OpenFrontIO` reference clone fast-forwarded 190 commits to `v0.32.0-test-release3`; all game-contract tests pass against it.
+- Verified live: ALT+M and ALT+F working under WebGL2.
+
 ## [15.0.2] - 2026-03-24 "Rate Limits + Blink Fix"
 
 ### Added

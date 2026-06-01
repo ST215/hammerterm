@@ -176,6 +176,8 @@ function processReciprocateQueue(): void {
   const s = useStore.getState();
   const mode = s.reciprocateMode;
 
+  if (s.isReplay) return; // no automation during replay playback
+
   if (!s.reciprocateEnabled || (mode !== "auto" && mode !== "palantir")) {
     if (pendingQueue.length > 0) {
       record("recip", "cleared", { reason: "disabled", count: pendingQueue.length });

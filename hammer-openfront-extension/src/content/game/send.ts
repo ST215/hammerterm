@@ -85,6 +85,12 @@ function enqueueIntent(
   recordMeta: Record<string, unknown>,
   logMsg: string,
 ): boolean {
+  // Never send intents into a replay — it's read-only playback. This is the
+  // single choke point covering all automation + manual sends.
+  if (useStore.getState().isReplay) {
+    trackMetric("intentsBlockedReplay");
+    return false;
+  }
   ensureDrainTimer();
 
   // If queue is empty and we're under limits, send immediately
@@ -121,6 +127,10 @@ function sendIntentNow(
   recordMeta: Record<string, unknown>,
   logMsg: string,
 ): void {
+  if (useStore.getState().isReplay) {
+    trackMetric("intentsBlockedReplay");
+    return;
+  }
   sendToMainWorld(payload);
   const now = Date.now();
   sentTimestamps.push(now);

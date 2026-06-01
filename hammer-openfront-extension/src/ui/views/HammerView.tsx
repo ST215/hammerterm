@@ -132,10 +132,6 @@ export default function HammerView() {
 
   const me = useMyPlayer();
   const playerDataReady = useStore((s) => s.playerDataReady);
-  const externalOpen = useStore((s) => s.externalOpen);
-  const setExternalOpen = useStore((s) => s.setExternalOpen);
-  const tabsRevealed = useStore((s) => s.tabsRevealed);
-  const setTabsRevealed = useStore((s) => s.setTabsRevealed);
 
   const hasSignal = playerDataReady && !!me;
   const showIdle = bootDone && !hasSignal;
@@ -166,15 +162,6 @@ export default function HammerView() {
   const growthSec = maxT > 0 ? troopGrowthPerSec(rawTroops, maxT) : 0;
   const displayGrowth = dTroops(Math.round(growthSec));
   const atPeak = pctOfMax >= (OPTIMAL_REGEN_PCT * 100 - 5) && pctOfMax <= (OPTIMAL_REGEN_PCT * 100 + 5);
-
-  // Reveal the in-browser tabs (still hidden behind a click for stream paranoia)
-  const handleRevealTabs = () => setTabsRevealed(true);
-
-  // Open in a separate browser window (popup has its own gate)
-  const handleLaunchExternal = () => {
-    setExternalOpen(true);
-    chrome.runtime.sendMessage({ type: "OPEN_DASHBOARD" });
-  };
 
   return (
     <div className="relative font-mono select-none" style={{ minHeight: 320 }}>
@@ -311,42 +298,9 @@ export default function HammerView() {
           </div>
 
           {/* Gold */}
-          <div className="flex items-center justify-between text-2xs mb-3">
+          <div className="flex items-center justify-between text-2xs">
             <span className="text-hammer-muted uppercase tracking-wider">Treasury</span>
             <span className="text-hammer-gold font-bold">{comma(gold)} gold</span>
-          </div>
-
-          <div className="border-t border-hammer-border-subtle mb-3" />
-
-          {/* Inconspicuous control bar — looks like a status footer.
-              Two equal-width buttons: reveal in-browser controls, launch external. */}
-          <div className="flex items-center justify-between gap-2 text-2xs">
-            {!tabsRevealed ? (
-              <button
-                onClick={handleRevealTabs}
-                className="flex-1 px-2 py-1 text-2xs font-mono border border-hammer-border bg-hammer-surface text-hammer-muted hover:text-hammer-green hover:border-hammer-green/40 rounded cursor-pointer transition-colors"
-                title="Show controls"
-              >
-                _
-              </button>
-            ) : (
-              <span className="flex-1 text-2xs text-hammer-dim text-center">
-                {">"} controls visible
-              </span>
-            )}
-            {!externalOpen ? (
-              <button
-                onClick={handleLaunchExternal}
-                className="flex-1 px-2 py-1 text-2xs font-mono border border-hammer-border bg-hammer-surface text-hammer-muted hover:text-hammer-blue hover:border-hammer-blue/40 rounded cursor-pointer transition-colors"
-                title="Launch in external window"
-              >
-                {"->"}
-              </button>
-            ) : (
-              <span className="flex-1 text-2xs text-hammer-dim text-center">
-                {">"} external open
-              </span>
-            )}
           </div>
         </div>
       )}

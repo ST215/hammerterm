@@ -9,7 +9,6 @@ interface PanelProps {
 
 export default function Panel({ header, children }: PanelProps) {
   const sizeIdx = useStore((s) => s.sizeIdx);
-  const minimized = useStore((s) => s.minimized);
   const setPanelWidth = useStore((s) => s.setPanelWidth);
 
   const size = SIZES[sizeIdx];
@@ -54,7 +53,7 @@ export default function Panel({ header, children }: PanelProps) {
   // Track manual resize via ResizeObserver
   useEffect(() => {
     const el = panelRef.current;
-    if (!el || minimized) return;
+    if (!el) return;
     const observer = new ResizeObserver((entries) => {
       for (const entry of entries) {
         // Use borderBoxSize (includes borders) to avoid a shrink feedback loop
@@ -73,20 +72,16 @@ export default function Panel({ header, children }: PanelProps) {
     });
     observer.observe(el);
     return () => observer.disconnect();
-  }, [minimized, setPanelWidth]);
+  }, [setPanelWidth]);
 
   // Reset manual size when sizeIdx changes
   useEffect(() => {
     setManualSize(null);
   }, [sizeIdx]);
 
-  const panelW = minimized ? 240 : (manualSize?.w ?? size.w);
-  const panelH = minimized ? undefined : (manualSize?.h ?? size.h);
-  const bodyH = minimized
-    ? 0
-    : manualSize
-      ? manualSize.h - (size.h - size.bodyH)
-      : size.bodyH;
+  const panelW = manualSize?.w ?? size.w;
+  const panelH = manualSize?.h ?? size.h;
+  const bodyH = manualSize ? manualSize.h - (size.h - size.bodyH) : size.bodyH;
 
   return (
     <div
@@ -99,9 +94,9 @@ export default function Panel({ header, children }: PanelProps) {
         height: panelH,
         zIndex: 2147483647,
         overflow: "hidden",
-        resize: minimized ? "none" : "both",
+        resize: "both",
         minWidth: 300,
-        minHeight: minimized ? undefined : 120,
+        minHeight: 120,
         borderRadius: "4px",
         display: "flex",
         flexDirection: "column",
@@ -118,15 +113,13 @@ export default function Panel({ header, children }: PanelProps) {
       </div>
 
       {/* Scrollable body */}
-      {!minimized && (
-        <div
-          id="hm-body"
-          className="flex-1 overflow-y-auto overflow-x-hidden"
-          style={{ maxHeight: bodyH }}
-        >
-          {children}
-        </div>
-      )}
+      <div
+        id="hm-body"
+        className="flex-1 overflow-y-auto overflow-x-hidden"
+        style={{ maxHeight: bodyH }}
+      >
+        {children}
+      </div>
     </div>
   );
 }

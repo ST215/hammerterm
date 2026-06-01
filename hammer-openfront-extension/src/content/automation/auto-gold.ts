@@ -53,6 +53,8 @@ export function asResolveGoldTargets(): ResolvedTarget[] {
 function asGoldTick(): void {
   const s = useStore.getState();
 
+  if (s.isReplay) return; // no automation during replay playback
+
   if (!s.asGoldRunning) {
     if (asGoldTimer) {
       clearInterval(asGoldTimer);

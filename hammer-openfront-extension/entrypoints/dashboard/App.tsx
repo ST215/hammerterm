@@ -7,8 +7,8 @@ import HammerApp from "@ui/components/App";
 // These let the user navigate tabs, select comms targets, etc. without
 // the 500ms sync clobbering their interactions.
 const LOCAL_KEYS = new Set([
-  // UI navigation
-  "view", "paused", "minimized", "sizeIdx", "displayMode", "uiVisible", "externalOpen", "tabsRevealed",
+  // UI navigation / presentation
+  "view", "paused", "sizeIdx", "inGameView", "externalOpen",
   // Comms selections (user picks targets in dashboard)
   "commsTargets", "commsGroupMode", "commsOthersExpanded",
   "commsPendingQC", "commsRecentSent", "allianceCommsExpanded",
@@ -25,10 +25,11 @@ const LOCAL_KEYS = new Set([
   "asGoldThreshold", "asGoldCooldownSec",
   "asGoldAllTeamMode", "asGoldAllAlliesMode",
   // Activity feed toggles
+  "popupsEnabled", "growthHudEnabled",
   "toastInboundTroops", "toastInboundGold", "toastOutboundTroops", "toastOutboundGold",
   "toastScale", "statusToastScale",
   // Notification positions
-  "reciprocatePosition", "donationPosition",
+  "reciprocatePosition", "donationPosition", "statusPosition", "growthPosition",
   // CIA user preferences
   "ciaWindowMs", "ciaFeedFilter",
   // Broadcast config
@@ -44,11 +45,9 @@ export default function DashboardApp() {
   const [unlocked, setUnlocked] = useState(false);
   const [retryKey, setRetryKey] = useState(0);
 
-  // Mark this context as the external popup. The overlay's displayMode
-  // (panel-vs-widget) is independent and stays as the user set it.
-  useEffect(() => {
-    useStore.setState({ externalOpen: true });
-  }, []);
+  // This window's own store always shows the full terminal (mode="window"
+  // ignores inGameView). The game-tab overlay's externalOpen/inGameView is
+  // driven authoritatively by the background (EXTERNAL_STATE), not from here.
 
   useEffect(() => {
     let port: chrome.runtime.Port | null = null;
@@ -230,22 +229,41 @@ export default function DashboardApp() {
           {">"}_ Hammer Terminal
         </div>
         <div style={{ color: "#ff6b6b" }}>{error}</div>
-        <button
-          onClick={() => { setError(null); setConnected(false); setRetryKey((k) => k + 1); }}
-          style={{
-            padding: "8px 20px",
-            fontSize: 13,
-            fontFamily: "'JetBrains Mono', monospace",
-            fontWeight: 600,
-            color: "#7ff2a3",
-            background: "rgba(127, 242, 163, 0.08)",
-            border: "1px solid rgba(127, 242, 163, 0.3)",
-            borderRadius: 6,
-            cursor: "pointer",
-          }}
-        >
-          RETRY CONNECTION
-        </button>
+        <div style={{ display: "flex", gap: 10 }}>
+          <button
+            onClick={() => { setError(null); setConnected(false); setRetryKey((k) => k + 1); }}
+            style={{
+              padding: "8px 20px",
+              fontSize: 13,
+              fontFamily: "'JetBrains Mono', monospace",
+              fontWeight: 600,
+              color: "#7ff2a3",
+              background: "rgba(127, 242, 163, 0.08)",
+              border: "1px solid rgba(127, 242, 163, 0.3)",
+              borderRadius: 6,
+              cursor: "pointer",
+            }}
+          >
+            RETRY CONNECTION
+          </button>
+          {/* Never trap the user in a dead external window: closing it makes the
+              background restore the in-game overlay (the guaranteed way back). */}
+          <button
+            onClick={() => chrome.runtime.sendMessage({ type: "CLOSE_DASHBOARD" })}
+            style={{
+              padding: "8px 20px",
+              fontSize: 13,
+              fontFamily: "'JetBrains Mono', monospace",
+              color: "#7694b0",
+              background: "transparent",
+              border: "1px solid #1e3558",
+              borderRadius: 6,
+              cursor: "pointer",
+            }}
+          >
+            RETURN TO IN-GAME
+          </button>
+        </div>
       </div>
     );
   }

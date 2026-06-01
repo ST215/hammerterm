@@ -16,6 +16,8 @@ export interface PlayerSlice {
   myAllies: Set<number>;
   currentClientID: string | null;
   playerDataReady: boolean;
+  /** True when the current game is a replay (detected via game.config().isReplay()). */
+  isReplay: boolean;
   playerSummary: PlayerSummary;
 
   setPlayers: (
@@ -27,6 +29,7 @@ export interface PlayerSlice {
   updateAllies: (allies: Set<number>) => void;
   setCurrentClientID: (clientID: string | null) => void;
   markPlayerDataReady: () => void;
+  setReplay: (v: boolean) => void;
   resetPlayerState: () => void;
 }
 
@@ -39,6 +42,7 @@ export const createPlayerSlice: StateCreator<PlayerSlice, [], [], PlayerSlice> =
   myAllies: new Set(),
   currentClientID: null,
   playerDataReady: false,
+  isReplay: false,
   playerSummary: { count: 0, names: [], myName: null },
 
   setPlayers: (byId, bySmallId, list) =>
@@ -69,6 +73,8 @@ export const createPlayerSlice: StateCreator<PlayerSlice, [], [], PlayerSlice> =
 
   markPlayerDataReady: () => set({ playerDataReady: true }),
 
+  setReplay: (v) => set({ isReplay: v }),
+
   resetPlayerState: () =>
     set({
       playersById: new Map(),
@@ -78,6 +84,7 @@ export const createPlayerSlice: StateCreator<PlayerSlice, [], [], PlayerSlice> =
       myTeam: null,
       myAllies: new Set(),
       playerDataReady: false,
+      isReplay: false,
       playerSummary: { count: 0, names: [], myName: null },
     }),
 });

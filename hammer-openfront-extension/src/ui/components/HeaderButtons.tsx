@@ -7,36 +7,28 @@ const btnClass =
 export default function HeaderButtons() {
   const sizeIdx = useStore((s) => s.sizeIdx);
   const setSizeIdx = useStore((s) => s.setSizeIdx);
-  const minimized = useStore((s) => s.minimized);
-  const toggleMinimized = useStore((s) => s.toggleMinimized);
+  const disguiseInGame = useStore((s) => s.disguiseInGame);
   const paused = useStore((s) => s.paused);
   const togglePaused = useStore((s) => s.togglePaused);
-  const setUIVisible = useStore((s) => s.setUIVisible);
   const recorderOn = useStore((s) => s.recorderOn);
   const toggleRecorder = useStore((s) => s.toggleRecorder);
   const externalOpen = useStore((s) => s.externalOpen);
-  const setExternalOpen = useStore((s) => s.setExternalOpen);
+  const hideInGame = useStore((s) => s.hideInGame);
 
   const handleSize = () => {
     setSizeIdx((sizeIdx + 1) % SIZES.length);
   };
 
-  const handleClose = () => {
-    const hammer = (window as any).__HAMMER__;
-    if (hammer?.cleanup) {
-      hammer.cleanup();
-    } else {
-      setUIVisible(false);
-    }
-  };
+  // Collapse the full terminal back to the innocuous analytics card.
+  const handleDisguise = () => disguiseInGame();
 
-  // External popup toggle. Independent of in-browser tab reveal.
+  // External popup toggle. Background is the authority for externalOpen — it
+  // confirms the window actually opened/closed and messages the content script
+  // to update state (which drives inGameView via the externalOpen invariant).
   const handleExternalToggle = () => {
     if (externalOpen) {
-      setExternalOpen(false);
       chrome.runtime.sendMessage({ type: "CLOSE_DASHBOARD" });
     } else {
-      setExternalOpen(true);
       chrome.runtime.sendMessage({ type: "OPEN_DASHBOARD" });
     }
   };
@@ -63,14 +55,14 @@ export default function HeaderButtons() {
         {SIZES[sizeIdx].label}
       </button>
 
-      {/* Minimize toggle */}
+      {/* Disguise — collapse back to the analytics card */}
       <button
         className={btnClass}
-        onClick={toggleMinimized}
-        title={minimized ? "Expand" : "Minimize"}
+        onClick={handleDisguise}
+        title="Hide controls (back to analytics card)"
         style={{ minWidth: 20, textAlign: "center" }}
       >
-        {minimized ? "+" : "-"}
+        {"-"}
       </button>
 
       {/* Record toggle */}
@@ -91,11 +83,11 @@ export default function HeaderButtons() {
         {paused ? "Resume" : "Pause"}
       </button>
 
-      {/* Close */}
+      {/* Hide — overlay disappears from the page. Reopen from the extension icon. */}
       <button
         className={`${btnClass} hover:text-hammer-red`}
-        onClick={handleClose}
-        title="Close Hammer"
+        onClick={hideInGame}
+        title="Hide overlay (reopen from the extension icon)"
       >
         X
       </button>

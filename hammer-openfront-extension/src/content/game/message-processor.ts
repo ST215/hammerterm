@@ -46,8 +46,10 @@ export function processDisplayMessage(msg: unknown): void {
     return;
   }
 
-  // Buffer messages until player data is ready
-  if (!store.playerDataReady) {
+  // Buffer messages until player data is ready. In a replay we may have no
+  // "my player" (watching someone else's match), so playerDataReady never
+  // flips the normal way — isReplay lifts the gate so analytics still ingest.
+  if (!store.playerDataReady && !store.isReplay) {
     pendingMessages.push(raw);
     return;
   }

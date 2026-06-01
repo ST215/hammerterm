@@ -76,6 +76,35 @@ export default defineContentScript({
     }
 
     // ---------------------------------------------------------------
+    // Replay coalescing — a replay fast-forwards ticks (OpenFront's
+    // replaySpeedMultiplier), flooding the world boundary with one
+    // postMessage per tick. When in replay we accumulate the latest
+    // player update per id + tile deltas and flush on a timer, instead
+    // of emitting every tick. Live play is unchanged (immediate emit).
+    // ---------------------------------------------------------------
+    let isReplayMode = false;
+    const COALESCE_MS = 250;
+    let coalesceTimer: ReturnType<typeof setTimeout> | null = null;
+    const pendingPlayers = new Map<string, any>();
+    const pendingTiles: string[] = [];
+    let pendingTick = 0;
+
+    function flushCoalesced() {
+      coalesceTimer = null;
+      if (pendingPlayers.size > 0) {
+        emit("players", { players: [...pendingPlayers.values()], tick: pendingTick });
+        pendingPlayers.clear();
+      }
+      if (pendingTiles.length > 0) {
+        emit("tiles", { packed: pendingTiles.splice(0) });
+      }
+    }
+
+    function scheduleFlush() {
+      if (coalesceTimer == null) coalesceTimer = setTimeout(flushCoalesced, COALESCE_MS);
+    }
+
+    // ---------------------------------------------------------------
     // Helpers
     // ---------------------------------------------------------------
     function readProp(obj: any, prop: string): any {
@@ -128,7 +157,13 @@ export default defineContentScript({
           serialized.push(big.toString());
         } catch {}
       }
-      if (serialized.length > 0) {
+      if (serialized.length === 0) return;
+      if (isReplayMode) {
+        // Tile data is only used for ALT+M (already updated tileOwnerByRef
+        // above). We still forward to the bridge but coalesced.
+        pendingTiles.push(...serialized);
+        scheduleFlush();
+      } else {
         emit("tiles", { packed: serialized });
       }
     }
@@ -140,10 +175,17 @@ export default defineContentScript({
         // Player updates
         const players = updates?.[GUT_PLAYER];
         if (players?.length) {
-          emit("players", {
-            players: players.filter(Boolean),
-            tick: gameUpdate.tick,
-          });
+          const filtered = players.filter(Boolean);
+          if (isReplayMode) {
+            // Coalesce: keep only the latest update per player id, flush on timer.
+            for (const p of filtered) {
+              if (p?.id != null) pendingPlayers.set(String(p.id), p);
+            }
+            pendingTick = gameUpdate.tick;
+            scheduleFlush();
+          } else {
+            emit("players", { players: filtered, tick: gameUpdate.tick });
+          }
         }
 
         // Packed tile updates
@@ -154,6 +196,18 @@ export default defineContentScript({
       } catch (err) {
         console.warn("[Hammer:Main] Worker message error:", err);
       }
+    }
+
+    // Detect replay off the live game object and inform the bridge once.
+    function detectReplay(game: any) {
+      try {
+        const cfg = typeof game?.config === "function" ? game.config() : game?.config;
+        const replay = !!(typeof cfg?.isReplay === "function" ? cfg.isReplay() : cfg?.isReplay);
+        if (replay !== isReplayMode) {
+          isReplayMode = replay;
+          emit("status", { hook: "replay", isReplay: replay });
+        }
+      } catch {}
     }
 
     // ============================
@@ -677,6 +731,7 @@ export default defineContentScript({
             emit("init", { clientID: runner.lobby.clientID });
           }
           const gameView = runner.gameView;
+          if (gameView) detectReplay(gameView);
           if (gameView?.players) {
             const raw =
               typeof gameView.players === "function"
@@ -706,6 +761,7 @@ export default defineContentScript({
         const ed = document.querySelector("events-display") as any;
         if (ed?.game) {
           const game = ed.game;
+          detectReplay(game);
           if (game._myClientID && !currentClientID) {
             currentClientID = game._myClientID;
             emit("init", { clientID: game._myClientID });
@@ -776,6 +832,7 @@ export default defineContentScript({
     function refreshPlayers() {
       try {
         const ed = document.querySelector("events-display") as any;
+        if (ed?.game) detectReplay(ed.game);
         if (ed?.game?._players) {
           const list = normalizeList(ed.game._players);
           if (list.length > 0) {
@@ -790,6 +847,7 @@ export default defineContentScript({
 
       try {
         const gv = document.querySelector("game-view") as any;
+        if (gv?.clientGameRunner?.gameView) detectReplay(gv.clientGameRunner.gameView);
         if (gv?.clientGameRunner?.gameView?.players) {
           const raw =
             typeof gv.clientGameRunner.gameView.players === "function"
@@ -920,6 +978,52 @@ export default defineContentScript({
     function ensureEventClasses() {
       if (eventBus && Object.keys(eventClasses).length === 0) {
         discoverEventClasses();
+      }
+    }
+
+    /**
+     * Resolve the tile owner under (clientX, clientY) using the game's own
+     * coordinate math instead of our intercepted 2D canvas transform.
+     *
+     * OpenFront v0.32 moved the map to a WebGL2 context, so our
+     * CanvasRenderingContext2D setTransform/drawImage hook never fires and
+     * `canvasTransform`/`worldTilesW/H` stay zero. The game's TransformHandler
+     * still exposes screenToWorldCoordinates(); it lives on several HUD custom
+     * elements as a public field (emoji-table, build-menu, spawn-timer,
+     * main-radial-menu), and TransformHandler holds the GameView as `.game`.
+     * We query those, then call screenToWorldCoordinates -> ref -> ownerID,
+     * mirroring ClientGameRunner.inputEvent(). Returns the owner smallID, 0 for
+     * unowned, or null if the game API isn't reachable (caller falls back).
+     */
+    function resolveOwnerViaGame(
+      clientX: number,
+      clientY: number,
+    ): number | null {
+      const hudTags = [
+        "emoji-table",
+        "build-menu",
+        "spawn-timer",
+        "main-radial-menu",
+      ];
+      let th: any = null;
+      for (const tag of hudTags) {
+        const el = document.querySelector(tag) as any;
+        if (el?.transformHandler?.screenToWorldCoordinates) {
+          th = el.transformHandler;
+          break;
+        }
+      }
+      if (!th) return null;
+      try {
+        const game = th.game;
+        if (!game?.ref || !game?.ownerID) return null;
+        const cell = th.screenToWorldCoordinates(clientX, clientY);
+        if (!cell || typeof cell.x !== "number") return null;
+        if (game.isValidCoord && !game.isValidCoord(cell.x, cell.y)) return null;
+        const ref = game.ref(cell.x, cell.y);
+        return game.ownerID(ref);
+      } catch {
+        return null;
       }
     }
 
@@ -1211,7 +1315,18 @@ export default defineContentScript({
           emit("send-result", { action: "embargo_all", embargoAction, success: false });
         }
       } else if (action === "capture-mouse") {
-        // ALT+M: resolve tile under mouse cursor, return owner info
+        // ALT+M: resolve tile under mouse cursor, return owner info.
+        // Prefer the game's own coordinate math (works under WebGL2); fall
+        // back to the legacy 2D-canvas transform reconstruction.
+        const gameOwner = resolveOwnerViaGame(mouseX, mouseY);
+        if (gameOwner != null) {
+          if (gameOwner !== 0) {
+            emit("mouse-target", { found: true, ownerSmallID: gameOwner });
+          } else {
+            emit("mouse-target", { found: false, reason: "no-owner" });
+          }
+          return;
+        }
         if (!targetCanvas || !worldTilesW || !worldTilesH) {
           emit("mouse-target", { found: false, reason: "no-canvas" });
           return;
@@ -1312,7 +1427,7 @@ export default defineContentScript({
         timeoutIds.length = 0;
         intervalIds.length = 0;
       },
-      version: "15.14.0-ext",
+      version: "15.17.0-ext",
     };
 
     console.log("[Hammer:Main] Hooks installed at document_start");

@@ -1,89 +1,76 @@
 import { describe, test, expect, beforeEach } from "vitest";
 import { useStore } from "../src/store/index";
 
-describe("mode-switching", () => {
+/**
+ * In-game view state machine + the externalOpen invariant.
+ * Replaces the old displayMode/uiVisible/minimized tests (those flags were
+ * collapsed into the single `inGameView` enum in v15.16.0).
+ */
+describe("inGameView state machine", () => {
   beforeEach(() => {
     const s = useStore.getState();
-    // Reset UI state
-    s.setView("about");
-    s.setDisplayMode("overlay");
-    s.setUIVisible(true);
+    s.setView("hammer");
+    s.disguiseInGame();
+    s.setExternalOpen(false);
     if (s.paused) s.togglePaused();
-    if (s.minimized) s.toggleMinimized();
     s.setSizeIdx(1);
   });
 
-  test("default display mode is overlay", () => {
-    expect(useStore.getState().displayMode).toBe("overlay");
+  test("default in-game view is disguised", () => {
+    expect(useStore.getState().inGameView).toBe("disguised");
   });
 
-  test("can switch to window mode", () => {
-    useStore.getState().setDisplayMode("window");
-    expect(useStore.getState().displayMode).toBe("window");
+  test("reveal / disguise / hide transitions", () => {
+    useStore.getState().revealInGame();
+    expect(useStore.getState().inGameView).toBe("revealed");
+    useStore.getState().disguiseInGame();
+    expect(useStore.getState().inGameView).toBe("disguised");
+    useStore.getState().hideInGame();
+    expect(useStore.getState().inGameView).toBe("hidden");
   });
 
-  test("can switch back to overlay mode", () => {
-    useStore.getState().setDisplayMode("window");
-    useStore.getState().setDisplayMode("overlay");
-    expect(useStore.getState().displayMode).toBe("overlay");
+  test("opening external hides the in-game overlay (invariant)", () => {
+    useStore.getState().revealInGame();
+    useStore.getState().setExternalOpen(true);
+    expect(useStore.getState().externalOpen).toBe(true);
+    expect(useStore.getState().inGameView).toBe("hidden");
   });
 
-  test("uiVisible defaults to true", () => {
-    expect(useStore.getState().uiVisible).toBe(true);
+  test("closing external restores the disguised card (the way back)", () => {
+    useStore.getState().setExternalOpen(true);
+    expect(useStore.getState().inGameView).toBe("hidden");
+    useStore.getState().setExternalOpen(false);
+    expect(useStore.getState().externalOpen).toBe(false);
+    expect(useStore.getState().inGameView).toBe("disguised");
   });
 
-  test("can hide UI", () => {
-    useStore.getState().setUIVisible(false);
-    expect(useStore.getState().uiVisible).toBe(false);
+  test("closing external does not clobber a non-hidden in-game view", () => {
+    // If external was never actually driving (in-game already revealed), a
+    // close should leave the revealed state intact.
+    useStore.getState().revealInGame();
+    useStore.getState().setExternalOpen(false);
+    expect(useStore.getState().inGameView).toBe("revealed");
   });
 
-  test("can show UI after hiding", () => {
-    useStore.getState().setUIVisible(false);
-    useStore.getState().setUIVisible(true);
-    expect(useStore.getState().uiVisible).toBe(true);
-  });
-
-  test("paused state is independent of display mode", () => {
+  test("paused is independent of view changes", () => {
     useStore.getState().togglePaused();
     expect(useStore.getState().paused).toBe(true);
-    useStore.getState().setDisplayMode("window");
-    expect(useStore.getState().paused).toBe(true);
-    useStore.getState().setDisplayMode("overlay");
+    useStore.getState().revealInGame();
+    useStore.getState().setExternalOpen(true);
     expect(useStore.getState().paused).toBe(true);
   });
 
-  test("view persists across display mode changes", () => {
+  test("view (active tab) persists across presentation changes", () => {
     useStore.getState().setView("cia");
-    useStore.getState().setDisplayMode("window");
-    expect(useStore.getState().view).toBe("cia");
-    useStore.getState().setDisplayMode("overlay");
+    useStore.getState().revealInGame();
+    useStore.getState().setExternalOpen(true);
+    useStore.getState().setExternalOpen(false);
     expect(useStore.getState().view).toBe("cia");
   });
 
-  test("minimized state persists across display mode changes", () => {
-    useStore.getState().toggleMinimized();
-    expect(useStore.getState().minimized).toBe(true);
-    useStore.getState().setDisplayMode("window");
-    expect(useStore.getState().minimized).toBe(true);
-  });
-
-  test("size index persists across display mode changes", () => {
+  test("sizeIdx persists across presentation changes", () => {
     useStore.getState().setSizeIdx(2);
-    useStore.getState().setDisplayMode("window");
+    useStore.getState().hideInGame();
     expect(useStore.getState().sizeIdx).toBe(2);
-  });
-
-  test("hiding UI does not affect paused state", () => {
-    useStore.getState().togglePaused();
-    useStore.getState().setUIVisible(false);
-    expect(useStore.getState().paused).toBe(true);
-    useStore.getState().setUIVisible(true);
-    expect(useStore.getState().paused).toBe(true);
-  });
-
-  test("hiding UI does not affect display mode", () => {
-    useStore.getState().setDisplayMode("window");
-    useStore.getState().setUIVisible(false);
-    expect(useStore.getState().displayMode).toBe("window");
   });
 });

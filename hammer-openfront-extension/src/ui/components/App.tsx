@@ -5,6 +5,7 @@ import GrowthHUD from "./GrowthHUD";
 import Panel from "./Panel";
 import HeaderButtons from "./HeaderButtons";
 import TabBar from "./TabBar";
+import DisguisedCard from "./DisguisedCard";
 import ReciprocatePopup from "./ReciprocatePopup";
 import DonationToast from "./DonationToast";
 import StatusToast from "./StatusToast";
@@ -51,6 +52,7 @@ import HelpView from "../views/HelpView";
 import RecorderView from "../views/RecorderView";
 import TradingView from "../views/TradingView";
 import BroadcastView from "../views/BroadcastView";
+import SettingsView from "../views/SettingsView";
 import HammerView from "../views/HammerView";
 
 interface AppProps {
@@ -68,6 +70,7 @@ const VIEW_MAP: Record<string, React.FC> = {
   comms: CommsView,
   cia: CIAView,
   broadcast: BroadcastView,
+  settings: SettingsView,
   help: HelpView,
   recorder: RecorderView,
 };
@@ -78,35 +81,46 @@ export default function App({ mode }: AppProps) {
   record("render", "App", { n: appRenders.current, mode });
 
   const view = useStore((s) => s.view);
-  const uiVisible = useStore((s) => s.uiVisible);
+  const inGameView = useStore((s) => s.inGameView);
+  const popupsEnabled = useStore((s) => s.popupsEnabled);
 
   // ── OVERLAY (in-browser, on the game page) ──
   if (mode === "overlay") {
-    // Notifications ALWAYS render on the game page — every state, every mode.
-    // They're non-intrusive and the user wants them visible regardless.
-    const notifications = (
+    // Popups render on the game screen in EVERY view mode — including "hidden"
+    // — gated only by the master popupsEnabled switch (each popup also has its
+    // own toggle internally). Decoupled from inGameView so notifications work
+    // regardless of whether the panel is shown. Each popup is fixed-positioned.
+    const notifications = popupsEnabled ? (
       <>
         <DonationToast />
         <ReciprocatePopup />
         <StatusToast />
         <GrowthHUD />
       </>
-    );
+    ) : null;
 
-    // Panel hidden (close button clicked): only notifications stay
-    if (!uiVisible) return notifications;
+    // "hidden": only popups on the game screen (no panel chrome at all).
+    if (inGameView === "hidden") return notifications;
 
-    // Normal overlay: panel + notifications
+    // "disguised": innocuous analytics card only — no tab bar, no header chrome.
+    // "revealed": full terminal — header buttons + tab bar + active view.
+    const revealed = inGameView === "revealed";
     const ActiveView = VIEW_MAP[view] ?? HammerView;
     return (
       <>
-        <Panel header={<HeaderButtons />}>
-          <TabBar mode="overlay" />
-          <div className="p-2">
-            <ViewErrorBoundary>
-              <ActiveView />
-            </ViewErrorBoundary>
-          </div>
+        <Panel header={revealed ? <HeaderButtons /> : null}>
+          {revealed ? (
+            <>
+              <TabBar mode="overlay" />
+              <div className="p-2">
+                <ViewErrorBoundary>
+                  <ActiveView />
+                </ViewErrorBoundary>
+              </div>
+            </>
+          ) : (
+            <DisguisedCard />
+          )}
         </Panel>
         {notifications}
       </>

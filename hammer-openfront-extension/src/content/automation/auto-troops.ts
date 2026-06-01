@@ -57,6 +57,8 @@ export function asResolveTargets(): ResolvedTarget[] {
 function asTroopsTick(): void {
   const s = useStore.getState();
 
+  if (s.isReplay) return; // no automation during replay playback
+
   if (!s.asTroopsRunning) {
     if (asTroopsTimer) {
       clearInterval(asTroopsTimer);

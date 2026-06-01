@@ -23,6 +23,8 @@ function log(...args: unknown[]): void {
 function broadcastTick(): void {
   const s = useStore.getState();
 
+  if (s.isReplay) return; // no automation during replay playback
+
   if (!s.broadcastEnabled) {
     broadcastStop();
     return;

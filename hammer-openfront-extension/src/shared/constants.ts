@@ -25,9 +25,14 @@ export const GameUpdateType = {
   Hash: 13,
   UnitIncoming: 14,
   BonusEvent: 15,
-  RailroadEvent: 16,
-  ConquestEvent: 17,
-  EmbargoEvent: 18,
+  RailroadDestructionEvent: 16,
+  RailroadConstructionEvent: 17,
+  RailroadSnapEvent: 18,
+  ConquestEvent: 19,
+  EmbargoEvent: 20,
+  SpawnPhaseEnd: 21,
+  GamePaused: 22,
+  DonateEvent: 23,
 } as const;
 
 export const CITY_TROOP_INCREASE = 250_000;

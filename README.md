@@ -19,9 +19,11 @@ This project started as `hammer-scripts/hammer.js`, a single-file console inject
 - **Alliances** — view teammates vs allies, manage diplomacy, search and filter players
 - **Broadcast** — timed emoji sequence broadcaster with configurable sequences and cadence
 - **Donation Toasts** — enriched popups when you receive resources: donor history, cumulative totals, ordinal count (1st/2nd/3rd gift)
-- **Notification Position Pickers** — independently position the ReciprocatePopup and DonationToast in any of 7 screen zones (TL, TC, TR, C, BL, BC, BR) via 3×3 grid selector
-- **StatusToast** — configurable center-screen flash for action confirmations; scale slider + test button in Help tab
-- **Dashboard Window** — detach the panel into a full browser window alongside the game; toggle back to overlay seamlessly
+- **Settings tab** — one place to configure all four popups (Reciprocate, Donation Toast, Status Toast, Growth HUD): master on/off switch, per-popup enable toggle, 3×3 position picker, scale slider, and a **Test** button to preview each before going live
+- **Popups in any view mode** — notifications render on the game screen whether the panel is showing the analytics card, the full controls, or hidden entirely
+- **Replay support** — Hammer auto-detects match replays: throttles hard so the fast-forwarded playback doesn't lag, pauses all automation, and still ingests data. Load a replay you weren't even in (a friend's match) to pull its analytics
+- **In-game view modes** — the overlay defaults to an innocuous "match analytics" card (stream-safe), expands to full controls on demand, or hides entirely; the extension toolbar icon is the master control center for switching and recovery
+- **Dashboard Window** — detach the panel into a full browser window alongside the game for a second monitor; the in-game overlay hides while it drives, and returns when you close it
 - **Match Export** — export all trading/economy data (CIA transfers, flow graph, player totals, donation feeds) as structured JSON for offline analysis
 - **Replay Viewer** — standalone static HTML app (`hammer-replay-viewer/index.html`) for visualizing exported match data: flow charts, leaderboards, timeline, net balance table, and suspicious pattern detection
 - **Flight Recorder** — structured event logger for diagnostics, exportable as JSON
@@ -33,7 +35,7 @@ This project started as `hammer-scripts/hammer.js`, a single-file console inject
 - Zustand — state management
 - Tailwind CSS v4 — styling (JetBrains Mono, pixel-based theme)
 - TypeScript — everything is typed
-- Vitest — unit tests (380+ tests)
+- Vitest — unit tests (446+ tests)
 
 ## Getting Started
 
@@ -61,6 +63,13 @@ npm run typecheck    # tsc --noEmit
 4. Click **Load unpacked**
 5. Select `.output/chrome-mv3`
 
+### Testing
+
+- `npm test` — full Vitest suite (446+ tests). Should be green except the DOM-dependent `.todo()` tests (they require real browser/game APIs).
+- `npm run typecheck` — `tsc --noEmit`. A handful of WXT auto-import errors (`defineBackground`, `defineContentScript`, `createShadowRootUi`) are expected and harmless; everything else should be clean.
+- **Game-contract tests** (`tests/game-contract.test.ts`) validate the extension's hardcoded constants (intent types, emoji table, quick-chat keys, `GameUpdateType` indices) against the cloned `OpenFrontIO` repo — they catch protocol drift when OpenFront updates.
+- **Live / manual verification** is still required for anything that touches the DOM, hooks, view modes, or replays — use the Flight Recorder route below.
+
 ## Architecture
 
 ```
@@ -77,13 +86,24 @@ Zustand Store (store/index.ts)
   |          reciprocate, comms, cia, donation-toasts, recorder
   v
 React UI (ui/)
-  |  Overlay (shadow DOM on game page)
+  |  Overlay (shadow DOM on game page) — inGameView: disguised | revealed | hidden
   |  Dashboard (detached window via background service worker)
+  |  Popup (toolbar icon) — master control center
   v
 Dashboard Sync (chrome.runtime.Port)
      Game tab <-> Dashboard window, 500ms snapshots
      LOCAL_KEYS pattern prevents clobbering user interactions
 ```
+
+### View modes & control
+
+The in-game overlay has one canonical presentation state, `inGameView`:
+
+- **disguised** (default) — an innocuous "match analytics" card with Reveal / Launch / Hide buttons. Stream-safe.
+- **revealed** — the full Hammer terminal (tab bar + active view).
+- **hidden** — nothing on the game page except popups.
+
+The background service worker owns the external window's lifecycle and is the single source of truth for `externalOpen` (invariant: external open ⇒ in-game hidden; closing it restores the disguised card). The **extension toolbar icon** is the always-available control center — switch view modes, launch/focus/close the external window, and **Reset views** to recover any stuck state.
 
 ## Directory Structure
 
@@ -138,9 +158,25 @@ Export as JSON and share recordings for offline analysis and debugging. Events a
 
 Categories: `hook`, `bridge`, `msg`, `recip`, `auto-t`, `auto-g`, `cmd`, `error`
 
+### Recording test route (not yet verified end-to-end)
+
+> ⚠️ **Untested:** this capture → export → inspect loop hasn't been validated on the current build. Use it to confirm the v15.15–15.17 changes behave live, and report findings back. Tracked in `ROADMAP.md`.
+
+1. Build (`npm run build`) and load `.output/chrome-mv3/` unpacked in Chrome.
+2. Open OpenFront, start (or join) a match — singleplayer team mode is fastest.
+3. Click **REC** in the panel header (or the Recorder tab) to start recording.
+4. Exercise the things you want to verify, then **Export** the recording (downloads `hammer-recording-<timestamp>.json`).
+5. Inspect the JSON for the metrics that prove the recent work:
+   - `displayEventsReceived` vs `displayEventsProcessed` — both should climb (processed > 0). This is the old "0 processed" bug check.
+   - `playerUpdatesReceived` / `playerUpdatesApplied` / `playerUpdatesThrottled` — applied should be far below received during normal play (throttle working).
+   - `intentsBlockedReplay` — should be 0 in a live game, and > 0 if you load a replay with automation on.
+6. **Replay checks:** load a match replay and confirm the tool stays responsive, `hook/replay {isReplay:true}` appears, and (for a replay you weren't in) CIA/Summary still populate.
+
+The exported JSON can also be dropped into `hammer-replay-viewer/index.html` if it's a match-data export (see above) — note the flight recording and the match-data export are two different files.
+
 ## Key Concepts
 
-**LOCAL_KEYS** — Store keys that represent user-interactive state (toggles, percentages, mode selections, position preferences). The dashboard never overwrites these from game tab snapshots. If you add a new user setting, add it to `LOCAL_KEYS` in `entrypoints/dashboard/App.tsx`.
+**LOCAL_KEYS** — Store keys that represent user-interactive state (toggles, percentages, mode selections, position preferences, `inGameView`/`externalOpen`). The dashboard never overwrites these from game tab snapshots. If you add a new user setting, add it to `LOCAL_KEYS` in `entrypoints/dashboard/App.tsx` — and, if it should survive a refresh, to `PersistedStateSchema` in `src/shared/schemas.ts` (config only; presentation and live automation toggles are deliberately not persisted).
 
 **Ally vs Teammate** — Teammates share a team (`player.team === myTeam`). Allies are alliance partners (`myAllies.has(player.smallID)`). `asIsAlly()` returns true for both. Betrayal alerts only fire for teammates.
 

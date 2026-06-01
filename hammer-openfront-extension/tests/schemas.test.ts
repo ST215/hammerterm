@@ -1,79 +1,70 @@
 import { describe, expect, test } from "vitest";
-import { PersistedStateSchema, DisplayEventSchema } from "../src/shared/schemas";
+import { PersistedStateSchema, PERSIST_KEYS, DisplayEventSchema } from "../src/shared/schemas";
 
-// PersistedStateSchema
+// PersistedStateSchema — config-only persistence (v15.16.0+).
 describe("PersistedStateSchema", () => {
   test("accepts empty object (all defaults)", () => {
     const result = PersistedStateSchema.parse({});
-    expect(result.reciprocateEnabled).toBe(false);
+    expect(result.reciprocateMode).toBe("manual");
+    expect(result.reciprocateAutoPct).toBe(50);
     expect(result.reciprocateOnTroops).toBe(true);
     expect(result.reciprocateOnGold).toBe(true);
-    expect(result.reciprocateMode).toBe("manual");
-    expect(result.reciprocatePercent).toBe(50);
-    expect(result.reciprocateNotifyDuration).toBe(10);
-    expect(result.asTroopsEnabled).toBe(false);
     expect(result.asTroopsRatio).toBe(20);
     expect(result.asTroopsThreshold).toBe(50);
-    expect(result.asTroopsCooldown).toBe(10);
-    expect(result.asGoldEnabled).toBe(false);
+    expect(result.asTroopsCooldownSec).toBe(10);
     expect(result.asGoldRatio).toBe(25);
-    expect(result.asGoldCooldown).toBe(10);
-    expect(result.ciaEnabled).toBe(true);
-    expect(result.logLevel).toBe(0);
-    expect(result.panelSize).toBe(1);
-    expect(result.panelVisible).toBe(true);
+    expect(result.asGoldCooldownSec).toBe(10);
+    expect(result.ciaWindowMs).toBe(60000);
+    expect(result.ciaFeedFilter).toBe("all");
+    expect(result.sizeIdx).toBe(1);
   });
 
-  test("accepts valid partial state", () => {
+  test("accepts valid partial state, defaults fill the rest", () => {
     const result = PersistedStateSchema.parse({
-      reciprocateEnabled: true,
       asTroopsRatio: 50,
-      reciprocateMode: "auto",
+      reciprocateMode: "palantir",
     });
-    expect(result.reciprocateEnabled).toBe(true);
     expect(result.asTroopsRatio).toBe(50);
-    expect(result.reciprocateMode).toBe("auto");
-    // defaults still applied for missing fields
-    expect(result.asGoldEnabled).toBe(false);
+    expect(result.reciprocateMode).toBe("palantir");
+    expect(result.asGoldRatio).toBe(25); // default still applied
   });
 
-  test("rejects invalid asTroopsRatio (>100)", () => {
-    expect(() => PersistedStateSchema.parse({ asTroopsRatio: 101 })).toThrow();
-  });
-
-  test("rejects invalid asTroopsRatio (<1)", () => {
-    expect(() => PersistedStateSchema.parse({ asTroopsRatio: 0 })).toThrow();
-  });
-
-  test("validates reciprocateMode enum", () => {
+  test("validates reciprocateMode enum (manual/auto/palantir)", () => {
     expect(() => PersistedStateSchema.parse({ reciprocateMode: "invalid" })).toThrow();
-    const manual = PersistedStateSchema.parse({ reciprocateMode: "manual" });
-    expect(manual.reciprocateMode).toBe("manual");
-    const auto = PersistedStateSchema.parse({ reciprocateMode: "auto" });
-    expect(auto.reciprocateMode).toBe("auto");
+    expect(PersistedStateSchema.parse({ reciprocateMode: "auto" }).reciprocateMode).toBe("auto");
+    expect(PersistedStateSchema.parse({ reciprocateMode: "palantir" }).reciprocateMode).toBe("palantir");
   });
 
-  test("all defaults match expected values", () => {
-    const defaults = PersistedStateSchema.parse({});
-    expect(defaults).toEqual({
-      reciprocateEnabled: false,
-      reciprocateOnTroops: true,
-      reciprocateOnGold: true,
-      reciprocateMode: "manual",
-      reciprocatePercent: 50,
-      reciprocateNotifyDuration: 10,
-      asTroopsEnabled: false,
-      asTroopsRatio: 20,
-      asTroopsThreshold: 50,
-      asTroopsCooldown: 10,
-      asGoldEnabled: false,
-      asGoldRatio: 25,
-      asGoldCooldown: 10,
-      ciaEnabled: true,
-      logLevel: 0,
-      panelSize: 1,
-      panelVisible: true,
-    });
+  test("validates ciaFeedFilter enum", () => {
+    expect(() => PersistedStateSchema.parse({ ciaFeedFilter: "nope" })).toThrow();
+    expect(PersistedStateSchema.parse({ ciaFeedFilter: "gold" }).ciaFeedFilter).toBe("gold");
+  });
+
+  test("PERSIST_KEYS matches the schema shape", () => {
+    const shapeKeys = Object.keys(PersistedStateSchema.shape).sort();
+    expect([...PERSIST_KEYS].sort()).toEqual(shapeKeys);
+  });
+
+  test("PERSIST_KEYS excludes live automation toggles & presentation", () => {
+    // These must never persist — automation must not silently resume and the
+    // overlay must always reopen as the disguised card.
+    for (const forbidden of [
+      "asTroopsRunning", "asGoldRunning", "reciprocateEnabled",
+      "broadcastEnabled", "recorderOn", "inGameView", "externalOpen", "paused",
+      "isReplay",
+    ]) {
+      expect(PERSIST_KEYS).not.toContain(forbidden);
+    }
+  });
+
+  test("popup/notification config keys persist", () => {
+    for (const key of [
+      "popupsEnabled", "growthHudEnabled",
+      "reciprocatePosition", "donationPosition", "statusPosition", "growthPosition",
+      "toastScale", "statusToastScale",
+    ]) {
+      expect(PERSIST_KEYS).toContain(key);
+    }
   });
 });
 

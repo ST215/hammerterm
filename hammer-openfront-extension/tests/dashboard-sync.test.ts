@@ -10,7 +10,7 @@ import { createCIAState } from "../src/shared/logic/cia";
 
 // Mirror the LOCAL_KEYS set from dashboard/App.tsx
 const LOCAL_KEYS = new Set([
-  "view", "paused", "minimized", "sizeIdx", "displayMode", "uiVisible",
+  "view", "paused", "sizeIdx", "inGameView", "externalOpen",
   "commsTargets", "commsGroupMode", "commsOthersExpanded",
   "commsPendingQC", "commsRecentSent", "allianceCommsExpanded",
   "reciprocateMode", "reciprocateRatio", "reciprocateType",
@@ -29,13 +29,13 @@ function filterSnapshot(data: Record<string, any>): Record<string, any> {
 }
 
 describe("dashboard snapshot filtering", () => {
-  test("excludes UI navigation keys from snapshot", () => {
+  test("excludes UI navigation / presentation keys from snapshot", () => {
     const snapshot = {
       view: "cia",
       paused: true,
-      minimized: false,
-      displayMode: "window",
-      uiVisible: true,
+      sizeIdx: 2,
+      inGameView: "revealed",
+      externalOpen: true,
       playersById: new Map([["p1", { name: "Alice" }]]),
       mySmallID: 1,
     };
@@ -46,10 +46,18 @@ describe("dashboard snapshot filtering", () => {
 
     expect(filtered.view).toBeUndefined();
     expect(filtered.paused).toBeUndefined();
-    expect(filtered.minimized).toBeUndefined();
-    expect(filtered.displayMode).toBeUndefined();
+    expect(filtered.inGameView).toBeUndefined();
+    expect(filtered.externalOpen).toBeUndefined();
     expect(filtered.playersById).toBeInstanceOf(Map);
     expect(filtered.mySmallID).toBe(1);
+  });
+
+  test("presentation keys are local (snapshots never clobber them)", () => {
+    // inGameView/externalOpen must stay user/background-controlled so a 500ms
+    // game-tab snapshot can't flip the external window's own view state.
+    for (const key of ["inGameView", "externalOpen", "view", "paused", "sizeIdx"]) {
+      expect(LOCAL_KEYS.has(key)).toBe(true);
+    }
   });
 
   test("excludes comms selection keys from snapshot", () => {

@@ -20,9 +20,9 @@ describe("UISlice", () => {
     expect(store.getState().paused).toBe(false);
   });
 
-  test('default displayMode is "overlay"', () => {
+  test('default inGameView is "disguised"', () => {
     const store = createTestStore();
-    expect(store.getState().displayMode).toBe("overlay");
+    expect(store.getState().inGameView).toBe("disguised");
   });
 
   test("default sizeIdx is 1", () => {
@@ -53,13 +53,14 @@ describe("UISlice", () => {
     expect(store.getState().paused).toBe(false);
   });
 
-  test("toggleMinimized flips minimized state", () => {
+  test("reveal/disguise/hide set inGameView", () => {
     const store = createTestStore();
-    expect(store.getState().minimized).toBe(false);
-    store.getState().toggleMinimized();
-    expect(store.getState().minimized).toBe(true);
-    store.getState().toggleMinimized();
-    expect(store.getState().minimized).toBe(false);
+    store.getState().revealInGame();
+    expect(store.getState().inGameView).toBe("revealed");
+    store.getState().hideInGame();
+    expect(store.getState().inGameView).toBe("hidden");
+    store.getState().disguiseInGame();
+    expect(store.getState().inGameView).toBe("disguised");
   });
 
   test("setSizeIdx updates size index", () => {
@@ -68,23 +69,19 @@ describe("UISlice", () => {
     expect(store.getState().sizeIdx).toBe(2);
   });
 
-  test('setDisplayMode switches to "window"', () => {
+  test("setExternalOpen(true) forces inGameView hidden", () => {
     const store = createTestStore();
-    store.getState().setDisplayMode("window");
-    expect(store.getState().displayMode).toBe("window");
+    store.getState().revealInGame();
+    store.getState().setExternalOpen(true);
+    expect(store.getState().externalOpen).toBe(true);
+    expect(store.getState().inGameView).toBe("hidden");
   });
 
-  test('setDisplayMode switches to "overlay"', () => {
+  test("setExternalOpen(false) restores disguised from hidden", () => {
     const store = createTestStore();
-    store.getState().setDisplayMode("window");
-    store.getState().setDisplayMode("overlay");
-    expect(store.getState().displayMode).toBe("overlay");
-  });
-
-  test("setUIVisible hides UI", () => {
-    const store = createTestStore();
-    expect(store.getState().uiVisible).toBe(true);
-    store.getState().setUIVisible(false);
-    expect(store.getState().uiVisible).toBe(false);
+    store.getState().setExternalOpen(true);
+    store.getState().setExternalOpen(false);
+    expect(store.getState().externalOpen).toBe(false);
+    expect(store.getState().inGameView).toBe("disguised");
   });
 });

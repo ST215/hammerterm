@@ -12,22 +12,17 @@ const ALL_TABS: { id: string; label: string }[] = [
   { id: "comms", label: "Comms" },
   { id: "cia", label: "CIA" },
   { id: "recorder", label: "Rec" },
+  { id: "settings", label: "Settings" },
   { id: "help", label: "Help" },
 ];
 
-const HAMMER_ONLY = ALL_TABS.filter((t) => t.id === "hammer");
-
-export default function TabBar({ mode }: { mode?: "overlay" | "window" }) {
+export default function TabBar({ mode: _mode }: { mode?: "overlay" | "window" }) {
   const view = useStore((s) => s.view);
   const setView = useStore((s) => s.setView);
-  const minimized = useStore((s) => s.minimized);
-  const tabsRevealed = useStore((s) => s.tabsRevealed);
 
-  if (minimized) return null;
-
-  // Window (external popup) always shows all tabs (already gated by Continue screen).
-  // Overlay (in-browser) shows only Hammer until the user reveals the rest.
-  const tabs = mode === "window" || tabsRevealed ? ALL_TABS : HAMMER_ONLY;
+  // TabBar is only rendered when the full terminal is shown (overlay "revealed"
+  // state, or the external window), so it always shows the complete tab set.
+  const tabs = ALL_TABS;
 
   return (
     <div

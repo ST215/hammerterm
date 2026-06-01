@@ -23,11 +23,33 @@ function debouncedSave(state: PersistedState) {
   }, DEBOUNCE_MS);
 }
 
+const VERSION = "15.17.0-ext";
+
 export default defineBackground(() => {
   console.log("[Hammer] Background service worker started");
 
   let dashboardWindowId: number | null = null;
   let gameTabId: number | null = null;
+  // Guards against duplicate windows from rapid double-clicks: while a
+  // windows.create() is in flight, dashboardWindowId is still null, so a second
+  // OPEN_DASHBOARD would otherwise create a second window.
+  let launchingDashboard = false;
+
+  // Tell the game-tab content script the authoritative external-window state.
+  // The content script applies setExternalOpen(open), which drives inGameView
+  // via the externalOpen invariant (open ⇒ in-game hidden; closed ⇒ disguised).
+  function notifyExternalState(open: boolean) {
+    if (gameTabId === null) return;
+    try {
+      chrome.tabs.sendMessage(
+        gameTabId,
+        { type: "EXTERNAL_STATE", open },
+        () => void chrome.runtime.lastError, // swallow "no receiver"
+      );
+    } catch {
+      /* tab gone */
+    }
+  }
 
   // Handle messages from popup and content scripts
   chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
@@ -63,6 +85,11 @@ export default defineBackground(() => {
     }
 
     if (message.type === "OPEN_DASHBOARD") {
+      // A create is already in flight — ignore (prevents duplicate windows).
+      if (launchingDashboard) {
+        sendResponse({ ok: true, pending: true });
+        return true;
+      }
       // Reuse existing dashboard window if it's still open
       if (dashboardWindowId !== null) {
         chrome.windows.get(dashboardWindowId, (win) => {
@@ -71,6 +98,7 @@ export default defineBackground(() => {
             openDashboardWindow(sendResponse);
           } else {
             chrome.windows.update(dashboardWindowId!, { focused: true });
+            notifyExternalState(true);
             sendResponse({ ok: true });
           }
         });
@@ -83,13 +111,13 @@ export default defineBackground(() => {
     if (message.type === "CLOSE_DASHBOARD") {
       if (dashboardWindowId !== null) {
         chrome.windows.remove(dashboardWindowId, () => {
-          if (chrome.runtime.lastError) {
-            // Window already gone
-          }
+          void chrome.runtime.lastError; // window already gone
           dashboardWindowId = null;
+          notifyExternalState(false);
           sendResponse({ ok: true });
         });
       } else {
+        notifyExternalState(false);
         sendResponse({ ok: true });
       }
       return true;
@@ -114,7 +142,47 @@ export default defineBackground(() => {
     }
 
     if (message.type === "GET_STATUS") {
-      sendResponse({ ok: true, version: "15.14.0-ext" });
+      // Report live control-center status. externalOpen is authoritative here
+      // (background owns the window); inGameView is fetched from the content
+      // script, which is the store's source of truth.
+      const externalOpen = dashboardWindowId !== null;
+      const respond = (inGameView: string | null, connected: boolean) =>
+        sendResponse({
+          ok: true,
+          version: VERSION,
+          externalOpen,
+          gameTabConnected: connected,
+          inGameView,
+        });
+      if (gameTabId === null) {
+        respond(null, false);
+        return true;
+      }
+      try {
+        chrome.tabs.sendMessage(gameTabId, { type: "GET_IN_GAME_VIEW" }, (resp) => {
+          if (chrome.runtime.lastError || !resp) respond(null, false);
+          else respond(resp.inGameView ?? null, true);
+        });
+      } catch {
+        respond(null, false);
+      }
+      return true;
+    }
+
+    if (message.type === "SET_IN_GAME_VIEW") {
+      // From the popup control center — forward to the content script.
+      if (gameTabId !== null) {
+        try {
+          chrome.tabs.sendMessage(
+            gameTabId,
+            { type: "SET_IN_GAME_VIEW", view: message.view },
+            () => void chrome.runtime.lastError,
+          );
+        } catch {
+          /* tab gone */
+        }
+      }
+      sendResponse({ ok: true });
       return true;
     }
 
@@ -122,6 +190,7 @@ export default defineBackground(() => {
   });
 
   function openDashboardWindow(sendResponse: (response: any) => void) {
+    launchingDashboard = true;
     chrome.windows.create(
       {
         url: chrome.runtime.getURL("/dashboard.html"),
@@ -130,7 +199,17 @@ export default defineBackground(() => {
         height: 820,
       },
       (win) => {
-        dashboardWindowId = win?.id ?? null;
+        launchingDashboard = false;
+        if (chrome.runtime.lastError || !win?.id) {
+          dashboardWindowId = null;
+          sendResponse({
+            ok: false,
+            error: chrome.runtime.lastError?.message ?? "window creation failed",
+          });
+          return;
+        }
+        dashboardWindowId = win.id;
+        notifyExternalState(true);
         sendResponse({ ok: true });
       },
     );
@@ -162,10 +241,14 @@ export default defineBackground(() => {
     } catch {}
   });
 
-  // Clean up tracked window ID when windows are closed
+  // Clean up tracked window ID when windows are closed (X on the popup, OS close,
+  // etc.). This is the critical "no stuck externalOpen / way back to in-game"
+  // fix: whenever the window goes away by any means, tell the content script to
+  // clear externalOpen, which restores the in-game overlay to its disguised card.
   chrome.windows.onRemoved.addListener((windowId) => {
     if (windowId === dashboardWindowId) {
       dashboardWindowId = null;
+      notifyExternalState(false);
     }
   });
 
