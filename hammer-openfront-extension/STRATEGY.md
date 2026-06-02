@@ -155,6 +155,53 @@ Source: `DefaultConfig.ts`
 - **Defense Post**: 5x defense magnitude, 3x speed
 - **Large defender (>150K tiles)**: 0.7-1.0 debuff
 
+### Attack ratio — how much to commit
+
+When you attack, the game commits `troops = attackRatio × yourTroops` (the slider, or
+T/Y keys). Per-tile attacker loss scales with `within(defenderTroops / committedTroops, 0.6, 2)`:
+
+| Committed vs defender's army | Per-tile cost |
+|---|---|
+| **≥ 1.67×** their troops | **0.6** (cheapest — the floor) |
+| ~1× | ~1.0 |
+| **≤ 0.5×** | **2.0** (3.3× worse) |
+
+Capture **speed** maxes at the same point (~1.67× their troops). So there's a sweet spot:
+commit ≈ **1.7× the defender's current army in one burst** → cheapest tiles AND fastest
+capture. More buys nothing but speed and ties up troops that can't defend; less makes every
+tile up to 3.3× costlier.
+
+Consequences:
+- **Neutral land / nations (expansion):** no defender army, so no penalty — high ratio is just
+  faster and retreat is free. Slam high.
+- **A real player:** crack them with a calculated burst (~1.5–2× their army), not a dribble.
+  Same-target land attacks auto-merge into one pool (no penalty), but the pool has to actually
+  be large to be cheap, so constant low-% slams are *safe but per-tile expensive*.
+- **Committed troops can't defend** and retreat costs 25% vs players (free vs neutral) — so
+  keep a reserve if a counter-attack is possible.
+
+## Attack-Ratio Governor
+
+The governor (Attack Ratio tab) auto-tunes the slider against your live troops/regen while you
+do the fighting. It writes the ratio client-side only (no server intent). It manages YOUR side
+(stockpile, regen throughput, safety) — it can't see the defender, so burst-vs-nibble timing
+stays your call. Modes:
+
+- **Manual** — observe only; you drive the slider/T-Y, governor just shows telemetry.
+- **Assist** — holds a constant ratio % you set, with floor + send cap guarding.
+- **Break-even** — holds your army at a target % you set (varies the ratio): spends the surplus,
+  eases off below target. Good for sustained pressure while keeping a reserve.
+- **Peak 42%** — holds at the 42% regen peak for max troops-produced/min — best for continuous
+  slamming of neutral/weak targets.
+
+Safety rails (apply to assist/break-even/peak):
+- **Floor reserve** — a *pre-emptive* wall: as troops approach the floor % the allowed ratio
+  ramps toward 1%, so even rapid clicking can't drain through it. Your defensive reserve.
+- **Send cap** — hard ceiling on any single attack (default 30%). Stops over-/full-sends.
+
+In multiplayer, auto modes channel teammate donations into attacks automatically (bounded by
+the send cap), while the floor preserves troops to defend a counter.
+
 ## Gold Generation
 
 - **Humans**: 100 gold/tick = 6,000 gold/min

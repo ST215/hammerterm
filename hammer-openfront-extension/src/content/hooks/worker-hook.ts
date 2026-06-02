@@ -33,6 +33,21 @@ export const cityLevelSumByOwner: Map<number, number> = new Map();
 let lastTick = 0;
 let lastTickMs = 0;
 
+/**
+ * Live troop count (internal units) for MY player. Updated on every player
+ * update (~100ms) — bypasses the store's 1s stats throttle (which exists to
+ * prevent UI blink). Kept as a plain scalar (not Zustand) so reading it never
+ * triggers re-renders. Used by the attack-ratio governor for fast, hard floor
+ * protection during rapid clicking. Updated from bridge.ts (the active path).
+ */
+let myLiveTroops = 0;
+export function getMyLiveTroops(): number {
+  return myLiveTroops;
+}
+export function setMyLiveTroops(v: number): void {
+  myLiveTroops = v;
+}
+
 // ---------------------------------------------------------------------------
 // Helper — extract a consistent PlayerData record from a raw player update
 // (which may have function-style getters from PlayerView objects)
@@ -117,6 +132,7 @@ function onWorkerMessage(e: MessageEvent): void {
       }
 
       if (my) {
+        if (my.troops != null) myLiveTroops = Number(my.troops);
         const smallID = my.smallID ?? store.mySmallID;
         const team = my.team ?? store.myTeam;
         if (smallID != null) {

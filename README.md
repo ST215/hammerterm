@@ -12,7 +12,7 @@ This project started as `hammer-scripts/hammer.js`, a single-file console inject
 
 - **Auto Troops** — automatically send troops to teammates/allies above a configurable threshold
 - **Auto Gold** — distribute gold to teammates on a timed interval
-- **Attack Ratio** — governor for the game's attack-ratio slider: fixed %, breakeven (hold troops steady), or peak-regen, with a safety floor and cap and live telemetry
+- **Attack Ratio** — governor for the game's attack-ratio slider while you do the fighting. Switchable modes: **Manual** (observe only), **Assist** (hold a set %), **Break-even** (hold your army at a target %), **Peak 42%** (max regen throughput). A **pre-emptive floor** caps the ratio by remaining headroom so rapid clicking can't drain you through your reserve, plus a **Send cap** against over-sends and live telemetry. Reads live troops so protection reacts instantly; writes are client-side (no server intent)
 - **Reciprocate** — automatically return resources when you receive donations (cross-resource: gold in, troops back). Includes **Palantir mode** — sacrifice-aware smart reciprocation that weighs donor sacrifice ratio, loyalty, team relationship, and your power phase. **Thank-you sends**: optionally fire a ❤️ heart or "thanks" quickchat to any donor (auto toggle or manual button), independent of send-back and working in every mode. Auto-send modes reset to off each match (values remembered) so nothing carries into a new game unexpectedly
 - **Trading View** — consolidated tab showing inbound/outbound donation history with cumulative stats and running totals
 - **CIA** — real-time threat intelligence tracking all server-wide transfers, betrayal alerts, leaderboard
@@ -80,7 +80,7 @@ MAIN world (hooks.content.ts)
   v
 ISOLATED world (content/bridge.ts)
   |  Routes messages to Zustand store
-  |  Runs automation engines (auto-troops, auto-gold, reciprocate)
+  |  Runs automation engines (auto-troops, auto-gold, reciprocate, attack-ratio)
   v
 Zustand Store (store/index.ts)
   |  Slices: ui, player, donations, auto-troops, auto-gold,
@@ -118,7 +118,7 @@ hammer-openfront-extension/
   src/
     content/
       bridge.ts            # Message router (MAIN -> store)
-      automation/          # reciprocate-engine, auto-troops, auto-gold, broadcast
+      automation/          # reciprocate-engine, auto-troops, auto-gold, broadcast, attack-ratio
       game/                # send.ts (game commands), message-processor.ts
     store/
       index.ts             # Combined Zustand store

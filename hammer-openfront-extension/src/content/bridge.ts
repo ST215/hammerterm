@@ -12,6 +12,7 @@ import { useStore } from "@store/index";
 import type { PlayerData } from "@shared/types";
 import { serialize } from "@shared/serialize";
 import { processDisplayMessage, drainPendingMessages } from "./game/message-processor";
+import { setMyLiveTroops } from "./hooks/worker-hook";
 import {
   record, startRecording, stopRecording,
   trackMetric, registerSnapshotProviders,
@@ -438,6 +439,9 @@ function handlePlayerUpdate(payload: {
   }
 
   if (my) {
+    // Live troop count for the governor — every update, bypassing the 1s store
+    // throttle above so floor protection reacts to rapid clicking immediately.
+    if (my.troops != null) setMyLiveTroops(Number(my.troops));
     const smallID = my.smallID ?? store.mySmallID;
     const team = my.team ?? store.myTeam;
     if (smallID != null) {

@@ -26,8 +26,8 @@ const LOCAL_KEYS = new Set([
   "asGoldThreshold", "asGoldCooldownSec",
   "asGoldAllTeamMode", "asGoldAllAlliesMode",
   // Attack-ratio governor config (telemetry stays out — it flows content→dashboard)
-  "attackRatioRunning", "attackRatioMode", "attackRatioFixedPct",
-  "attackRatioFloorPct", "attackRatioMaxCap",
+  "attackRatioRunning", "attackRatioMode", "attackRatioBasePct",
+  "attackRatioBreakevenPct", "attackRatioFloorPct", "attackRatioMaxCap",
   // Activity feed toggles
   "popupsEnabled", "growthHudEnabled",
   "toastInboundTroops", "toastInboundGold", "toastOutboundTroops", "toastOutboundGold",

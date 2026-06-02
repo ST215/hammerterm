@@ -1398,6 +1398,18 @@ export default defineContentScript({
         } else {
           emit("send-result", { action, success: false });
         }
+      } else if (action === "release-attack-ratio") {
+        // Hand control back to the native slider: the ControlPanel keeps its own
+        // `attackRatio` (updated by the player's drag / T-Y), so copy it into the
+        // shared uiState. After this the visible slider is authoritative again.
+        const us = resolveUIState();
+        let restored: number | null = null;
+        try {
+          const cp = document.querySelector("control-panel") as any;
+          if (cp && typeof cp.attackRatio === "number") restored = cp.attackRatio;
+        } catch {}
+        if (us && restored != null) us.attackRatio = restored;
+        emit("send-result", { action, success: us != null, ratio: restored ?? undefined });
       }
     }
 
@@ -1474,7 +1486,7 @@ export default defineContentScript({
         timeoutIds.length = 0;
         intervalIds.length = 0;
       },
-      version: "15.19.0-ext",
+      version: "15.21.0-ext",
     };
 
     console.log("[Hammer:Main] Hooks installed at document_start");

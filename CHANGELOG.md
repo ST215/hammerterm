@@ -4,6 +4,37 @@ All notable changes to Hammer Control Panel will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [15.21.0] - 2026-06-02 "Attack-Ratio Governor: Control Model + Hard Floor"
+
+Refines the Attack Ratio governor (introduced in 15.19.0) based on play testing.
+
+### Changed
+
+- **Reworked the modes** into a switchable control model. The player keeps tactical control
+  (where/when/who to attack); the governor manages the ratio:
+  - **Manual** — observe only; the native slider / T-Y are fully the player's. On Stop or when
+    switching to Manual, the governor **hands the ratio back** to the native slider so the next
+    manual attack isn't stuck at the governor's last value.
+  - **Assist** — hold a constant ratio % the player sets.
+  - **Break-even** — hold the army at a **target % the player sets** (was: hold at engage-time
+    level), varying the ratio to keep that level.
+  - **Peak 42%** — hold at the regen-optimal level for max sustained throughput.
+- **Renamed the upper bound to "Send cap"** with clearer copy, and defaulted it to **30%**
+  (was effectively 100%, a no-op) so no mode can full-send unless raised.
+
+### Fixed
+
+- **Over-send / full-send.** In Peak mode near max troops the controller computed ~90%; with the
+  cap defaulting to 100% it never protected the player. The 30% default cap now bounds every mode.
+- **Floor protection reacted too slowly under rapid clicking.** The governor read troop counts
+  from the store, which throttles stat updates to 1s (to prevent UI blink), so it decided on a
+  troop number up to ~1s stale and kept applying a high ratio while the player drained in
+  real-time. Now it reads a **live (≤100ms) troop scalar** (`getMyLiveTroops`, fed unthrottled
+  from the bridge's player handler — a plain scalar, no UI subscription, no blink), ticks at
+  **150ms**, and the floor is now a **pre-emptive wall**: the allowed ratio is capped by remaining
+  headroom `(troops − floorTroops) / troops`, ramping toward 1% as troops approach the floor — so
+  even fast clicking can't drain through it. The **floor now defaults ON at 25%**.
+
 ## [15.19.0] - 2026-06-02 "Match-Reset State + Thank-You + Attack Ratio + One-Click Viewer"
 
 ### Added

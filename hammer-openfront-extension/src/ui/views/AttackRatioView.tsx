@@ -10,25 +10,29 @@ import {
 } from "@content/automation/attack-ratio";
 
 const MODES: { id: AttackRatioMode; label: string; blurb: string }[] = [
-  { id: "fixed", label: "Fixed %", blurb: "Hold a constant ratio — locked, never drifts." },
-  { id: "breakeven", label: "Break-even", blurb: "Spend exactly your regen income — stockpile stays flat." },
-  { id: "peak", label: "Peak 42%", blurb: "Park at the 42% regen power-band for max troop throughput." },
+  { id: "manual", label: "Manual", blurb: "Observe only — you drive the slider/T-Y; the governor just shows the numbers." },
+  { id: "assist", label: "Assist", blurb: "Hold a constant % per attack, with floor + send cap protecting you." },
+  { id: "breakeven", label: "Break-even", blurb: "Hold your army at a target % — spends the surplus, keeps your reserve." },
+  { id: "peak", label: "Peak 42%", blurb: "Hold at the 42% regen peak — most troops produced/min for sustained slamming." },
 ];
 
-const FIXED_PRESETS = [2, 3, 5, 10, 15, 20, 25];
+const BASE_PRESETS = [2, 3, 5, 10, 15, 20];
+const HOLD_PRESETS = [30, 42, 50, 60, 70];
 const FLOOR_PRESETS = [0, 25, 42, 50, 60];
-const CAP_PRESETS = [25, 50, 75, 100];
+const CAP_PRESETS = [15, 20, 30, 50, 75, 100];
 
 export default function AttackRatioView() {
   const running = useStore((s) => s.attackRatioRunning);
   const mode = useStore((s) => s.attackRatioMode);
-  const fixedPct = useStore((s) => s.attackRatioFixedPct);
+  const basePct = useStore((s) => s.attackRatioBasePct);
+  const breakevenPct = useStore((s) => s.attackRatioBreakevenPct);
   const floorPct = useStore((s) => s.attackRatioFloorPct);
   const maxCap = useStore((s) => s.attackRatioMaxCap);
   const tel = useStore((s) => s.attackRatioTelemetry);
 
   const setMode = useStore((s) => s.setAttackRatioMode);
-  const setFixedPct = useStore((s) => s.setAttackRatioFixedPct);
+  const setBasePct = useStore((s) => s.setAttackRatioBasePct);
+  const setBreakevenPct = useStore((s) => s.setAttackRatioBreakevenPct);
   const setFloorPct = useStore((s) => s.setAttackRatioFloorPct);
   const setMaxCap = useStore((s) => s.setAttackRatioMaxCap);
 
@@ -38,9 +42,10 @@ export default function AttackRatioView() {
   }, [running]);
 
   const activeBlurb = MODES.find((m) => m.id === mode)?.blurb ?? "";
+  const isManual = mode === "manual";
 
   // Telemetry (internal units → display units for the readout).
-  const ratioPct = tel ? Math.round(tel.ratio * 100) : null;
+  const ratioLabel = tel && !isManual ? `${Math.round(tel.ratio * 100)}%` : isManual ? "Manual" : "—";
   const regenDisp = tel ? short(dTroops(tel.regenPerSec)) : "—";
   const troopPct = tel ? Math.round(tel.troopPct) : null;
   const slopeDisp = tel ? dTroops(tel.netSlope) : 0;
@@ -60,7 +65,9 @@ export default function AttackRatioView() {
           />
           <span className="text-xs text-hammer-text">
             {running
-              ? <>Governing ratio{ratioPct != null ? <> — <span className="text-hammer-green">{ratioPct}%</span></> : null}</>
+              ? isManual
+                ? <>Watching — <span className="text-hammer-muted">you control the ratio</span></>
+                : <>Governing — <span className="text-hammer-green">{ratioLabel}</span></>
               : "Governor off"}
           </span>
         </div>
@@ -77,14 +84,15 @@ export default function AttackRatioView() {
       </div>
 
       <div className="text-2xs text-hammer-dim">
-        You still pick where & when to attack — this only tunes the slider so each
-        attack commits the right amount. No data is sent to the server.
+        You pick where & when to attack — this only sets the slider so each attack commits the
+        right amount. While on, the governor owns the ratio; on Stop (or Manual) it hands control
+        back to your native slider. Nothing is sent to the server.
       </div>
 
       {/* Live telemetry */}
       <Section title="Live">
         <div className="grid grid-cols-2 gap-1">
-          <StatCard label="Attack ratio" value={ratioPct != null ? `${ratioPct}%` : "—"} color="text-hammer-green" />
+          <StatCard label="Attack ratio" value={ratioLabel} color={isManual ? "text-hammer-muted" : "text-hammer-green"} />
           <StatCard label="Regen" value={`${regenDisp}/s`} color="text-hammer-blue" />
           <StatCard
             label="Troops"
@@ -110,42 +118,66 @@ export default function AttackRatioView() {
         <div className="text-2xs text-hammer-dim mt-1">{activeBlurb}</div>
       </Section>
 
-      {/* Fixed % (only relevant in fixed mode) */}
-      {mode === "fixed" && (
-        <Section title="Fixed ratio">
+      {/* Assist base ratio */}
+      {mode === "assist" && (
+        <Section title="Hold ratio at">
           <div className="flex flex-wrap gap-1">
-            {FIXED_PRESETS.map((p) => (
-              <PresetButton key={p} label={`${p}%`} active={fixedPct === p} onClick={() => setFixedPct(p)} />
+            {BASE_PRESETS.map((p) => (
+              <PresetButton key={p} label={`${p}%`} active={basePct === p} onClick={() => setBasePct(p)} />
             ))}
+          </div>
+          <div className="text-2xs text-hammer-dim mt-1">Every attack commits this % of your troops.</div>
+        </Section>
+      )}
+
+      {/* Break-even target level */}
+      {mode === "breakeven" && (
+        <Section title="Hold army at">
+          <div className="flex flex-wrap gap-1">
+            {HOLD_PRESETS.map((p) => (
+              <PresetButton key={p} label={`${p}%`} active={breakevenPct === p} onClick={() => setBreakevenPct(p)} />
+            ))}
+          </div>
+          <div className="text-2xs text-hammer-dim mt-1">
+            Keeps your army near this % of max — spends everything above it, eases off below it.
           </div>
         </Section>
       )}
 
       {/* Floor reserve */}
-      <Section title="Floor reserve">
-        <div className="flex flex-wrap gap-1">
-          {FLOOR_PRESETS.map((p) => (
-            <PresetButton
-              key={p}
-              label={p === 0 ? "Off" : `${p}%`}
-              active={floorPct === p}
-              onClick={() => setFloorPct(p)}
-            />
-          ))}
-        </div>
-        <div className="text-2xs text-hammer-dim mt-1">
-          Below this % of max troops, the ratio is pinned low so a counter can't catch you empty.
-        </div>
-      </Section>
+      {!isManual && (
+        <Section title="Floor reserve">
+          <div className="flex flex-wrap gap-1">
+            {FLOOR_PRESETS.map((p) => (
+              <PresetButton
+                key={p}
+                label={p === 0 ? "Off" : `${p}%`}
+                active={floorPct === p}
+                onClick={() => setFloorPct(p)}
+              />
+            ))}
+          </div>
+          <div className="text-2xs text-hammer-dim mt-1">
+            A hard, pre-emptive wall: as troops approach this % of max, the ratio auto-tightens
+            toward 1% — so even rapid clicking can't drain you through it. Committed troops can't
+            defend, so this is your defensive reserve.
+          </div>
+        </Section>
+      )}
 
-      {/* Max cap */}
-      <Section title="Max ratio cap">
-        <div className="flex flex-wrap gap-1">
-          {CAP_PRESETS.map((p) => (
-            <PresetButton key={p} label={`${p}%`} active={maxCap === p} onClick={() => setMaxCap(p)} />
-          ))}
-        </div>
-      </Section>
+      {/* Send cap */}
+      {!isManual && (
+        <Section title="Send cap">
+          <div className="flex flex-wrap gap-1">
+            {CAP_PRESETS.map((p) => (
+              <PresetButton key={p} label={`${p}%`} active={maxCap === p} onClick={() => setMaxCap(p)} />
+            ))}
+          </div>
+          <div className="text-2xs text-hammer-dim mt-1">
+            The most any single attack will ever commit — a hard ceiling, even in Auto. Stops over-sends.
+          </div>
+        </Section>
+      )}
     </div>
   );
 }

@@ -7,27 +7,30 @@
  * amount. Setting the ratio is a pure client-side write — no server intent — so
  * this is unaffected by the intent rate limiter and carries no kick risk.
  *
- * One proportional controller drives the ratio; the mode only changes the
- * troop-level setpoint it aims for:
- *   - fixed:     open loop — hold a constant %.
- *   - breakeven: setpoint = the troop level when cruise was engaged (hold flat).
- *   - peak:      setpoint = 42% of max (the regen power-band) for max throughput.
- * A floor-reserve clamp overrides any mode: below the floor, the ratio is pinned
- * low so a counter-attack can't catch the player empty.
+ * Modes:
+ *   - manual:    observe only — write nothing; the player drives the slider/T-Y.
+ *   - assist:    hold a constant ratio % the player sets.
+ *   - breakeven: hold the troop LEVEL at the player's target % (vary the ratio).
+ *   - peak:      hold the troop LEVEL at 42% of max (the regen power-band).
+ * A pre-emptive floor caps the ratio by remaining headroom above the floor, so
+ * rapid clicks auto-tighten toward 1% as troops approach the floor — a counter
+ * can't catch the player empty. Troops are read from a live (≤100ms) scalar so
+ * the floor reacts to fast clicking despite the store's 1s stats throttle.
  */
 
 import { useStore } from "@store/index";
 import { readMyPlayer } from "@shared/logic/player-helpers";
 import { estimateMaxTroops } from "@shared/logic/city";
-import { cityLevelSumByOwner } from "@content/hooks/worker-hook";
+import { cityLevelSumByOwner, getMyLiveTroops } from "@content/hooks/worker-hook";
 import { troopGrowthPerSec, OPTIMAL_REGEN_PCT } from "@shared/logic/troop-math";
-import type { AttackRatioMode } from "@store/slices/attack-ratio";
-import { asSetAttackRatio } from "../game/send";
+import type { AttackRatioMode, AttackRatioTelemetry } from "@store/slices/attack-ratio";
+import { asSetAttackRatio, asReleaseAttackRatio } from "../game/send";
 import { registerInterval } from "../cleanup";
 
 // ---------- Tuning (module constants — not user-exposed) ----------
 
-const TICK_MS = 500;
+const TICK_MS = 150; // control loop — fast so floor protection reacts to rapid clicks
+const TELEMETRY_MS = 500; // throttle HUD telemetry writes (control runs faster)
 const SLOPE_WINDOW_MS = 4000; // trailing window for net troop-slope readout
 const MIN_RATIO = 0.01; // game's slider minimum
 const BASE_RATIO = 0.03; // ratio applied when troops sit exactly at the setpoint
@@ -39,11 +42,18 @@ const WRITE_EPS = 0.005; // skip re-writing the slider for sub-half-percent chan
 let timer: ReturnType<typeof setInterval> | null = null;
 let history: Array<{ t: number; troops: number }> = [];
 let lastApplied = -1;
-let refTroops = 0; // frozen setpoint for breakeven mode
 let lastMode: AttackRatioMode | null = null;
+let lastTelemetryMs = 0;
 
 function log(...args: unknown[]): void {
   console.log("[Hammer]", ...args);
+}
+
+/** Push telemetry to the store at most every TELEMETRY_MS (control loop is faster). */
+function pushTelemetry(now: number, tel: AttackRatioTelemetry | null): void {
+  if (tel != null && now - lastTelemetryMs < TELEMETRY_MS) return;
+  lastTelemetryMs = now;
+  useStore.getState().setAttackRatioTelemetry(tel);
 }
 
 /** Net troop change (internal units/sec) over the trailing window. */
@@ -78,7 +88,10 @@ function tick(): void {
     return;
   }
 
-  const troops = Number(me.troops || 0);
+  // Troops from the live (≤100ms) scalar so floor protection sees rapid-click
+  // drain immediately; the store value lags up to 1s (stats throttle). maxT uses
+  // tilesOwned/cities (slow-moving), so the throttled store value is fine there.
+  const troops = Number(getMyLiveTroops() || me.troops || 0);
   const maxT = estimateMaxTroops(me.tilesOwned ?? 0, me.smallID ?? 0, cityLevelSumByOwner);
   if (maxT <= 0) {
     s.setAttackRatioTelemetry(null);
@@ -89,33 +102,49 @@ function tick(): void {
   history.push({ t: now, troops });
   const slope = netSlope(now);
   const regenPerSec = troopGrowthPerSec(troops, maxT);
+  const troopPct = (troops / maxT) * 100;
 
-  // Freeze the breakeven setpoint at the troop level present when cruise engaged;
-  // otherwise keep it tracking the live count so a later switch starts from "now".
   const mode = s.attackRatioMode;
-  if (mode === "breakeven") {
-    if (lastMode !== "breakeven") refTroops = troops;
-  } else {
-    refTroops = troops;
+
+  // Manual: observe only — write nothing. Hand the ratio back to the native
+  // slider once on entry so the player's slider/T-Y is authoritative again.
+  if (mode === "manual") {
+    if (lastMode !== "manual") {
+      asReleaseAttackRatio();
+      lastApplied = -1;
+    }
+    lastMode = mode;
+    pushTelemetry(now, { ratio: 0, regenPerSec, troops, maxT, troopPct, netSlope: slope });
+    return;
   }
   lastMode = mode;
 
   // ---- Choose the ratio ----
   let ratio: number;
-  if (mode === "fixed") {
-    ratio = s.attackRatioFixedPct / 100;
+  if (mode === "assist") {
+    // Hold a constant ratio (how much each attack commits).
+    ratio = s.attackRatioBasePct / 100;
   } else {
-    const setpoint = mode === "peak" ? OPTIMAL_REGEN_PCT * maxT : refTroops;
-    // Above setpoint → attack harder to drain; below → ease off and let regen climb.
+    // Hold a troop LEVEL by varying the ratio. break-even targets the player's
+    // chosen %, peak targets the 42% regen optimum. Above setpoint → attack
+    // harder to drain; below → ease off and let regen climb back.
+    const targetPct = mode === "peak" ? OPTIMAL_REGEN_PCT : s.attackRatioBreakevenPct / 100;
+    const setpoint = targetPct * maxT;
     ratio = BASE_RATIO + KP * ((troops - setpoint) / maxT);
   }
 
-  // Floor reserve overrides everything: pin low when below the defensive floor.
+  // Floor reserve — a PRE-EMPTIVE wall, not a tripwire. The most we can commit
+  // without crossing the floor is (troops - floorTroops); express that as a ratio
+  // ceiling. As troops approach the floor it → 0, so the ratio ramps to MIN (1%)
+  // and even rapid clicks near the floor barely spend. At/below floor it pins to MIN.
   const floorPct = s.attackRatioFloorPct;
-  if (floorPct > 0 && troops < (floorPct / 100) * maxT) {
-    ratio = MIN_RATIO;
+  if (floorPct > 0) {
+    const floorTroops = (floorPct / 100) * maxT;
+    const maxSafe = troops > 0 ? Math.max(0, (troops - floorTroops) / troops) : 0;
+    ratio = Math.min(ratio, maxSafe);
   }
 
+  // Send cap is the hard guarantee against over-sends.
   ratio = Math.max(MIN_RATIO, Math.min(s.attackRatioMaxCap / 100, ratio));
 
   if (Math.abs(ratio - lastApplied) >= WRITE_EPS) {
@@ -123,14 +152,7 @@ function tick(): void {
     lastApplied = ratio;
   }
 
-  s.setAttackRatioTelemetry({
-    ratio,
-    regenPerSec,
-    troops,
-    maxT,
-    troopPct: (troops / maxT) * 100,
-    netSlope: slope,
-  });
+  pushTelemetry(now, { ratio, regenPerSec, troops, maxT, troopPct, netSlope: slope });
 }
 
 // ---------- Start / Stop ----------
@@ -141,6 +163,7 @@ export function asAttackRatioStart(): void {
   history = [];
   lastApplied = -1;
   lastMode = null;
+  lastTelemetryMs = 0;
   s.setAttackRatioRunning(true);
   if (timer) clearInterval(timer);
   timer = setInterval(tick, TICK_MS);
@@ -155,5 +178,8 @@ export function asAttackRatioStop(): void {
     clearInterval(timer);
     timer = null;
   }
+  // Hand the ratio back to the native slider so the next manual attack uses the
+  // visible slider's value, not the governor's last write.
+  asReleaseAttackRatio();
   log("[ATTACK-RATIO] Governor stopped");
 }

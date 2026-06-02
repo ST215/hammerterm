@@ -179,6 +179,18 @@ export function asSetAttackRatio(ratio: number): void {
   sendToMainWorld({ action: "set-attack-ratio", amount: clamped });
 }
 
+/**
+ * Hand the attack ratio back to the player's native slider. Reads the game's
+ * ControlPanel (which the player's own drag / T-Y keep current) and copies its
+ * value into the shared uiState, so after the governor disengages the next
+ * manual attack uses the visible slider's value, not the governor's last write.
+ * Client-side only — not rate-limited.
+ */
+export function asReleaseAttackRatio(): void {
+  if (useStore.getState().isReplay) return;
+  sendToMainWorld({ action: "release-attack-ratio" });
+}
+
 // ---------- sendEmoji ----------
 
 export function sendEmoji(recipientId: string, emojiIndex: number): boolean {

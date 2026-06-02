@@ -99,8 +99,8 @@ _Working if: fewer unnecessary changes in diffs, fewer rewrites from overcomplic
 - **ISOLATED world** (`src/content/bridge.ts`): Receives MAIN world data, updates Zustand store, handles dashboard port sync.
 - **Background** (`entrypoints/background.ts`): Service worker for tab management, dashboard window, config persistence.
 - **Dashboard** (`entrypoints/dashboard/`): Separate window that syncs state from the game tab's content script.
-- **Store** (`src/store/`): Zustand with 10 slices (ui, player, donations, auto-troops, auto-gold, reciprocate, comms, cia, donation-toasts, recorder).
-- **Automation** (`src/content/automation/`): reciprocate-engine, auto-troops, auto-gold, broadcast — all run in ISOLATED world.
+- **Store** (`src/store/`): Zustand with 12 slices (ui, player, donations, auto-troops, auto-gold, reciprocate, comms, cia, donation-toasts, recorder, broadcast, attack-ratio).
+- **Automation** (`src/content/automation/`): reciprocate-engine, auto-troops, auto-gold, broadcast, attack-ratio — all run in ISOLATED world. (attack-ratio governs the game's attack-ratio slider via a client-side `uiState.attackRatio` write — no server intent; reads a live troop scalar from worker-hook for fast floor protection.)
 - **Flight Recorder** (`src/recorder.ts`): Toggleable structured event logger. Records automation decisions, message flow, hook status. Export as JSON for diagnostics.
 - **Global Intent Rate Limiter** (`src/content/game/send.ts`): All game actions queue through a central limiter (8/sec, 120/min) to stay under OpenFront server limits (10/sec, 150/min).
 
@@ -144,7 +144,7 @@ _Working if: fewer unnecessary changes in diffs, fewer rewrites from overcomplic
 
 - UI uses React components with Tailwind v4 classes. Views are in `src/ui/views/`, components in `src/ui/components/`.
 - View switching via `VIEW_MAP` in `App.tsx` + `TABS` in `TabBar.tsx`.
-- Tab names: "Troop MGMT", "Gold MGMT" (not "AutoTroops"/"AutoGold").
+- Tab names: "Troop MGMT", "Gold MGMT" (not "AutoTroops"/"AutoGold"), "Attack Ratio".
 - Design system components in `src/ui/components/ds/` (Badge, DataRow, Section, StatCard, etc.).
 - Overlay mode renders in shadow DOM on game page. Window mode renders in dashboard popup.
 - `LOCAL_KEYS` in `entrypoints/dashboard/App.tsx` controls which store keys are user-interactive (not overwritten by game tab snapshots). Any new user-configurable setting must be added here.
