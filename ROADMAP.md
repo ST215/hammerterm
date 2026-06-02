@@ -73,6 +73,10 @@ Use the **Flight Recorder test route** in `README.md` to confirm each.
 - [ ] **Dead 2D canvas hook** — under WebGL2 the old `CanvasRenderingContext2D` `setTransform`/
       `drawImage` hook never fires (ALT+M now uses the game's TransformHandler). The 2D path is kept
       as a harmless fallback; consider removing if no pre-WebGL2 server remains.
+- [ ] **Replay viewer is duplicated** — the SPA now lives in two places: `hammer-replay-viewer/index.html`
+      (standalone, CDN Chart.js, file-drop) and `hammer-openfront-extension/public/replay-viewer.html`
+      (bundled, vendored Chart.js, chrome.storage auto-load). They're hand-synced. Add a build step
+      that copies the standalone into `public/` and rewrites the script tag, so there's one source.
 - [ ] **OpenFront reference clone drift** — `OpenFrontIO/` is pinned at `v0.32.0-test-release3`.
       Re-pull periodically and re-run game-contract tests to catch protocol changes early.
 
@@ -91,6 +95,7 @@ Use the **Flight Recorder test route** in `README.md` to confirm each.
 
 ## ✅ Recently shipped (for context)
 
+- **v15.19.0** — fixed reciprocate auto-send bleeding across matches (live toggles reset each match, values persist); thank-you sends (heart/quickchat, auto + manual); Attack Ratio governor (fixed/breakeven/peak); one-click "Export & View" replay viewer.
 - **v15.17.0** — replay support (detect/throttle/no-self ingest), popups in any view mode, Settings tab.
 - **v15.16.0** — `inGameView` state machine, reliable external-window lifecycle, popup control center, persistence.
 - **v15.15.0** — OpenFront v0.32 sync (PlayerUpdate delta merge, WebGL2 ALT+M, enum re-sync).

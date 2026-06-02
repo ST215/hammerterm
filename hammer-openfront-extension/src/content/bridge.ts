@@ -298,6 +298,7 @@ function handleInit(payload: { clientID: string }): void {
     store.resetComms();
     store.resetCIA();
     store.resetDonationToasts();
+    store.resetAttackRatio();
   }
 
   store.setCurrentClientID(payload.clientID);

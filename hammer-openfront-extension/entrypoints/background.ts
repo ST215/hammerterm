@@ -23,7 +23,7 @@ function debouncedSave(state: PersistedState) {
   }, DEBOUNCE_MS);
 }
 
-const VERSION = "15.17.0-ext";
+const VERSION = "15.19.0-ext";
 
 export default defineBackground(() => {
   console.log("[Hammer] Background service worker started");
@@ -105,6 +105,24 @@ export default defineBackground(() => {
       } else {
         openDashboardWindow(sendResponse);
       }
+      return true;
+    }
+
+    if (message.type === "OPEN_REPLAY_VIEWER") {
+      // Open the bundled replay viewer; it reads the just-exported data from
+      // chrome.storage.local on load. A fresh window each time is fine.
+      chrome.windows.create(
+        {
+          url: chrome.runtime.getURL("/replay-viewer.html"),
+          type: "popup",
+          width: 1200,
+          height: 900,
+        },
+        () => {
+          void chrome.runtime.lastError;
+          sendResponse({ ok: true });
+        },
+      );
       return true;
     }
 

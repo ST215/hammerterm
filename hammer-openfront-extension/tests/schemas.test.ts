@@ -5,7 +5,6 @@ import { PersistedStateSchema, PERSIST_KEYS, DisplayEventSchema } from "../src/s
 describe("PersistedStateSchema", () => {
   test("accepts empty object (all defaults)", () => {
     const result = PersistedStateSchema.parse({});
-    expect(result.reciprocateMode).toBe("manual");
     expect(result.reciprocateAutoPct).toBe(50);
     expect(result.reciprocateOnTroops).toBe(true);
     expect(result.reciprocateOnGold).toBe(true);
@@ -17,22 +16,25 @@ describe("PersistedStateSchema", () => {
     expect(result.ciaWindowMs).toBe(60000);
     expect(result.ciaFeedFilter).toBe("all");
     expect(result.sizeIdx).toBe(1);
+    // Thank-you config persists; default off, heart mode
+    expect(result.thankEnabled).toBe(false);
+    expect(result.thankMode).toBe("emoji");
   });
 
   test("accepts valid partial state, defaults fill the rest", () => {
     const result = PersistedStateSchema.parse({
       asTroopsRatio: 50,
-      reciprocateMode: "palantir",
+      thankMode: "quickchat",
     });
     expect(result.asTroopsRatio).toBe(50);
-    expect(result.reciprocateMode).toBe("palantir");
+    expect(result.thankMode).toBe("quickchat");
     expect(result.asGoldRatio).toBe(25); // default still applied
   });
 
-  test("validates reciprocateMode enum (manual/auto/palantir)", () => {
-    expect(() => PersistedStateSchema.parse({ reciprocateMode: "invalid" })).toThrow();
-    expect(PersistedStateSchema.parse({ reciprocateMode: "auto" }).reciprocateMode).toBe("auto");
-    expect(PersistedStateSchema.parse({ reciprocateMode: "palantir" }).reciprocateMode).toBe("palantir");
+  test("validates thankMode enum (emoji/quickchat)", () => {
+    expect(() => PersistedStateSchema.parse({ thankMode: "nope" })).toThrow();
+    expect(PersistedStateSchema.parse({ thankMode: "emoji" }).thankMode).toBe("emoji");
+    expect(PersistedStateSchema.parse({ thankMode: "quickchat" }).thankMode).toBe("quickchat");
   });
 
   test("validates ciaFeedFilter enum", () => {
@@ -47,9 +49,10 @@ describe("PersistedStateSchema", () => {
 
   test("PERSIST_KEYS excludes live automation toggles & presentation", () => {
     // These must never persist — automation must not silently resume and the
-    // overlay must always reopen as the disguised card.
+    // overlay must always reopen as the disguised card. reciprocateMode is now
+    // here too: it's a live send toggle that must reset to manual each match.
     for (const forbidden of [
-      "asTroopsRunning", "asGoldRunning", "reciprocateEnabled",
+      "asTroopsRunning", "asGoldRunning", "reciprocateEnabled", "reciprocateMode",
       "broadcastEnabled", "recorderOn", "inGameView", "externalOpen", "paused",
       "isReplay",
     ]) {

@@ -1,7 +1,7 @@
 import { useEffect, useCallback } from "react";
 import { useStore } from "@store/index";
 import { short } from "@shared/utils";
-import { handleQuickReciprocate } from "@content/automation/reciprocate-engine";
+import { handleQuickReciprocate, sendThanks } from "@content/automation/reciprocate-engine";
 import { notifPositionStyle } from "@shared/notif-position";
 
 const PCT_OPTIONS = [10, 25, 50, 75, 100] as const;
@@ -104,7 +104,17 @@ export default function ReciprocatePopup() {
             </div>
 
             {isAuto ? (
-              <div className="text-2xs text-hammer-dim italic">Auto-reciprocating...</div>
+              <div className="flex items-center justify-between gap-2">
+                <span className="text-2xs text-hammer-dim italic">Auto-reciprocating...</span>
+                <button
+                  className="px-2 py-1 text-sm font-mono border border-hammer-border bg-hammer-surface text-hammer-red hover:border-hammer-red cursor-pointer transition-colors"
+                  style={{ borderRadius: 4 }}
+                  onClick={() => sendThanks(n.donorId)}
+                  title="Send a thank-you"
+                >
+                  {"❤ Thanks"}
+                </button>
+              </div>
             ) : (
               <>
                 {/* Send type label */}
@@ -112,8 +122,8 @@ export default function ReciprocatePopup() {
                   {sendLabel}
                 </div>
 
-                {/* Percentage buttons */}
-                <div className="flex gap-2 flex-wrap">
+                {/* Percentage buttons + manual thanks */}
+                <div className="flex gap-2 flex-wrap items-center">
                   {PCT_OPTIONS.map((pct) => (
                     <button
                       key={pct}
@@ -125,6 +135,14 @@ export default function ReciprocatePopup() {
                       {pct}%
                     </button>
                   ))}
+                  <button
+                    className="px-2 py-1.5 text-sm font-mono border border-hammer-border bg-hammer-surface text-hammer-red hover:border-hammer-red cursor-pointer transition-colors"
+                    style={{ borderRadius: 4 }}
+                    onClick={() => sendThanks(n.donorId)}
+                    title="Send a thank-you"
+                  >
+                    {"❤"}
+                  </button>
                 </div>
               </>
             )}

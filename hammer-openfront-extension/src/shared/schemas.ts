@@ -15,8 +15,11 @@ import { z } from "zod";
  * so partial or legacy stored blobs still parse.
  */
 export const PersistedStateSchema = z.object({
-  // Reciprocate config
-  reciprocateMode: z.enum(["manual", "auto", "palantir"]).default("manual"),
+  // Reciprocate config — VALUES only. reciprocateMode is deliberately NOT
+  // persisted: it's a live automation toggle (auto/palantir = sending), and
+  // persisting it would auto-resume sending on a refresh/new match. It resets
+  // to "manual" every match (see resetReciprocate). The pct/range values below
+  // are remembered so re-enabling auto is one click.
   reciprocateAutoPct: z.number().default(50),
   reciprocateOnTroops: z.boolean().default(true),
   reciprocateOnGold: z.boolean().default(true),
@@ -25,6 +28,9 @@ export const PersistedStateSchema = z.object({
   palantirMinPct: z.number().default(25),
   palantirMaxPct: z.number().default(75),
   popupScale: z.number().default(1),
+  // Thank-you sends (config) — independent of send-back, works in all modes.
+  thankEnabled: z.boolean().default(false),
+  thankMode: z.enum(["emoji", "quickchat"]).default("emoji"),
   // Auto-troops config
   asTroopsTargets: z.array(z.any()).default([]),
   asTroopsRatio: z.number().default(20),

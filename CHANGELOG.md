@@ -4,6 +4,38 @@ All notable changes to Hammer Control Panel will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [15.19.0] - 2026-06-02 "Match-Reset State + Thank-You + Attack Ratio + One-Click Viewer"
+
+### Added
+
+- **Attack Ratio governor.** New tab + automation engine that controls the game's attack-ratio
+  slider. Modes: **fixed** (hold a set %), **breakeven** (auto-tune to hold troops steady), and
+  **peak** (drive toward optimal regen), with a safety floor and an upper cap. Live telemetry
+  (applied ratio, regen/sec, troop %, net slope) streams to the UI. Like all automation it resets to
+  off each match and is paused during replays. *(Slider write is client-side, sends no server intent.)*
+
+### Fixed
+
+- **Reciprocate auto-send bled across matches.** Setting reciprocate to auto/palantir in one match
+  would keep firing in the next match (auto-sending back) even though the UI looked reset. Two
+  compounding causes: `resetReciprocate()` didn't reset the mode/enabled toggles (unlike auto-troops/
+  gold/broadcast), and `reciprocateMode` was being persisted so a refresh restored "auto." Now the
+  live send toggles reset to **manual + off** every match, and `reciprocateMode` is no longer
+  persisted. The configured values (25%, palantir ranges, on-troops/gold) are still remembered, so
+  re-enabling is one click. Established the rule: **live automation toggles reset each match; only
+  values persist.**
+
+### Added
+
+- **Thank-you sends.** Optionally send a ❤️ heart emoji or a "thanks" quickchat to anyone who
+  donates troops/gold — independent of the send-back logic, so it works in manual, auto, AND palantir
+  modes. A "Thank donors" toggle + heart/quickchat picker in the Reciprocate tab, plus a manual
+  Thanks button on the donation popup (shown in every mode). Blocked during replays like all sends.
+- **One-click "Export & View".** The Reciprocate/Help export now has an **Export & View** button
+  that opens the bundled replay viewer with your match data already loaded (handed off via
+  `chrome.storage`, so large CIA exports work). Chart.js is vendored locally to satisfy MV3 CSP.
+  **Export JSON** still downloads a file for the standalone viewer.
+
 ## [15.17.0] - 2026-06-01 "Replay Support + Notifications Anywhere"
 
 ### Added

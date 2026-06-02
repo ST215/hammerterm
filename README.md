@@ -12,7 +12,8 @@ This project started as `hammer-scripts/hammer.js`, a single-file console inject
 
 - **Auto Troops** — automatically send troops to teammates/allies above a configurable threshold
 - **Auto Gold** — distribute gold to teammates on a timed interval
-- **Reciprocate** — automatically return resources when you receive donations (cross-resource: gold in, troops back). Includes **Palantir mode** — sacrifice-aware smart reciprocation that weighs donor sacrifice ratio, loyalty, team relationship, and your power phase
+- **Attack Ratio** — governor for the game's attack-ratio slider: fixed %, breakeven (hold troops steady), or peak-regen, with a safety floor and cap and live telemetry
+- **Reciprocate** — automatically return resources when you receive donations (cross-resource: gold in, troops back). Includes **Palantir mode** — sacrifice-aware smart reciprocation that weighs donor sacrifice ratio, loyalty, team relationship, and your power phase. **Thank-you sends**: optionally fire a ❤️ heart or "thanks" quickchat to any donor (auto toggle or manual button), independent of send-back and working in every mode. Auto-send modes reset to off each match (values remembered) so nothing carries into a new game unexpectedly
 - **Trading View** — consolidated tab showing inbound/outbound donation history with cumulative stats and running totals
 - **CIA** — real-time threat intelligence tracking all server-wide transfers, betrayal alerts, leaderboard
 - **Comms** — send emoji sequences and coordinate with allies; search players by name
@@ -25,7 +26,7 @@ This project started as `hammer-scripts/hammer.js`, a single-file console inject
 - **In-game view modes** — the overlay defaults to an innocuous "match analytics" card (stream-safe), expands to full controls on demand, or hides entirely; the extension toolbar icon is the master control center for switching and recovery
 - **Dashboard Window** — detach the panel into a full browser window alongside the game for a second monitor; the in-game overlay hides while it drives, and returns when you close it
 - **Match Export** — export all trading/economy data (CIA transfers, flow graph, player totals, donation feeds) as structured JSON for offline analysis
-- **Replay Viewer** — standalone static HTML app (`hammer-replay-viewer/index.html`) for visualizing exported match data: flow charts, leaderboards, timeline, net balance table, and suspicious pattern detection
+- **Replay Viewer** — visualize exported match data: flow charts, leaderboards, timeline, net balance table, and suspicious pattern detection. **Export & View** opens it bundled in the extension with your data already loaded; it also ships standalone (`hammer-replay-viewer/index.html`) for file-drop use
 - **Flight Recorder** — structured event logger for diagnostics, exportable as JSON
 
 ## Tech Stack

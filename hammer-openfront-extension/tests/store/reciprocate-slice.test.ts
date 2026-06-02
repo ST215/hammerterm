@@ -182,4 +182,32 @@ describe("ReciprocateSlice", () => {
     store.getState().clearReciprocateNotifications();
     expect(store.getState().reciprocateNotifications.length).toBe(0);
   });
+
+  // ───────────────────────────────────────────────────────
+  // Cross-match reset (the bug: auto-send bled into new matches)
+  // ───────────────────────────────────────────────────────
+  test("resetReciprocate turns OFF the live send toggles", () => {
+    // Simulate a match where the user enabled auto 25%
+    store.getState().setReciprocateMode("auto");
+    if (!store.getState().reciprocateEnabled) store.getState().toggleReciprocateEnabled();
+    expect(store.getState().reciprocateMode).toBe("auto");
+    expect(store.getState().reciprocateEnabled).toBe(true);
+
+    // New match → reset must disarm auto-sending
+    store.getState().resetReciprocate();
+    expect(store.getState().reciprocateMode).toBe("manual");
+    expect(store.getState().reciprocateEnabled).toBe(false);
+  });
+
+  // ───────────────────────────────────────────────────────
+  // Thank-you settings
+  // ───────────────────────────────────────────────────────
+  test("thank-you defaults off in emoji mode and toggles", () => {
+    expect(store.getState().thankEnabled).toBe(false);
+    expect(store.getState().thankMode).toBe("emoji");
+    store.getState().toggleThankEnabled();
+    expect(store.getState().thankEnabled).toBe(true);
+    store.getState().setThankMode("quickchat");
+    expect(store.getState().thankMode).toBe("quickchat");
+  });
 });

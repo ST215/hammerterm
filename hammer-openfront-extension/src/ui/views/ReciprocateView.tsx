@@ -96,6 +96,10 @@ export default function ReciprocateView() {
   const togglePopups = useStore((s) => s.toggleReciprocatePopupsEnabled);
   const notifyDuration = useStore((s) => s.reciprocateNotifyDuration);
   const setNotifyDuration = useStore((s) => s.setReciprocateNotifyDuration);
+  const thankEnabled = useStore((s) => s.thankEnabled);
+  const toggleThankEnabled = useStore((s) => s.toggleThankEnabled);
+  const thankMode = useStore((s) => s.thankMode);
+  const setThankMode = useStore((s) => s.setThankMode);
   const history = useStore((s) => s.reciprocateHistory);
   const pending = useStore((s) => s.reciprocatePending);
   const inbound = useStore((s) => s.inbound);
@@ -276,6 +280,23 @@ export default function ReciprocateView() {
             Cross-resource: receive troops → send gold back, receive gold → send troops back
           </div>
         )}
+
+        {/* Thank-you — independent of send-back; works in all modes */}
+        <div className="flex items-center gap-2 mt-1.5 border-t border-hammer-border-subtle pt-1.5">
+          <button
+            onClick={toggleThankEnabled}
+            className={`px-1.5 py-0.5 text-2xs font-mono border-none cursor-pointer rounded ${
+              thankEnabled ? "bg-hammer-red/20 text-hammer-red" : "bg-transparent text-hammer-dim"
+            }`}
+            title="Auto-send a thank-you to anyone who donates (every mode)"
+          >
+            Thank donors {thankEnabled ? "ON" : "OFF"}
+          </button>
+          <div className="flex gap-1 ml-auto">
+            <PresetButton label="❤ Heart" active={thankMode === "emoji"} onClick={() => setThankMode("emoji")} />
+            <PresetButton label="Thanks" active={thankMode === "quickchat"} onClick={() => setThankMode("quickchat")} />
+          </div>
+        </div>
       </Section>
 
       {/* Resources */}

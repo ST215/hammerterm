@@ -1027,6 +1027,41 @@ export default defineContentScript({
       }
     }
 
+    /**
+     * Resolve the game's shared UIState object (holds `attackRatio`, the
+     * attack-commitment slider value). All HUD layers receive the SAME UIState
+     * reference, so writing through any of them mutates it everywhere — and the
+     * game multiplies `attackRatio × myPlayer.troops()` for each manual attack.
+     *
+     * Multiplayer exposes it at clientGameRunner.renderer.uiState; singleplayer
+     * has no game-view, but the HUD custom elements (control-panel,
+     * events-display, …) each hold `.uiState`. We try both. Returns the object
+     * (so callers can write) or null if the HUD isn't mounted yet.
+     */
+    function resolveUIState(): any {
+      try {
+        const gv = document.querySelector("game-view") as any;
+        const us = gv?.clientGameRunner?.renderer?.uiState;
+        if (us && typeof us.attackRatio === "number") return us;
+      } catch {}
+      const hudTags = [
+        "control-panel",
+        "events-display",
+        "build-menu",
+        "attacks-display",
+        "unit-display",
+        "actionable-events",
+      ];
+      for (const tag of hudTags) {
+        try {
+          const el = document.querySelector(tag) as any;
+          const us = el?.uiState;
+          if (us && typeof us.attackRatio === "number") return us;
+        } catch {}
+      }
+      return null;
+    }
+
     function handleSendCommand(data: any) {
       const { action, targetId, amount, recipientId, emojiIndex, key, targetPlayerId } =
         data;
@@ -1351,6 +1386,18 @@ export default defineContentScript({
         } else {
           emit("mouse-target", { found: false, reason: "no-owner" });
         }
+      } else if (action === "set-attack-ratio") {
+        // Pure client-side write — sets the attack-ratio slider value the game
+        // multiplies by troops on the player's next manual attack. No intent is
+        // sent to the server, so this carries no rate-limit / kick risk.
+        const ratio = Math.max(0.01, Math.min(1.0, Number(amount)));
+        const us = resolveUIState();
+        if (us) {
+          us.attackRatio = ratio;
+          emit("send-result", { action, success: true, ratio });
+        } else {
+          emit("send-result", { action, success: false });
+        }
       }
     }
 
@@ -1427,7 +1474,7 @@ export default defineContentScript({
         timeoutIds.length = 0;
         intervalIds.length = 0;
       },
-      version: "15.17.0-ext",
+      version: "15.19.0-ext",
     };
 
     console.log("[Hammer:Main] Hooks installed at document_start");

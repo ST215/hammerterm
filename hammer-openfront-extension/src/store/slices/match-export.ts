@@ -55,7 +55,8 @@ export interface MatchExport {
   }>;
 }
 
-export function exportMatchData(): void {
+/** Build the export payload from current store state (no side effects). */
+export function buildMatchExport(): MatchExport {
   const s = useStore.getState();
 
   const transfers = s.ciaState.transfers.map((t) => ({
@@ -131,6 +132,12 @@ export function exportMatchData(): void {
     })),
   };
 
+  return payload;
+}
+
+/** Download the export as a JSON file (also usable with the standalone viewer). */
+export function exportMatchData(): void {
+  const payload = buildMatchExport();
   const blob = new Blob([JSON.stringify(payload, null, 2)], {
     type: "application/json",
   });
@@ -140,4 +147,21 @@ export function exportMatchData(): void {
   a.download = `hammer-match-${Date.now()}.json`;
   a.click();
   URL.revokeObjectURL(url);
+}
+
+/**
+ * Export + open the bundled replay viewer with the data already loaded.
+ * Hands off via chrome.storage.local (URL params can't hold large CIA exports);
+ * the background opens the viewer window, which reads & clears the key on load.
+ */
+export function exportAndView(): void {
+  const payload = buildMatchExport();
+  try {
+    chrome.storage.local.set({ lastMatchExport: payload }, () => {
+      chrome.runtime.sendMessage({ type: "OPEN_REPLAY_VIEWER" });
+    });
+  } catch (err) {
+    console.warn("[Hammer] exportAndView failed, falling back to download:", err);
+    exportMatchData();
+  }
 }

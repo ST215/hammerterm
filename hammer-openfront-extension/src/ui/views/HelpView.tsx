@@ -1,7 +1,7 @@
 import { useStore } from "@store/index";
 import { useContentWidth } from "@ui/hooks/useContentWidth";
 import { Section, PretextText } from "@ui/components/ds";
-import { exportMatchData } from "@store/slices/match-export";
+import { exportMatchData, exportAndView } from "@store/slices/match-export";
 import { version as pkgVersion } from "../../../package.json";
 
 const TABS_HELP = [
@@ -92,14 +92,23 @@ export default function HelpView() {
 
       <Section title="Export">
         <div className="text-2xs text-hammer-muted mb-1.5">
-          Export all match trading data as JSON. Open in the Hammer Replay Viewer for analysis.
+          Export all match trading data. "Export & View" opens the Replay Viewer with the data
+          already loaded; "Export JSON" downloads a file (use it with the standalone viewer too).
         </div>
-        <button
-          onClick={exportMatchData}
-          className="px-3 py-1 text-2xs text-hammer-blue border border-hammer-blue/50 bg-hammer-blue/10 rounded cursor-pointer hover:bg-hammer-blue/20 transition-colors self-start"
-        >
-          Export Match Data
-        </button>
+        <div className="flex gap-2">
+          <button
+            onClick={exportAndView}
+            className="px-3 py-1 text-2xs text-hammer-green border border-hammer-green/50 bg-hammer-green/10 rounded cursor-pointer hover:bg-hammer-green/20 transition-colors self-start"
+          >
+            Export & View
+          </button>
+          <button
+            onClick={exportMatchData}
+            className="px-3 py-1 text-2xs text-hammer-blue border border-hammer-blue/50 bg-hammer-blue/10 rounded cursor-pointer hover:bg-hammer-blue/20 transition-colors self-start"
+          >
+            Export JSON
+          </button>
+        </div>
       </Section>
 
       <Section title="System">

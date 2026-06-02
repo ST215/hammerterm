@@ -140,6 +140,11 @@ function handleReceivedTroops(
   record("msg", "received.troops", { from: name, amt });
   log("[RECEIVED] Troops from", name, ":", amt);
 
+  // Auto thank-you — independent of send-back, fires in every reciprocate mode.
+  if (useStore.getState().thankEnabled) {
+    import("../automation/reciprocate-engine").then((m) => m.sendThanks(from.id));
+  }
+
   // Trigger reciprocation when enabled
   const s = useStore.getState();
   if (s.reciprocateEnabled && s.reciprocateOnTroops) {
@@ -237,6 +242,11 @@ function handleReceivedGold(
   trackMetric("displayEventsProcessed");
   record("msg", "received.gold", { from: name, amt });
   log("[RECEIVED] Gold from", name, ":", amt);
+
+  // Auto thank-you — independent of send-back, fires in every reciprocate mode.
+  if (useStore.getState().thankEnabled) {
+    import("../automation/reciprocate-engine").then((m) => m.sendThanks(from.id));
+  }
 
   // Trigger reciprocation on gold received
   const s = useStore.getState();

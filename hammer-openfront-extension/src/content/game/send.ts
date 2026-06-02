@@ -165,6 +165,20 @@ export function asSendGold(targetId: string, amount: number): boolean {
   );
 }
 
+// ---------- asSetAttackRatio ----------
+
+/**
+ * Set the game's attack-ratio slider (fraction 0.01–1.0 of troops committed per
+ * manual attack). This is a pure client-side write — it sends NO server intent,
+ * so it deliberately bypasses the rate-limiter queue and may be called as often
+ * as the governor likes. Blocked only during replay playback.
+ */
+export function asSetAttackRatio(ratio: number): void {
+  if (useStore.getState().isReplay) return;
+  const clamped = Math.max(0.01, Math.min(1.0, ratio));
+  sendToMainWorld({ action: "set-attack-ratio", amount: clamped });
+}
+
 // ---------- sendEmoji ----------
 
 export function sendEmoji(recipientId: string, emojiIndex: number): boolean {

@@ -58,12 +58,17 @@ export interface ReciprocateSlice {
   reciprocateNotifyDuration: number;
   reciprocateNotifySound: boolean;
   popupScale: number;
+  /** Auto-send a thank-you (heart/quickchat) to anyone who donates. Independent of send-back. */
+  thankEnabled: boolean;
+  thankMode: "emoji" | "quickchat";
   reciprocateHistory: ReciprocateHistoryEntry[];
   reciprocateNotifications: ReciprocateNotification[];
   reciprocatePending: ReciprocatePendingItem[];
 
   toggleReciprocateEnabled: () => void;
   setReciprocateMode: (mode: "manual" | "auto" | "palantir") => void;
+  toggleThankEnabled: () => void;
+  setThankMode: (mode: "emoji" | "quickchat") => void;
   setReciprocateAutoPct: (pct: number) => void;
   setPalantirMinPct: (pct: number) => void;
   setPalantirMaxPct: (pct: number) => void;
@@ -95,6 +100,8 @@ export const createReciprocateSlice: StateCreator<ReciprocateSlice, [], [], Reci
   reciprocateNotifyDuration: 30,
   reciprocateNotifySound: false,
   popupScale: 1.0,
+  thankEnabled: false,
+  thankMode: "emoji",
   reciprocateHistory: [],
   reciprocateNotifications: [],
   reciprocatePending: [],
@@ -103,6 +110,10 @@ export const createReciprocateSlice: StateCreator<ReciprocateSlice, [], [], Reci
     set((s) => ({ reciprocateEnabled: !s.reciprocateEnabled })),
 
   setReciprocateMode: (mode) => set({ reciprocateMode: mode }),
+
+  toggleThankEnabled: () => set((s) => ({ thankEnabled: !s.thankEnabled })),
+
+  setThankMode: (mode) => set({ thankMode: mode }),
 
   setReciprocateAutoPct: (pct) => set({ reciprocateAutoPct: pct }),
 
@@ -174,6 +185,13 @@ export const createReciprocateSlice: StateCreator<ReciprocateSlice, [], [], Reci
 
   resetReciprocate: () =>
     set({
+      // Live automation toggles reset to OFF every match (same rule as
+      // resetAutoTroops/resetAutoGold/resetBroadcast). Configured VALUES
+      // (reciprocateAutoPct, palantir ranges, on-troops/gold) are remembered
+      // — they persist and are not touched here. This is the fix for
+      // reciprocate auto-firing in a new match after a visual reset.
+      reciprocateMode: "manual",
+      reciprocateEnabled: false,
       reciprocateHistory: [],
       reciprocateNotifications: [],
       reciprocatePending: [],

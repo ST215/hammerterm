@@ -12,7 +12,7 @@
  */
 
 import { useStore } from "@store/index";
-import { asSendTroops, asSendGold } from "../game/send";
+import { asSendTroops, asSendGold, sendEmoji, sendQuickChat } from "../game/send";
 import { readMyPlayer } from "@shared/logic/player-helpers";
 import { RECIPROCATE_COOLDOWN_MS } from "@shared/constants";
 import { short } from "@shared/utils";
@@ -106,6 +106,33 @@ export function handleAutoReciprocate(
   log(
     `[RECIPROCATE] Queued auto-send for ${donorName} (${amountReceived} ${receivedType}, queue size: ${pendingQueue.length})`,
   );
+}
+
+// ---------- sendThanks ----------
+
+/** Heart emoji index in the game's flattened emoji table (src/shared/emoji-table.ts). */
+const HEART_EMOJI_INDEX = 48;
+/** Quick-chat key for "thanks" (category.key form). */
+const THANKS_QUICKCHAT_KEY = "greet.thanks";
+
+/**
+ * Send a thank-you to a donor — a heart emoji or a "thanks" quickchat per the
+ * user's thankMode setting. Independent of the send-back logic, so it works in
+ * manual, auto, AND palantir modes. Routed through the rate-limited send path,
+ * which already no-ops during replays.
+ *
+ * Callable from the auto donation hook (message-processor) and the manual
+ * popup button (ReciprocatePopup).
+ */
+export function sendThanks(donorId: string): void {
+  if (!donorId) return;
+  const mode = useStore.getState().thankMode;
+  if (mode === "quickchat") {
+    sendQuickChat(donorId, THANKS_QUICKCHAT_KEY);
+  } else {
+    sendEmoji(donorId, HEART_EMOJI_INDEX);
+  }
+  record("recip", "thanks", { donorId, mode });
 }
 
 // ---------- handleQuickReciprocate ----------

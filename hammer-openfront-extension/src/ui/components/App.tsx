@@ -45,6 +45,7 @@ import SummaryView from "../views/SummaryView";
 import AlliancesView from "../views/AlliancesView";
 import AutoTroopsView from "../views/AutoTroopsView";
 import AutoGoldView from "../views/AutoGoldView";
+import AttackRatioView from "../views/AttackRatioView";
 import ReciprocateView from "../views/ReciprocateView";
 import CommsView from "../views/CommsView";
 import CIAView from "../views/CIAView";
@@ -66,6 +67,7 @@ const VIEW_MAP: Record<string, React.FC> = {
   trading: TradingView,
   autotroops: AutoTroopsView,
   autogold: AutoGoldView,
+  attackratio: AttackRatioView,
   reciprocate: ReciprocateView,
   comms: CommsView,
   cia: CIAView,

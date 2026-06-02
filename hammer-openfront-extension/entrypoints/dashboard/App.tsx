@@ -16,6 +16,7 @@ const LOCAL_KEYS = new Set([
   "reciprocateMode", "reciprocateAutoPct", "reciprocateNotifyDuration",
   "reciprocateEnabled", "reciprocateOnGold", "reciprocateOnTroops",
   "reciprocatePopupsEnabled", "palantirMinPct", "palantirMaxPct", "popupScale",
+  "thankEnabled", "thankMode",
   // Auto-troops config
   "asTroopsRunning", "asTroopsTargets", "asTroopsRatio",
   "asTroopsThreshold", "asTroopsCooldownSec",
@@ -24,6 +25,9 @@ const LOCAL_KEYS = new Set([
   "asGoldRunning", "asGoldTargets", "asGoldRatio",
   "asGoldThreshold", "asGoldCooldownSec",
   "asGoldAllTeamMode", "asGoldAllAlliesMode",
+  // Attack-ratio governor config (telemetry stays out — it flows content→dashboard)
+  "attackRatioRunning", "attackRatioMode", "attackRatioFixedPct",
+  "attackRatioFloorPct", "attackRatioMaxCap",
   // Activity feed toggles
   "popupsEnabled", "growthHudEnabled",
   "toastInboundTroops", "toastInboundGold", "toastOutboundTroops", "toastOutboundGold",

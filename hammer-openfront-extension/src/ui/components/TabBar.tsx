@@ -7,6 +7,7 @@ const ALL_TABS: { id: string; label: string }[] = [
   { id: "trading", label: "Trading" },
   { id: "autotroops", label: "Troop MGMT" },
   { id: "autogold", label: "Gold MGMT" },
+  { id: "attackratio", label: "Attack Ratio" },
   { id: "reciprocate", label: "Reciprocate" },
   { id: "broadcast", label: "Broadcast" },
   { id: "comms", label: "Comms" },
