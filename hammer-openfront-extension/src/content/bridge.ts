@@ -11,8 +11,10 @@
 import { useStore } from "@store/index";
 import type { PlayerData } from "@shared/types";
 import { serialize } from "@shared/serialize";
-import { processDisplayMessage, drainPendingMessages } from "./game/message-processor";
+import { processDisplayMessage, processDonateEvent, drainPendingMessages } from "./game/message-processor";
 import { setMyLiveTroops } from "./hooks/worker-hook";
+import { asAttackRatioStop } from "./automation/attack-ratio";
+import { cancelAllPaced } from "./game/send";
 import {
   record, startRecording, stopRecording,
   trackMetric, registerSnapshotProviders,
@@ -245,8 +247,14 @@ function onBridgeMessage(e: MessageEvent): void {
     case "players":
       handlePlayerUpdate(payload);
       break;
+    case "player-stats":
+      handlePlayerStats(payload);
+      break;
     case "display":
       handleDisplayEvent(payload);
+      break;
+    case "donate":
+      handleDonateEvent(payload);
       break;
     case "bootstrap":
       handleBootstrap(payload);
@@ -281,7 +289,7 @@ function onBridgeMessage(e: MessageEvent): void {
 // Message handlers
 // ---------------------------------------------------------------------------
 
-function handleInit(payload: { clientID: string }): void {
+export function handleInit(payload: { clientID: string }): void {
   if (!payload?.clientID) return;
 
   const store = useStore.getState();
@@ -299,7 +307,14 @@ function handleInit(payload: { clientID: string }): void {
     store.resetComms();
     store.resetCIA();
     store.resetDonationToasts();
+    // Engine-level stop: clears the control interval, releases the native slider,
+    // and disarms the MAIN-world attack-floor clamp — resetAttackRatio() alone
+    // only flips the slice flags and would leave a live loop / armed floor.
+    asAttackRatioStop();
     store.resetAttackRatio();
+    // Abort any in-flight paced comms/alliance batch so it can't keep firing
+    // stale-PlayerID intents into the new match.
+    cancelAllPaced();
   }
 
   store.setCurrentClientID(payload.clientID);
@@ -462,9 +477,75 @@ function handlePlayerUpdate(payload: {
   }
 }
 
+/**
+ * Merge packed per-player stat quads [smallID, tilesOwned, gold, troops] into
+ * the store's player records. v0.32+ carries these on gameUpdate.packedPlayerUpdates
+ * instead of in PlayerUpdate object diffs (see hooks.content.ts). Volatile stats,
+ * so applied through the same 1s throttle as the other stat paths — EXCEPT the
+ * live troop scalar, which is updated immediately (unthrottled) so the governor's
+ * hard floor reacts to rapid clicking without lag.
+ */
+export function handlePlayerStats(payload: { stats: number[] }): void {
+  const stats = payload?.stats;
+  if (!stats?.length) return;
+
+  const store = useStore.getState();
+  const mySmallID = store.mySmallID;
+
+  const newById = new Map(store.playersById);
+  const newBySmallId = new Map(store.playersBySmallId);
+  let hasStatsChange = false;
+
+  for (let i = 0; i + 3 < stats.length; i += 4) {
+    const smallID = stats[i];
+    const tilesOwned = stats[i + 1];
+    const gold = stats[i + 2];
+    const troops = stats[i + 3];
+
+    // Live troop count for the governor — unthrottled, even before we hold a
+    // full structural record for ourselves.
+    if (mySmallID != null && smallID === mySmallID) {
+      setMyLiveTroops(troops);
+    }
+
+    const prev = newBySmallId.get(smallID);
+    if (!prev) continue; // structural record arrives via PlayerUpdate/refresh first
+    if (
+      prev.troops === troops &&
+      prev.gold === gold &&
+      prev.tilesOwned === tilesOwned
+    ) {
+      continue;
+    }
+    const next = { ...prev, troops, gold, tilesOwned };
+    newBySmallId.set(smallID, next);
+    newById.set(next.id, next);
+    hasStatsChange = true;
+  }
+
+  if (!hasStatsChange) return;
+
+  const now = Date.now();
+  const throttled = now - lastStatsUpdateMs < STATS_THROTTLE_MS;
+  trackMetric("playerUpdatesReceived");
+  if (!throttled) {
+    trackMetric("playerUpdatesApplied");
+    lastStatsUpdateMs = now;
+    store.setPlayers(newById, newBySmallId, [...newById.values()]);
+  } else {
+    trackMetric("playerUpdatesThrottled");
+  }
+}
+
 function handleDisplayEvent(payload: { event: any }): void {
   if (payload?.event) {
     processDisplayMessage(payload.event);
+  }
+}
+
+function handleDonateEvent(payload: { event: any }): void {
+  if (payload?.event) {
+    processDonateEvent(payload.event);
   }
 }
 
@@ -530,7 +611,7 @@ function handleBootstrap(payload: {
   }
 }
 
-function handleRefresh(payload: { players: any[] }): void {
+export function handleRefresh(payload: { players: any[] }): void {
   if (!payload?.players?.length) return;
 
   const store = useStore.getState();
@@ -560,6 +641,25 @@ function handleRefresh(payload: { players: any[] }): void {
         drainPendingMessages();
       }
     }
+  }
+
+  // Self-preservation: a transient poll payload can omit our own player. Full
+  // replacement would drop us → useMyPlayer() flips to null for a frame →
+  // HammerView blanks and the panel resizes (F5). Keep our previous record.
+  const mySmallID = store.mySmallID;
+  if (mySmallID != null && !newBySmallId.has(mySmallID)) {
+    const prevMe = store.playersBySmallId.get(mySmallID);
+    if (prevMe) {
+      newBySmallId.set(mySmallID, prevMe);
+      newById.set(prevMe.id, prevMe);
+    }
+  }
+
+  // Slow-path backup for the governor's live troop scalar (the packed-stats
+  // path is primary; this heals it if packed updates were briefly missed).
+  if (mySmallID != null) {
+    const me = newBySmallId.get(mySmallID);
+    if (me?.troops != null) setMyLiveTroops(Number(me.troops));
   }
 
   // Separate structural changes (instant) from stats-only changes (throttled).

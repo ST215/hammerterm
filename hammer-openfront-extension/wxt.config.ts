@@ -9,6 +9,12 @@ export default defineConfig({
     description: "Automation and intelligence companion for OpenFront.io",
     permissions: ["storage", "tabs"],
     host_permissions: ["*://openfront.io/*", "*://*.openfront.io/*"],
+    commands: {
+      "toggle-external": {
+        suggested_key: { default: "Alt+Shift+H" },
+        description: "Toggle Hammer external window",
+      },
+    },
   },
   vite: () => ({
     plugins: [tailwindcss()],

@@ -139,6 +139,93 @@ function sendIntentNow(
   log(logMsg);
 }
 
+// ---------- Paced multi-target sender ----------
+
+export interface PacedProgress {
+  sent: number;
+  total: number;
+  /**
+   * Terminal event: the batch has ended — either it finished naturally or was
+   * cancelled (including via cancelAllPaced() on new-match reset). Consumers use
+   * this to clear their "sending N/M" progress line even when a batch is aborted
+   * out-of-band (where no per-send event ever reaches the setpoint).
+   */
+  done?: boolean;
+}
+
+export interface PacedHandle {
+  cancel: () => void;
+}
+
+interface PacedOptions {
+  spacingMs?: number;
+  jitterMs?: number;
+  onProgress?: (p: PacedProgress) => void;
+}
+
+// Active paced batches, tracked module-level so cancelAllPaced() (fired on
+// new-match reset) can stop every in-flight batch — otherwise a paced blast
+// keeps firing stale-PlayerID intents into the next match.
+const activePacers = new Set<PacedHandle>();
+
+/**
+ * Fire fn(id) for each id at human cadence (spacingMs ± jitterMs) instead of
+ * dumping the whole selection into the global limiter in one event-loop tick.
+ * The first target fires immediately; each subsequent one after a randomized
+ * delay. Returns a cancel handle and registers it module-level so
+ * cancelAllPaced() can abort it. onProgress fires after each send.
+ */
+export function sendPaced(
+  ids: string[],
+  fn: (id: string) => void,
+  opts: PacedOptions = {},
+): PacedHandle {
+  const { spacingMs = 900, jitterMs = 400, onProgress } = opts;
+  let idx = 0;
+  let timer: ReturnType<typeof setTimeout> | null = null;
+  let cancelled = false;
+
+  const handle: PacedHandle = {
+    cancel() {
+      if (cancelled) return;
+      cancelled = true;
+      if (timer) {
+        clearTimeout(timer);
+        timer = null;
+      }
+      activePacers.delete(handle);
+      // Fire a terminal event so consumers clear their progress line — this is
+      // the only signal cancelAllPaced() (new-match reset) gives the UI.
+      onProgress?.({ sent: idx, total: ids.length, done: true });
+    },
+  };
+
+  function step(): void {
+    if (cancelled) return;
+    fn(ids[idx]);
+    idx++;
+    onProgress?.({ sent: idx, total: ids.length });
+    if (idx >= ids.length) {
+      handle.cancel();
+      return;
+    }
+    timer = setTimeout(step, spacingMs + Math.random() * jitterMs);
+  }
+
+  activePacers.add(handle);
+  if (ids.length === 0) {
+    handle.cancel();
+    return handle;
+  }
+  step(); // first target fires immediately
+  return handle;
+}
+
+/** Cancel every in-flight paced batch. Called on new-match reset. */
+export function cancelAllPaced(): void {
+  for (const h of [...activePacers]) h.cancel();
+}
+
 // ---------- Helpers ----------
 
 function log(...args: unknown[]): void {
@@ -177,6 +264,17 @@ export function asSetAttackRatio(ratio: number): void {
   if (useStore.getState().isReplay) return;
   const clamped = Math.max(0.01, Math.min(1.0, ratio));
   sendToMainWorld({ action: "set-attack-ratio", amount: clamped });
+}
+
+/**
+ * Push the governor's absolute reserve floor (INTERNAL troop units) to the
+ * MAIN world, where the per-click emit-wrap clamps manual attacks so they can
+ * never spend below it. Refreshed every governor tick. Client-side only — no
+ * server intent, so it bypasses the rate limiter. Blocked during replay.
+ */
+export function asSetAttackFloor(floorTroops: number): void {
+  if (useStore.getState().isReplay) return;
+  sendToMainWorld({ action: "set-attack-floor", amount: Math.max(0, floorTroops) });
 }
 
 /**

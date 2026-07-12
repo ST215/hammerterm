@@ -6,11 +6,12 @@ import { short, comma, dTroops, fmtSec } from "@shared/utils";
 import { Section, StatCard, PercentBar, PretextText } from "@ui/components/ds";
 import type { DonationRecord, PortRecord } from "@shared/types";
 
-interface SortedEntry {
+export interface SortedEntry {
   name: string;
   gold: number;
   troops: number;
   total: number;
+  last: Date | null;
 }
 
 interface SortedPort {
@@ -21,7 +22,7 @@ interface SortedPort {
   avgIntSec: number;
 }
 
-function useSortedEntries(map: Map<string, DonationRecord>): SortedEntry[] {
+export function useSortedEntries(map: Map<string, DonationRecord>): SortedEntry[] {
   return useMemo(() => {
     const entries: SortedEntry[] = [];
     for (const [, rec] of map) {
@@ -30,6 +31,7 @@ function useSortedEntries(map: Map<string, DonationRecord>): SortedEntry[] {
         gold: rec.gold,
         troops: rec.troops,
         total: rec.gold + rec.troops,
+        last: rec.last,
       });
     }
     entries.sort((a, b) => b.total - a.total);
@@ -61,9 +63,6 @@ export default function SummaryView() {
   const inbound = useStore((s) => s.inbound);
   const outbound = useStore((s) => s.outbound);
   const ports = useStore((s) => s.ports);
-  const gps30 = useStore((s) => s.gps30);
-  const gpm60 = useStore((s) => s.gpm60);
-  const gpm120 = useStore((s) => s.gpm120);
 
   const sortedInbound = useSortedEntries(inbound);
   const sortedOutbound = useSortedEntries(outbound);
@@ -152,15 +151,6 @@ export default function SummaryView() {
             sub="recv / sent"
             color="text-hammer-blue"
           />
-        </div>
-      </Section>
-
-      {/* Gold Rate */}
-      <Section title="Gold Rate">
-        <div className="grid grid-cols-3 gap-1">
-          <StatCard label="GPS (30s)" value={short(gps30)} color="text-hammer-gold" cols={3} />
-          <StatCard label="GPM (60s)" value={short(gpm60)} color="text-hammer-gold" cols={3} />
-          <StatCard label="GPM (120s)" value={short(gpm120)} color="text-hammer-gold" cols={3} />
         </div>
       </Section>
 

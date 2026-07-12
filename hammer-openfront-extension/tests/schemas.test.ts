@@ -62,12 +62,19 @@ describe("PersistedStateSchema", () => {
 
   test("popup/notification config keys persist", () => {
     for (const key of [
-      "popupsEnabled", "growthHudEnabled",
+      "screenPopupsEnabled", "growthHudEnabled",
       "reciprocatePosition", "donationPosition", "statusPosition", "growthPosition",
       "toastScale", "statusToastScale",
     ]) {
       expect(PERSIST_KEYS).toContain(key);
     }
+  });
+
+  test("screenPopupsEnabled defaults OFF (notifications opt-in)", () => {
+    expect(PersistedStateSchema.parse({}).screenPopupsEnabled).toBe(false);
+    // Old key is dropped by the schema — no migration, zod strips unknowns.
+    expect(PersistedStateSchema.parse({ popupsEnabled: true } as any)).not.toHaveProperty("popupsEnabled");
+    expect(PERSIST_KEYS).not.toContain("popupsEnabled");
   });
 });
 

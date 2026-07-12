@@ -24,7 +24,7 @@ import { estimateMaxTroops } from "@shared/logic/city";
 import { cityLevelSumByOwner, getMyLiveTroops } from "@content/hooks/worker-hook";
 import { troopGrowthPerSec, OPTIMAL_REGEN_PCT } from "@shared/logic/troop-math";
 import type { AttackRatioMode, AttackRatioTelemetry } from "@store/slices/attack-ratio";
-import { asSetAttackRatio, asReleaseAttackRatio } from "../game/send";
+import { asSetAttackRatio, asReleaseAttackRatio, asSetAttackFloor } from "../game/send";
 import { registerInterval } from "../cleanup";
 
 // ---------- Tuning (module constants — not user-exposed) ----------
@@ -121,6 +121,7 @@ function tick(): void {
 
   // ---- Choose the ratio ----
   let ratio: number;
+  let setpoint = 0; // troop LEVEL target (internal units); 0 in assist mode
   if (mode === "assist") {
     // Hold a constant ratio (how much each attack commits).
     ratio = s.attackRatioBasePct / 100;
@@ -129,7 +130,7 @@ function tick(): void {
     // chosen %, peak targets the 42% regen optimum. Above setpoint → attack
     // harder to drain; below → ease off and let regen climb back.
     const targetPct = mode === "peak" ? OPTIMAL_REGEN_PCT : s.attackRatioBreakevenPct / 100;
-    const setpoint = targetPct * maxT;
+    setpoint = targetPct * maxT;
     ratio = BASE_RATIO + KP * ((troops - setpoint) / maxT);
   }
 
@@ -138,8 +139,8 @@ function tick(): void {
   // ceiling. As troops approach the floor it → 0, so the ratio ramps to MIN (1%)
   // and even rapid clicks near the floor barely spend. At/below floor it pins to MIN.
   const floorPct = s.attackRatioFloorPct;
+  const floorTroops = floorPct > 0 ? (floorPct / 100) * maxT : 0;
   if (floorPct > 0) {
-    const floorTroops = (floorPct / 100) * maxT;
     const maxSafe = troops > 0 ? Math.max(0, (troops - floorTroops) / troops) : 0;
     ratio = Math.min(ratio, maxSafe);
   }
@@ -147,12 +148,30 @@ function tick(): void {
   // Send cap is the hard guarantee against over-sends.
   ratio = Math.max(MIN_RATIO, Math.min(s.attackRatioMaxCap / 100, ratio));
 
+  // Per-click hard floor: push the absolute reserve (internal units) to the
+  // MAIN-world emit clamp every tick so rapid manual attacks can't outrun the
+  // asynchronous slider write against an already-drained troop count.
+  asSetAttackFloor(floorTroops);
+
   if (Math.abs(ratio - lastApplied) >= WRITE_EPS) {
     asSetAttackRatio(ratio);
     lastApplied = ratio;
   }
 
-  pushTelemetry(now, { ratio, regenPerSec, troops, maxT, troopPct, netSlope: slope });
+  // Peak/break-even pin the ratio to MIN when troops sit below the setpoint —
+  // the "doesn't engage yet" early-match state. Flag it so the UI can say so.
+  const belowSetpoint =
+    (mode === "peak" || mode === "breakeven") && ratio <= MIN_RATIO && troops < setpoint;
+
+  pushTelemetry(now, {
+    ratio,
+    regenPerSec,
+    troops,
+    maxT,
+    troopPct,
+    netSlope: slope,
+    belowSetpoint,
+  });
 }
 
 // ---------- Start / Stop ----------

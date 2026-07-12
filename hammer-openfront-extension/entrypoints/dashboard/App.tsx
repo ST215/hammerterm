@@ -29,7 +29,7 @@ const LOCAL_KEYS = new Set([
   "attackRatioRunning", "attackRatioMode", "attackRatioBasePct",
   "attackRatioBreakevenPct", "attackRatioFloorPct", "attackRatioMaxCap",
   // Activity feed toggles
-  "popupsEnabled", "growthHudEnabled",
+  "screenPopupsEnabled", "growthHudEnabled",
   "toastInboundTroops", "toastInboundGold", "toastOutboundTroops", "toastOutboundGold",
   "toastScale", "statusToastScale",
   // Notification positions

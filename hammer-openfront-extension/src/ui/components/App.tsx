@@ -84,15 +84,16 @@ export default function App({ mode }: AppProps) {
 
   const view = useStore((s) => s.view);
   const inGameView = useStore((s) => s.inGameView);
-  const popupsEnabled = useStore((s) => s.popupsEnabled);
+  const screenPopupsEnabled = useStore((s) => s.screenPopupsEnabled);
 
   // ── OVERLAY (in-browser, on the game page) ──
   if (mode === "overlay") {
     // Popups render on the game screen in EVERY view mode — including "hidden"
-    // — gated only by the master popupsEnabled switch (each popup also has its
-    // own toggle internally). Decoupled from inGameView so notifications work
-    // regardless of whether the panel is shown. Each popup is fixed-positioned.
-    const notifications = popupsEnabled ? (
+    // — gated only by the master screenPopupsEnabled switch (each popup also has
+    // its own toggle internally). Decoupled from inGameView so notifications
+    // work regardless of whether the panel is shown. Each popup is
+    // fixed-positioned. Default OFF — the user opts in via Settings.
+    const notifications = screenPopupsEnabled ? (
       <>
         <DonationToast />
         <ReciprocatePopup />

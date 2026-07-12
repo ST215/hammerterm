@@ -1,12 +1,40 @@
 export const TROOP_DISPLAY_DIV = 10;
 
+/**
+ * Internal transfer-direction discriminators for CIA / donation tracking.
+ *
+ * These are NOT the game's wire MessageType enum. As of OpenFront v0.32+ the
+ * game consolidated its display messages (donations became DONATION_SENT/
+ * DONATION_RECEIVED, built client-side) and moved the actual donation payload
+ * onto the GameUpdateType.DonateEvent channel — so player-to-player donations
+ * no longer arrive as display messages at all (see processDonateEvent, which
+ * feeds trackCIAEvent synthetic SENT_* values). The 18–22 numeric values here
+ * are only used as stable internal keys — they are NOT the game's wire enum
+ * (in v0.32+ index 20 is CHAT, not trade gold).
+ *
+ * CAPTURED_ENEMY_UNIT (11) is the exception: it IS the game's real wire
+ * MessageType, and it's the channel port/captured-trade-ship gold now arrives
+ * on — a DisplayEvent with messageType 11 and message key
+ * "events_display.received_gold_from_captured_ship" (see TradeShipExecution.ts
+ * and the game-contract test). That message key is the reliable discriminator
+ * the port-income routing gates on (message-processor.handleReceivedGoldTrade).
+ */
 export const MessageType = {
   SENT_GOLD_TO_PLAYER: 18,
   RECEIVED_GOLD_FROM_PLAYER: 19,
   RECEIVED_GOLD_FROM_TRADE: 20,
   SENT_TROOPS_TO_PLAYER: 21,
   RECEIVED_TROOPS_FROM_PLAYER: 22,
+  CAPTURED_ENEMY_UNIT: 11,
 } as const;
+
+/**
+ * Game message key carried by the captured-trade-ship gold DisplayEvent. Used
+ * as the reliable discriminator for routing port income (the numeric
+ * messageType 11 alone is broad; the key pins it to trade/port gold).
+ */
+export const CAPTURED_SHIP_GOLD_KEY =
+  "events_display.received_gold_from_captured_ship";
 
 export const GameUpdateType = {
   Tile: 0,

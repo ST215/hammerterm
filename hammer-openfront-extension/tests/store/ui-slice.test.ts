@@ -20,9 +20,14 @@ describe("UISlice", () => {
     expect(store.getState().paused).toBe(false);
   });
 
-  test('default inGameView is "disguised"', () => {
+  test('default inGameView is "hidden" (silent boot)', () => {
     const store = createTestStore();
-    expect(store.getState().inGameView).toBe("disguised");
+    expect(store.getState().inGameView).toBe("hidden");
+  });
+
+  test("default screenPopupsEnabled is false (notifications off)", () => {
+    const store = createTestStore();
+    expect(store.getState().screenPopupsEnabled).toBe(false);
   });
 
   test("default sizeIdx is 1", () => {
@@ -77,11 +82,18 @@ describe("UISlice", () => {
     expect(store.getState().inGameView).toBe("hidden");
   });
 
-  test("setExternalOpen(false) restores disguised from hidden", () => {
+  test("setExternalOpen(false) leaves inGameView hidden (silent by default)", () => {
     const store = createTestStore();
     store.getState().setExternalOpen(true);
     store.getState().setExternalOpen(false);
     expect(store.getState().externalOpen).toBe(false);
-    expect(store.getState().inGameView).toBe("disguised");
+    expect(store.getState().inGameView).toBe("hidden");
+  });
+
+  test("setExternalOpen(false) does not clobber a revealed view", () => {
+    const store = createTestStore();
+    store.getState().revealInGame();
+    store.getState().setExternalOpen(false);
+    expect(store.getState().inGameView).toBe("revealed");
   });
 });

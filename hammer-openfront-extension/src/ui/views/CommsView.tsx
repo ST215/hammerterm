@@ -1,10 +1,11 @@
-import { useState, useMemo, useRef } from "react";
+import { useState, useMemo, useRef, useCallback, memo } from "react";
 import { useStore } from "@store/index";
 import { useMyPlayerStructural, useTeammates, useAllies, useAllAlivePlayers } from "@ui/hooks/usePlayerHelpers";
 import { record } from "../../recorder";
 import { useContentWidth } from "@ui/hooks/useContentWidth";
+import { short, dTroops } from "@shared/utils";
 import { splitClanGroups, groupByTeam } from "@shared/logic/clan-tags";
-import { sendEmoji, sendQuickChat } from "@content/game/send";
+import { sendEmoji, sendQuickChat, sendPaced, type PacedHandle } from "@content/game/send";
 import { EMOJI_TABLE } from "@shared/emoji-table";
 import { Section, PresetButton, PretextText } from "@ui/components/ds";
 import { TargetTag } from "@ui/components/TargetTag";
@@ -82,6 +83,41 @@ function keyToLabel(key: string): string {
 
 const GROUP_MODES = ["team", "allies", "all", "others", "clear"] as const;
 
+// Scannable selectable row — readable name, relationship tag, short troops, and
+// an obvious selected state (check glyph + strong border). Adapted from
+// AlliancesView's PlayerRow. Reused for both the target lists and the QC picker.
+const CommsPlayerRow = memo(function CommsPlayerRow({ player, selected, tag, tagColor, onToggle }: {
+  player: PlayerData;
+  selected: boolean;
+  tag?: string;
+  tagColor?: string;
+  onToggle: (id: string) => void;
+}) {
+  const isBot = !player.clientID;
+  const name = player.displayName || player.name || `#${player.smallID}`;
+  const troops = dTroops(player.troops);
+  return (
+    <button
+      onClick={() => onToggle(player.id)}
+      className={`w-full flex items-center gap-1.5 px-1.5 py-1 rounded border text-left transition-colors cursor-pointer ${
+        selected
+          ? "bg-hammer-green/15 border-hammer-green"
+          : "bg-hammer-bg border-hammer-border hover:border-hammer-muted"
+      }`}
+    >
+      <span className={`shrink-0 w-3 text-center text-xs ${selected ? "text-hammer-green" : "text-hammer-dim"}`}>
+        {selected ? "✓" : "·"}
+      </span>
+      {tag && <span className={`text-2xs font-bold shrink-0 w-5 ${tagColor}`}>{tag}</span>}
+      <span className={`text-xs truncate flex-1 ${selected ? "text-hammer-green" : "text-hammer-text"}`}>
+        {isBot && <span className="text-hammer-warn mr-0.5">[BOT]</span>}
+        {name}
+      </span>
+      <span className="text-2xs text-hammer-blue shrink-0 w-9 text-right">{short(troops)}t</span>
+    </button>
+  );
+});
+
 export default function CommsView() {
   const cvRenders = useRef(0);
   cvRenders.current++;
@@ -110,6 +146,26 @@ export default function CommsView() {
   const [showBots, setShowBots] = useState(false);
   const [search, setSearch] = useState("");
   const [targetSearch, setTargetSearch] = useState("");
+
+  // Paced-batch progress + cancel handle (also cancelled on new-match reset).
+  const [paced, setPaced] = useState<{ sent: number; total: number } | null>(null);
+  const pacerRef = useRef<PacedHandle | null>(null);
+  const runPaced = useCallback((ids: string[], fn: (id: string) => void) => {
+    pacerRef.current?.cancel();
+    if (ids.length <= 1) {
+      if (ids.length === 1) fn(ids[0]);
+      setPaced(null);
+      return;
+    }
+    setPaced({ sent: 0, total: ids.length });
+    pacerRef.current = sendPaced(ids, fn, {
+      onProgress: (p) => setPaced(p.done || p.sent >= p.total ? null : p),
+    });
+  }, []);
+  const cancelPaced = useCallback(() => {
+    pacerRef.current?.cancel();
+    setPaced(null);
+  }, []);
 
   const { otherHumans, otherBots } = useMemo(() => {
     const humans: PlayerData[] = [];
@@ -157,14 +213,14 @@ export default function CommsView() {
     return result.sort((a, b) => a.name.localeCompare(b.name));
   }, [commsTargets, myTeam, myAllies]);
 
-  function toggleTarget(id: string) {
-    if (commsTargets.has(id)) {
+  const toggleTarget = useCallback((id: string) => {
+    if (useStore.getState().commsTargets.has(id)) {
       removeTarget(id);
     } else {
       addTarget(id);
       setSearch("");
     }
-  }
+  }, [addTarget, removeTarget]);
 
   function handleGroupSelect(mode: string) {
     setGroupMode(mode);
@@ -182,7 +238,7 @@ export default function CommsView() {
 
   function handleSendEmoji(idx: number) {
     if (commsTargets.size === 0) return;
-    for (const tid of commsTargets) sendEmoji(tid, idx);
+    runPaced([...commsTargets], (tid) => sendEmoji(tid, idx));
     addRecentSent({
       type: "emoji",
       label: EMOJI_TABLE[idx] || "?",
@@ -197,7 +253,7 @@ export default function CommsView() {
       setPendingQCKey(fullKey);
       return;
     }
-    for (const tid of commsTargets) sendQuickChat(tid, fullKey);
+    runPaced([...commsTargets], (tid) => sendQuickChat(tid, fullKey));
     const label = fullKey.split(".")[1] || fullKey;
     addRecentSent({
       type: "qc",
@@ -209,7 +265,7 @@ export default function CommsView() {
 
   function handlePendingTarget(targetId: string) {
     if (!pendingQCKey) return;
-    for (const tid of commsTargets) sendQuickChat(tid, pendingQCKey, targetId);
+    runPaced([...commsTargets], (tid) => sendQuickChat(tid, pendingQCKey, targetId));
     const label = pendingQCKey.split(".")[1] || pendingQCKey;
     addRecentSent({
       type: "qc",
@@ -225,9 +281,12 @@ export default function CommsView() {
   // Pending target picker overlay
   if (pendingQCKey) {
     const tq = targetSearch.toLowerCase();
-    const filteredTargets = tq
+    const filteredTargets = (tq
       ? allAlivePlayers.filter((p) => (p.displayName || p.name || "").toLowerCase().includes(tq))
-      : allAlivePlayers;
+      : allAlivePlayers
+    ).slice().sort((a, b) =>
+      (a.displayName || a.name || "").localeCompare(b.displayName || b.name || ""),
+    );
     const label = pendingQCKey.split(".")[1] || pendingQCKey;
     return (
       <div>
@@ -242,19 +301,21 @@ export default function CommsView() {
             onChange={(e) => setTargetSearch(e.target.value)}
             className="w-full bg-hammer-bg border border-hammer-border text-hammer-text text-2xs px-2 py-1 rounded mb-1 focus:outline-none focus:border-hammer-blue"
           />
-          <div className="flex flex-wrap gap-0.5">
+          <div className="flex flex-col gap-0.5">
             {filteredTargets.map((p) => {
               const isTeam = p.team != null && myTeam != null && p.team === myTeam;
               const isAlly = p.smallID != null && myAllies.has(p.smallID);
-              const color = isTeam ? "text-hammer-blue" : isAlly ? "text-hammer-green" : "text-hammer-text";
+              const tag = isTeam ? "TM" : isAlly ? "AL" : undefined;
+              const tagColor = isTeam ? "text-hammer-blue" : "text-hammer-green";
               return (
-                <button
+                <CommsPlayerRow
                   key={p.id}
-                  onClick={() => { handlePendingTarget(p.id); setTargetSearch(""); }}
-                  className={`px-1.5 py-0.5 text-2xs font-mono border border-hammer-border bg-hammer-bg cursor-pointer hover:bg-hammer-green/10 hover:text-hammer-green transition-colors rounded ${color}`}
-                >
-                  {p.displayName || p.name || `#${p.smallID}`}
-                </button>
+                  player={p}
+                  selected={false}
+                  tag={tag}
+                  tagColor={tagColor}
+                  onToggle={(id) => { handlePendingTarget(id); setTargetSearch(""); }}
+                />
               );
             })}
           </div>
@@ -311,19 +372,9 @@ export default function CommsView() {
         {filteredTeammates.length > 0 && (
           <div className="mb-1">
             <div className="text-2xs text-hammer-blue font-bold mb-0.5">Team ({filteredTeammates.length})</div>
-            <div className="flex flex-wrap gap-0.5">
+            <div className="flex flex-col gap-0.5">
               {filteredTeammates.map((p) => (
-                <button
-                  key={p.id}
-                  onClick={() => toggleTarget(p.id)}
-                  className={`px-1.5 py-0.5 text-2xs font-mono border rounded cursor-pointer transition-colors ${
-                    commsTargets.has(p.id)
-                      ? "bg-hammer-blue/20 border-hammer-blue text-hammer-blue"
-                      : "bg-hammer-bg border-hammer-border text-hammer-text hover:border-hammer-blue"
-                  }`}
-                >
-                  {p.displayName || p.name || `#${p.smallID}`}
-                </button>
+                <CommsPlayerRow key={p.id} player={p} selected={commsTargets.has(p.id)} tag="TM" tagColor="text-hammer-blue" onToggle={toggleTarget} />
               ))}
             </div>
           </div>
@@ -332,19 +383,9 @@ export default function CommsView() {
         {filteredAllies.length > 0 && (
           <div className="mb-1">
             <div className="text-2xs text-hammer-green font-bold mb-0.5">Allies ({filteredAllies.length})</div>
-            <div className="flex flex-wrap gap-0.5">
+            <div className="flex flex-col gap-0.5">
               {filteredAllies.map((p) => (
-                <button
-                  key={p.id}
-                  onClick={() => toggleTarget(p.id)}
-                  className={`px-1.5 py-0.5 text-2xs font-mono border rounded cursor-pointer transition-colors ${
-                    commsTargets.has(p.id)
-                      ? "bg-hammer-green/20 border-hammer-green text-hammer-green"
-                      : "bg-hammer-bg border-hammer-border text-hammer-text hover:border-hammer-green"
-                  }`}
-                >
-                  {p.displayName || p.name || `#${p.smallID}`}
-                </button>
+                <CommsPlayerRow key={p.id} player={p} selected={commsTargets.has(p.id)} tag="AL" tagColor="text-hammer-green" onToggle={toggleTarget} />
               ))}
             </div>
           </div>
@@ -457,20 +498,9 @@ export default function CommsView() {
               )}
             </div>
             {shouldShowOthers && (
-              <div className="flex flex-wrap gap-0.5 mt-0.5">
+              <div className="flex flex-col gap-0.5 mt-0.5">
                 {filteredOthers.map((p) => (
-                  <button
-                    key={p.id}
-                    onClick={() => toggleTarget(p.id)}
-                    className={`px-1.5 py-0.5 text-2xs font-mono border rounded cursor-pointer transition-colors ${
-                      commsTargets.has(p.id)
-                        ? "bg-hammer-green/20 border-hammer-green text-hammer-green"
-                        : "bg-hammer-bg border-hammer-border text-hammer-muted hover:text-hammer-text"
-                    }`}
-                  >
-                    {!p.clientID && <span className="text-hammer-warn mr-0.5">[BOT]</span>}
-                    {p.displayName || p.name || `#${p.smallID}`}
-                  </button>
+                  <CommsPlayerRow key={p.id} player={p} selected={commsTargets.has(p.id)} onToggle={toggleTarget} />
                 ))}
               </div>
             )}
@@ -481,6 +511,14 @@ export default function CommsView() {
           <div className="text-2xs text-hammer-dim mt-1">Select targets to send messages.</div>
         )}
       </Section>
+
+      {paced && (
+        <div className="flex items-center gap-1.5 mt-1 mb-1 px-1.5 py-1 rounded border border-hammer-green/40 bg-hammer-green/10 text-2xs text-hammer-green">
+          <span>sending {paced.sent}/{paced.total}</span>
+          <span className="text-hammer-dim">·</span>
+          <button onClick={cancelPaced} className="text-hammer-red hover:underline cursor-pointer bg-transparent border-none p-0 font-mono">cancel</button>
+        </div>
+      )}
 
       {/* Emojis — bigger, tighter grid */}
       <Section title="Emojis">

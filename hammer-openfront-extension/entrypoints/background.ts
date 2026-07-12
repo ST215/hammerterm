@@ -23,7 +23,7 @@ function debouncedSave(state: PersistedState) {
   }, DEBOUNCE_MS);
 }
 
-const VERSION = "15.21.0-ext";
+const VERSION = "15.22.0-ext";
 
 export default defineBackground(() => {
   console.log("[Hammer] Background service worker started");
@@ -37,7 +37,8 @@ export default defineBackground(() => {
 
   // Tell the game-tab content script the authoritative external-window state.
   // The content script applies setExternalOpen(open), which drives inGameView
-  // via the externalOpen invariant (open ⇒ in-game hidden; closed ⇒ disguised).
+  // via the externalOpen invariant (open ⇒ in-game hidden; closed leaves the
+  // overlay as-is — Hammer is silent by default, recover via the popup).
   function notifyExternalState(open: boolean) {
     if (gameTabId === null) return;
     try {
@@ -187,6 +188,14 @@ export default defineBackground(() => {
       return true;
     }
 
+    if (message.type === "GET_EXTERNAL_STATE") {
+      // Boot sync: the content script asks whether the dashboard window is open
+      // so a page reload mid-session can't desync overlay state from a still-open
+      // external window. background owns dashboardWindowId — authoritative.
+      sendResponse({ ok: true, open: dashboardWindowId !== null });
+      return true;
+    }
+
     if (message.type === "SET_IN_GAME_VIEW") {
       // From the popup control center — forward to the content script.
       if (gameTabId !== null) {
@@ -205,6 +214,23 @@ export default defineBackground(() => {
     }
 
     return false;
+  });
+
+  // Hotkey (Alt+Shift+H) → true toggle of the external dashboard window.
+  // Distinct from OPEN_DASHBOARD (focus-or-open): if the window is open, close
+  // it; otherwise open it. notifyExternalState keeps the game tab's overlay in
+  // sync via the externalOpen invariant.
+  chrome.commands?.onCommand.addListener((command) => {
+    if (command !== "toggle-external") return;
+    if (dashboardWindowId !== null) {
+      chrome.windows.remove(dashboardWindowId, () => {
+        void chrome.runtime.lastError; // window already gone
+        dashboardWindowId = null;
+        notifyExternalState(false);
+      });
+    } else {
+      openDashboardWindow(() => {});
+    }
   });
 
   function openDashboardWindow(sendResponse: (response: any) => void) {
@@ -260,9 +286,9 @@ export default defineBackground(() => {
   });
 
   // Clean up tracked window ID when windows are closed (X on the popup, OS close,
-  // etc.). This is the critical "no stuck externalOpen / way back to in-game"
-  // fix: whenever the window goes away by any means, tell the content script to
-  // clear externalOpen, which restores the in-game overlay to its disguised card.
+  // etc.). This is the critical "no stuck externalOpen" fix: whenever the window
+  // goes away by any means, tell the content script to clear externalOpen. The
+  // overlay stays silent (hidden) unless the user reopens a view via the popup.
   chrome.windows.onRemoved.addListener((windowId) => {
     if (windowId === dashboardWindowId) {
       dashboardWindowId = null;

@@ -16,7 +16,10 @@ describe("inGameView state machine", () => {
     s.setSizeIdx(1);
   });
 
-  test("default in-game view is disguised", () => {
+  test("beforeEach resets in-game view to disguised", () => {
+    // The true default is "hidden" (silent boot) — covered in ui-slice.test.ts
+    // against a fresh store. This singleton store is normalized to disguised by
+    // beforeEach for the transition tests below.
     expect(useStore.getState().inGameView).toBe("disguised");
   });
 
@@ -36,12 +39,12 @@ describe("inGameView state machine", () => {
     expect(useStore.getState().inGameView).toBe("hidden");
   });
 
-  test("closing external restores the disguised card (the way back)", () => {
+  test("closing external leaves the overlay hidden (silent by default)", () => {
     useStore.getState().setExternalOpen(true);
     expect(useStore.getState().inGameView).toBe("hidden");
     useStore.getState().setExternalOpen(false);
     expect(useStore.getState().externalOpen).toBe(false);
-    expect(useStore.getState().inGameView).toBe("disguised");
+    expect(useStore.getState().inGameView).toBe("hidden");
   });
 
   test("closing external does not clobber a non-hidden in-game view", () => {

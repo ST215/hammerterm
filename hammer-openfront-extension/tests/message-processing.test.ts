@@ -21,7 +21,12 @@ import { parseAmt, MessageType, num } from "./helpers/hammer-functions";
 // Message type classification
 // ───────────────────────────────────────────────────────
 describe("message type routing", () => {
-  test("MessageType values match game protocol", () => {
+  // NOTE: as of OpenFront v0.32+ these are internal transfer-direction
+  // discriminators, NOT the game's wire MessageType enum. Player-to-player
+  // donations now arrive on the GameUpdateType.DonateEvent channel (index 23),
+  // fed to trackCIAEvent as synthetic SENT_* values (see processDonateEvent).
+  // The numeric values only need to stay stable + unique as internal keys.
+  test("MessageType discriminators are stable", () => {
     expect(MessageType.SENT_GOLD_TO_PLAYER).toBe(18);
     expect(MessageType.RECEIVED_GOLD_FROM_PLAYER).toBe(19);
     expect(MessageType.RECEIVED_GOLD_FROM_TRADE).toBe(20);

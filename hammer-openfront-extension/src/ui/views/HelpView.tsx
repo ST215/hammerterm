@@ -25,6 +25,12 @@ const HOTKEYS = [
     label: "Toggle auto-feed",
     detail: "Quickly enable/disable Auto Troops and Auto Gold.",
   },
+  {
+    keys: ["ALT", "SHIFT", "H"],
+    label: "Toggle external window",
+    detail:
+      "Opens or closes the external dashboard window. If the shortcut does nothing, another extension may have claimed it — set it at chrome://extensions/shortcuts.",
+  },
 ];
 
 const TIPS = [
@@ -76,6 +82,29 @@ export default function HelpView() {
               <div className="text-hammer-dim text-2xs ml-4">{hk.detail}</div>
             </div>
           ))}
+        </div>
+      </Section>
+
+      <Section title="Visibility">
+        <div className="flex flex-col gap-1 text-2xs text-hammer-muted">
+          <div>
+            Hammer loads <span className="text-hammer-text">silent</span> — nothing
+            appears on screen until you ask for it.
+          </div>
+          <div>
+            Click the <span className="text-hammer-text">extension icon</span> to open
+            the control popup: from there, show the Analytics card, open the Controls
+            terminal, or launch the external window.
+          </div>
+          <div>
+            <span className="text-hammer-gold">Alt+Shift+H</span> toggles the external
+            dashboard window directly.
+          </div>
+          <div>
+            On-screen popups and notifications default{" "}
+            <span className="text-hammer-text">OFF</span>. Turn them on in the Settings
+            tab.
+          </div>
         </div>
       </Section>
 

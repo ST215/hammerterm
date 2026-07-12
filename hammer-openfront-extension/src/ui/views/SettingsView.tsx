@@ -53,8 +53,8 @@ const testBtn =
   "px-3 py-1 text-2xs text-hammer-green border border-hammer-green/50 bg-hammer-green/10 rounded cursor-pointer hover:bg-hammer-green/20 transition-colors self-start";
 
 export default function SettingsView() {
-  const popupsEnabled = useStore((s) => s.popupsEnabled);
-  const setPopupsEnabled = useStore((s) => s.setPopupsEnabled);
+  const screenPopupsEnabled = useStore((s) => s.screenPopupsEnabled);
+  const setScreenPopupsEnabled = useStore((s) => s.setScreenPopupsEnabled);
 
   // Reciprocate popup
   const popupScale = useStore((s) => s.popupScale);
@@ -104,8 +104,8 @@ export default function SettingsView() {
     <div>
       <Section title="Popups">
         <label className="flex items-center gap-2 cursor-pointer text-2xs">
-          <input type="checkbox" checked={popupsEnabled} onChange={(e) => setPopupsEnabled(e.target.checked)} className="accent-hammer-green" />
-          <span className={popupsEnabled ? "text-hammer-text" : "text-hammer-dim"}>
+          <input type="checkbox" checked={screenPopupsEnabled} onChange={(e) => setScreenPopupsEnabled(e.target.checked)} className="accent-hammer-green" />
+          <span className={screenPopupsEnabled ? "text-hammer-text" : "text-hammer-dim"}>
             Master switch — show on-screen popups (every view mode)
           </span>
         </label>

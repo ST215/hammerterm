@@ -50,7 +50,7 @@ export const PersistedStateSchema = z.object({
   broadcastSequence: z.array(z.number()).default([]),
   broadcastUseSequence: z.boolean().default(false),
   // Activity feed / notification preferences
-  popupsEnabled: z.boolean().default(true),
+  screenPopupsEnabled: z.boolean().default(false),
   toastInboundTroops: z.boolean().default(true),
   toastInboundGold: z.boolean().default(true),
   toastOutboundTroops: z.boolean().default(true),

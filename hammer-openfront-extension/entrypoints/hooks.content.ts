@@ -11,6 +11,8 @@
  * Communicates with the ISOLATED world content script via window.postMessage.
  */
 
+import { isAttackEvent, clampAttackTroops } from "@shared/logic/attack-clamp";
+
 export default defineContentScript({
   matches: ["*://openfront.io/*", "*://*.openfront.io/*"],
   runAt: "document_start",
@@ -33,6 +35,7 @@ export default defineContentScript({
     const GUT_UNIT = 1;
     const GUT_PLAYER = 2;
     const GUT_DISPLAY = 3;
+    const GUT_DONATE = 23;
 
     // ---------------------------------------------------------------
     // Internal state
@@ -46,6 +49,10 @@ export default defineContentScript({
     // EventBus
     let eventBus: any = null;
     const eventClasses: Record<string, any> = {};
+    let emitWrapped = false;
+    // Absolute troop floor (internal units) the governor is currently enforcing.
+    // >0 arms the per-click attack clamp; 0 / cleared = clamp inactive.
+    let attackFloorAbs = 0;
 
     // Timers
     const timeoutIds: ReturnType<typeof setTimeout>[] = [];
@@ -87,6 +94,9 @@ export default defineContentScript({
     let coalesceTimer: ReturnType<typeof setTimeout> | null = null;
     const pendingPlayers = new Map<string, any>();
     const pendingTiles: string[] = [];
+    // Latest per-player packed stat quad while coalescing a replay's tick flood,
+    // keyed by smallID → [tilesOwned, gold, troops].
+    const pendingStats = new Map<number, [number, number, number]>();
     let pendingTick = 0;
 
     function flushCoalesced() {
@@ -94,6 +104,12 @@ export default defineContentScript({
       if (pendingPlayers.size > 0) {
         emit("players", { players: [...pendingPlayers.values()], tick: pendingTick });
         pendingPlayers.clear();
+      }
+      if (pendingStats.size > 0) {
+        const stats: number[] = [];
+        for (const [sid, q] of pendingStats) stats.push(sid, q[0], q[1], q[2]);
+        emit("player-stats", { stats });
+        pendingStats.clear();
       }
       if (pendingTiles.length > 0) {
         emit("tiles", { packed: pendingTiles.splice(0) });
@@ -185,6 +201,26 @@ export default defineContentScript({
             scheduleFlush();
           } else {
             emit("players", { players: filtered, tick: gameUpdate.tick });
+          }
+        }
+
+        // Packed per-player stat quads [smallID, tilesOwned, gold, troops].
+        // v0.32+ (commit bca980f) moved tilesOwned/gold/troops off PlayerUpdate
+        // object diffs onto this transferable Float64Array — the only per-tick
+        // source of live troop counts (the governor's hard floor depends on it).
+        const packedStats = gameUpdate.packedPlayerUpdates;
+        if (packedStats?.length) {
+          if (isReplayMode) {
+            for (let i = 0; i + 3 < packedStats.length; i += 4) {
+              pendingStats.set(packedStats[i], [
+                packedStats[i + 1],
+                packedStats[i + 2],
+                packedStats[i + 3],
+              ]);
+            }
+            scheduleFlush();
+          } else {
+            emit("player-stats", { stats: Array.from(packedStats) });
           }
         }
 
@@ -511,6 +547,25 @@ export default defineContentScript({
               }
             }
           }
+          // DonateEvent (v0.32+ commit 41ef675): donations no longer ride the
+          // DisplayEvent channel — they arrive as their own update with a
+          // bigint `amount`. Convert to Number BEFORE any JSON serialization
+          // (JSON.stringify throws on bigint).
+          const donates = updates[GUT_DONATE];
+          if (donates?.length) {
+            for (const d of donates) {
+              try {
+                emit("donate", {
+                  event: {
+                    donationType: d.donationType,
+                    senderId: String(d.senderId),
+                    recipientId: String(d.recipientId),
+                    amount: Number(d.amount),
+                  },
+                });
+              } catch {}
+            }
+          }
         }
         return updates;
       };
@@ -640,6 +695,37 @@ export default defineContentScript({
       emit("status", { hook: "eventbus", found: true, classes: types });
     }
 
+    // Per-click attack floor clamp. Wrap eventBus.emit so the game's own
+    // SendAttackIntentEvent/SendBoatAttackIntentEvent pass through us BEFORE
+    // Transport's listener runs. When the governor has armed a floor, clamp
+    // evt.troops to the headroom above the reserve read LIVE from the game
+    // object at emit time (evt.troops = uiState.attackRatio × troops(), both
+    // internal units), swallowing the attack when no headroom remains. Only
+    // game-originated attacks match the field signature — the extension's own
+    // sends (troops/gold/emoji/alliance) never carry {targetID|dst, troops}
+    // without a recipient, so they can't be double-governed here.
+    function wrapEmit(): void {
+      if (emitWrapped || !eventBus || typeof eventBus.emit !== "function") return;
+      const origEmit = eventBus.emit.bind(eventBus);
+      eventBus.emit = function (evt: any, ...rest: any[]) {
+        try {
+          if (attackFloorAbs > 0 && isAttackEvent(evt)) {
+            const mine = getMyPlayerView();
+            const live =
+              mine && typeof mine.troops === "function"
+                ? Number(mine.troops())
+                : NaN;
+            const res = clampAttackTroops(evt.troops, live, attackFloorAbs);
+            if (res.swallow) return undefined; // no headroom — drop the attack
+            if (res.clamped) evt.troops = res.troops;
+          }
+        } catch {}
+        return origEmit(evt, ...rest);
+      };
+      emitWrapped = true;
+      console.log("[Hammer:Main] Wrapped eventBus.emit for attack-floor clamp");
+    }
+
     function findEventBus(): boolean {
       if (eventBus) return true;
       ebAttempts++;
@@ -652,6 +738,7 @@ export default defineContentScript({
           const el = document.querySelector(selector) as any;
           if (el?.[prop]) {
             eventBus = el[prop];
+            wrapEmit();
             console.log(
               "[Hammer:Main] Found EventBus via",
               selector,
@@ -676,6 +763,7 @@ export default defineContentScript({
           const val = (window as any)[prop];
           if (val && typeof val.emit === "function") {
             eventBus = val;
+            wrapEmit();
             console.log(
               `[Hammer:Main] Found EventBus at window.${prop}`,
             );
@@ -1398,10 +1486,16 @@ export default defineContentScript({
         } else {
           emit("send-result", { action, success: false });
         }
+      } else if (action === "set-attack-floor") {
+        // Governor pushes its absolute reserve floor (internal troop units) each
+        // tick; the emit-wrap clamp reads it live. 0 / negative disarms.
+        attackFloorAbs = Math.max(0, Number(amount) || 0);
       } else if (action === "release-attack-ratio") {
         // Hand control back to the native slider: the ControlPanel keeps its own
         // `attackRatio` (updated by the player's drag / T-Y), so copy it into the
         // shared uiState. After this the visible slider is authoritative again.
+        // Also disarm the per-click attack clamp — the governor is disengaging.
+        attackFloorAbs = 0;
         const us = resolveUIState();
         let restored: number | null = null;
         try {
@@ -1486,7 +1580,7 @@ export default defineContentScript({
         timeoutIds.length = 0;
         intervalIds.length = 0;
       },
-      version: "15.21.0-ext",
+      version: "15.22.0-ext",
     };
 
     console.log("[Hammer:Main] Hooks installed at document_start");

@@ -11,10 +11,19 @@
  * When the game updates, these tests will flag mismatches before
  * they reach production as silent failures.
  */
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
 import { describe, expect, test } from "vitest";
 import { EMOJI_TABLE, EMOJI_COMPACT } from "../src/shared/emoji-table";
-import { GameUpdateType } from "../src/shared/constants";
+import { GameUpdateType, MessageType, CAPTURED_SHIP_GOLD_KEY } from "../src/shared/constants";
 import quickChatData from "../../OpenFrontIO/resources/QuickChat.json";
+
+// Read OpenFront source text so packed-stats + DonateEvent contracts are pinned
+// against the actual game, not a hand-copied constant. (process.cwd() is the
+// extension package root; the game clone is a sibling at ../OpenFrontIO. Plain
+// fs — NOT `new URL(..., import.meta.url)`, which Vite rewrites as an asset.)
+const OF = (rel: string) =>
+  readFileSync(resolve(process.cwd(), "../OpenFrontIO", rel), "utf8");
 
 // ───────────────────────────────────────────────────────
 // Build the game's valid quick chat keys from QuickChat.json
@@ -288,5 +297,103 @@ describe("GameUpdateType constants", () => {
 
   test("DisplayEvent type index matches game protocol", () => {
     expect(GameUpdateType.DisplayEvent).toBe(3);
+  });
+});
+
+// ═══════════════════════════════════════════════════════
+// PACKED PLAYER STATS QUAD LAYOUT (v0.32+ commit bca980f)
+// ═══════════════════════════════════════════════════════
+describe("packedPlayerUpdates quad layout matches game", () => {
+  const playerImpl = OF("src/core/game/PlayerImpl.ts");
+  const gameUpdates = OF("src/core/game/GameUpdates.ts");
+
+  test("GameUpdateViewData still carries packedPlayerUpdates", () => {
+    expect(gameUpdates).toContain("packedPlayerUpdates?: Float64Array");
+  });
+
+  test("quad order is [smallID, tilesOwned, gold, troops]", () => {
+    // The extension (hooks.content.ts / bridge.ts / worker-hook.ts) unpacks
+    // stats[i..i+3] as smallID, tilesOwned, gold, troops. Pin that order
+    // against the game's encoder in PlayerImpl.toUpdate → statsOut.push(...).
+    const m = playerImpl.match(/statsOut\.push\(([\s\S]*?)\);/);
+    expect(m, "statsOut.push(...) not found in PlayerImpl.toUpdate").toBeTruthy();
+    const body = m![1];
+    const iSmall = body.indexOf("smallID");
+    const iTiles = body.indexOf("tilesOwned");
+    const iGold = body.indexOf("gold");
+    const iTroops = body.indexOf("troops");
+    expect(iSmall).toBeGreaterThanOrEqual(0);
+    expect(iTiles).toBeGreaterThan(iSmall);
+    expect(iGold).toBeGreaterThan(iTiles);
+    expect(iTroops).toBeGreaterThan(iGold);
+  });
+
+  test("doc comment names the same quad order", () => {
+    expect(gameUpdates).toContain("[smallID, tilesOwned, gold, troops]");
+  });
+});
+
+// ═══════════════════════════════════════════════════════
+// DONATE EVENT INDEX + SHAPE (v0.32+ commit 41ef675)
+// ═══════════════════════════════════════════════════════
+describe("DonateEvent contract matches game", () => {
+  const gameUpdates = OF("src/core/game/GameUpdates.ts");
+
+  test("DonateEvent is the last GameUpdateType member (index 23)", () => {
+    // Our constants pin DonateEvent = 23; the game defines it as the final
+    // enum member. Extract the enum body and confirm order/position.
+    const enumMatch = gameUpdates.match(/export enum GameUpdateType\s*\{([\s\S]*?)\}/);
+    expect(enumMatch, "GameUpdateType enum not found").toBeTruthy();
+    const members = enumMatch![1]
+      .replace(/\/\/[^\n]*/g, "") // strip line comments (some members are documented)
+      .split(",")
+      .map((s) => s.trim())
+      .filter((s) => s.length > 0);
+    expect(members.indexOf("Player")).toBe(GameUpdateType.Player);
+    expect(members.indexOf("DisplayEvent")).toBe(GameUpdateType.DisplayEvent);
+    expect(members.indexOf("DonateEvent")).toBe(GameUpdateType.DonateEvent);
+    expect(GameUpdateType.DonateEvent).toBe(23);
+  });
+
+  test("DonateEventUpdate shape is {donationType, senderId, recipientId, amount}", () => {
+    const ifaceMatch = gameUpdates.match(
+      /export interface DonateEventUpdate\s*\{([\s\S]*?)\}/,
+    );
+    expect(ifaceMatch, "DonateEventUpdate interface not found").toBeTruthy();
+    const body = ifaceMatch![1];
+    expect(body).toContain("type: GameUpdateType.DonateEvent");
+    expect(body).toMatch(/donationType:\s*"troops"\s*\|\s*"gold"/);
+    expect(body).toMatch(/senderId:\s*PlayerID/);
+    expect(body).toMatch(/recipientId:\s*PlayerID/);
+    expect(body).toMatch(/amount:\s*bigint/);
+  });
+});
+
+// ═══════════════════════════════════════════════════════
+// PORT / CAPTURED-SHIP GOLD CONTRACT (v0.32: mt=20 became CHAT)
+// ═══════════════════════════════════════════════════════
+describe("captured-trade-ship gold (port income) contract matches game", () => {
+  const gameTs = OF("src/core/game/Game.ts");
+  const tradeShip = OF("src/core/execution/TradeShipExecution.ts");
+
+  test("CAPTURED_ENEMY_UNIT is index 11 in the game's MessageType enum", () => {
+    // The game's MessageType is a plain auto-incremented enum; its numeric
+    // value IS the wire type our router matches on. Pin index 11.
+    const enumMatch = gameTs.match(/export enum MessageType\s*\{([\s\S]*?)\}/);
+    expect(enumMatch, "MessageType enum not found").toBeTruthy();
+    const members = enumMatch![1]
+      .replace(/\/\/[^\n]*/g, "")
+      .split(",")
+      .map((s) => s.trim())
+      .filter((s) => s.length > 0);
+    expect(members.indexOf("CAPTURED_ENEMY_UNIT")).toBe(11);
+    expect(MessageType.CAPTURED_ENEMY_UNIT).toBe(11);
+  });
+
+  test("TradeShipExecution emits the captured-ship gold display message we route on", () => {
+    // The message key is our reliable discriminator; the messageType pins the
+    // numeric channel. Both must survive to the extension's display payload.
+    expect(tradeShip).toContain(`"${CAPTURED_SHIP_GOLD_KEY}"`);
+    expect(tradeShip).toContain("MessageType.CAPTURED_ENEMY_UNIT");
   });
 });

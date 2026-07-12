@@ -29,6 +29,19 @@ export default defineContentScript({
     //  interception and forwards data via window.postMessage)
     installBridge();
 
+    // Boot sync: the overlay defaults to hidden, but if a page reload happened
+    // while the external dashboard window is still open, ask the background for
+    // the authoritative external state and apply it so overlay/external stay in
+    // sync (open ⇒ hidden anyway; harmless if closed).
+    try {
+      chrome.runtime.sendMessage({ type: "GET_EXTERNAL_STATE" }, (resp) => {
+        if (chrome.runtime.lastError || !resp?.ok) return;
+        useStore.getState().setExternalOpen(!!resp.open);
+      });
+    } catch {
+      /* background not ready — the hidden default stands */
+    }
+
     // Phase 2: After DOM is ready, start keyboard handler and automation
     const onReady = () => {
       installKeyboardHandler();
@@ -66,7 +79,7 @@ export default defineContentScript({
         ui.remove();
         delete (window as any).__HAMMER__;
       },
-      version: "15.21.0-ext",
+      version: "15.22.0-ext",
     };
 
     // Listen for messages from popup/background. The store here is the source
@@ -86,13 +99,9 @@ export default defineContentScript({
           return true;
         case "EXTERNAL_STATE":
           // Authoritative external-window state from background. Drives the
-          // externalOpen ⇒ inGameView invariant (open ⇒ hidden; closed ⇒ disguised).
+          // externalOpen ⇒ inGameView invariant (open ⇒ hidden; closed leaves
+          // the overlay as-is — silent-by-default, recover via the popup).
           store.setExternalOpen(!!message.open);
-          sendResponse({ ok: true });
-          return true;
-        case "TOGGLE_VISIBILITY":
-          // Legacy toggle (popup/keyboard): disguised ⇄ hidden.
-          store.setInGameView(store.inGameView === "hidden" ? "disguised" : "hidden");
           sendResponse({ ok: true });
           return true;
         default:

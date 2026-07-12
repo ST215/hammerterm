@@ -19,7 +19,7 @@ const MODES: { id: AttackRatioMode; label: string; blurb: string }[] = [
 const BASE_PRESETS = [2, 3, 5, 10, 15, 20];
 const HOLD_PRESETS = [30, 42, 50, 60, 70];
 const FLOOR_PRESETS = [0, 25, 42, 50, 60];
-const CAP_PRESETS = [15, 20, 30, 50, 75, 100];
+const CAP_PRESETS = [15, 20, 25, 30, 50, 75, 100];
 
 export default function AttackRatioView() {
   const running = useStore((s) => s.attackRatioRunning);
@@ -67,7 +67,9 @@ export default function AttackRatioView() {
             {running
               ? isManual
                 ? <>Watching — <span className="text-hammer-muted">you control the ratio</span></>
-                : <>Governing — <span className="text-hammer-green">{ratioLabel}</span></>
+                : tel?.belowSetpoint
+                  ? <>Governing — <span className="text-hammer-warn">below setpoint — minimum send</span></>
+                  : <>Governing — <span className="text-hammer-green">{ratioLabel}</span></>
               : "Governor off"}
           </span>
         </div>

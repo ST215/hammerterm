@@ -5,10 +5,14 @@ import type { NotifPosition } from "@shared/notif-position";
  * The in-game overlay's presentation state — one canonical enum replacing the
  * old uiVisible/minimized/tabsRevealed/displayMode tangle.
  *
- *  - "disguised": innocuous "match analytics" card (default; stream-safe).
+ *  - "disguised": innocuous "match analytics" card (stream-safe).
  *  - "revealed":  full Hammer terminal inline (tab bar + active view).
- *  - "hidden":    overlay renders nothing at all (used while the external
- *                 window is driving, so a shared screen shows only the game).
+ *  - "hidden":    overlay renders nothing at all (the DEFAULT — Hammer loads
+ *                 silent; also used while the external window is driving, so a
+ *                 shared screen shows only the game).
+ *
+ * Any internal view only ever appears via explicit user action (popup buttons
+ * or, once revealed, header buttons).
  *
  * Invariant: externalOpen === true  ⇒  inGameView === "hidden".
  * Enforced in setExternalOpen below — the one place external state changes.
@@ -32,7 +36,7 @@ export interface UISlice {
   statusPosition: NotifPosition;
   growthPosition: NotifPosition;
   /** Master switch — when false, no on-screen popups render at all. */
-  popupsEnabled: boolean;
+  screenPopupsEnabled: boolean;
   /** Show the Growth HUD overlay (independent of auto-troops running). */
   growthHudEnabled: boolean;
   panelWidth: number;
@@ -55,7 +59,7 @@ export interface UISlice {
   setDonationPosition: (v: NotifPosition) => void;
   setStatusPosition: (v: NotifPosition) => void;
   setGrowthPosition: (v: NotifPosition) => void;
-  setPopupsEnabled: (v: boolean) => void;
+  setScreenPopupsEnabled: (v: boolean) => void;
   setGrowthHudEnabled: (v: boolean) => void;
   setPanelWidth: (w: number) => void;
 }
@@ -64,7 +68,7 @@ export const createUISlice: StateCreator<UISlice, [], [], UISlice> = (set) => ({
   view: "hammer",
   paused: false,
   sizeIdx: 1,
-  inGameView: "disguised",
+  inGameView: "hidden",
   externalOpen: false,
   toastInboundTroops: true,
   toastInboundGold: true,
@@ -76,7 +80,7 @@ export const createUISlice: StateCreator<UISlice, [], [], UISlice> = (set) => ({
   donationPosition: "center-right",
   statusPosition: "center",
   growthPosition: "bottom-left",
-  popupsEnabled: true,
+  screenPopupsEnabled: false,
   growthHudEnabled: true,
   panelWidth: 850,
 
@@ -90,15 +94,14 @@ export const createUISlice: StateCreator<UISlice, [], [], UISlice> = (set) => ({
   hideInGame: () => set({ inGameView: "hidden" }),
 
   // Authoritative external-window state. Opening hides the in-game overlay;
-  // closing restores it to the disguised card (the guaranteed "way back").
+  // closing leaves inGameView as-is (Hammer stays silent by default — the popup
+  // control center is the recovery path back to an internal view).
   setExternalOpen: (v) =>
-    set((s) => {
-      if (v) return { externalOpen: true, inGameView: "hidden" };
-      return {
-        externalOpen: false,
-        inGameView: s.inGameView === "hidden" ? "disguised" : s.inGameView,
-      };
-    }),
+    set((s) =>
+      v
+        ? { externalOpen: true, inGameView: "hidden" }
+        : { externalOpen: false, inGameView: s.inGameView },
+    ),
 
   setToastInboundTroops: (v) => set({ toastInboundTroops: v }),
   setToastInboundGold: (v) => set({ toastInboundGold: v }),
@@ -110,7 +113,7 @@ export const createUISlice: StateCreator<UISlice, [], [], UISlice> = (set) => ({
   setDonationPosition: (v) => set({ donationPosition: v }),
   setStatusPosition: (v) => set({ statusPosition: v }),
   setGrowthPosition: (v) => set({ growthPosition: v }),
-  setPopupsEnabled: (v) => set({ popupsEnabled: v }),
+  setScreenPopupsEnabled: (v) => set({ screenPopupsEnabled: v }),
   setGrowthHudEnabled: (v) => set({ growthHudEnabled: v }),
   setPanelWidth: (w) => set((s) => (s.panelWidth === w ? s : { panelWidth: w })),
 });

@@ -10,6 +10,7 @@ export interface AttackRatioTelemetry {
   maxT: number; // estimated max troops, internal units
   troopPct: number; // troops as % of max (0–100)
   netSlope: number; // net troop change, internal units/sec (+rising / -falling)
+  belowSetpoint?: boolean; // peak/break-even pinned at MIN because troops < setpoint
 }
 
 export interface AttackRatioSlice {
@@ -38,11 +39,11 @@ export const createAttackRatioSlice: StateCreator<
   AttackRatioSlice
 > = (set) => ({
   attackRatioRunning: false,
-  attackRatioMode: "assist",
+  attackRatioMode: "peak",
   attackRatioBasePct: 5,
   attackRatioBreakevenPct: 50,
-  attackRatioFloorPct: 25,
-  attackRatioMaxCap: 30,
+  attackRatioFloorPct: 42,
+  attackRatioMaxCap: 75,
   attackRatioTelemetry: null,
 
   setAttackRatioRunning: (running) => set({ attackRatioRunning: running }),
