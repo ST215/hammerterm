@@ -36,6 +36,7 @@ const MIN_RATIO = 0.01; // game's slider minimum
 const BASE_RATIO = 0.03; // ratio applied when troops sit exactly at the setpoint
 const KP = 1.5; // proportional gain: ratio added per (troops-over-setpoint / maxT)
 const WRITE_EPS = 0.005; // skip re-writing the slider for sub-half-percent changes
+const REWRITE_MS = 2000; // reassert the ratio anyway this often (v0.34 settings modal can overwrite it)
 
 // ---------- Module-level state ----------
 
@@ -44,6 +45,7 @@ let history: Array<{ t: number; troops: number }> = [];
 let lastApplied = -1;
 let lastMode: AttackRatioMode | null = null;
 let lastTelemetryMs = 0;
+let lastWriteMs = 0;
 
 function log(...args: unknown[]): void {
   console.log("[Hammer]", ...args);
@@ -153,9 +155,17 @@ function tick(): void {
   // asynchronous slider write against an already-drained troop count.
   asSetAttackFloor(floorTroops);
 
-  if (Math.abs(ratio - lastApplied) >= WRITE_EPS) {
+  // Periodic forced rewrite: since v0.34 the game's mid-match settings modal
+  // can overwrite uiState.attackRatio from UserSettings (ControlPanel syncs
+  // it), and WRITE_EPS alone would never notice an external change. Reassert
+  // the governed ratio every REWRITE_MS even when it hasn't moved.
+  if (
+    Math.abs(ratio - lastApplied) >= WRITE_EPS ||
+    now - lastWriteMs >= REWRITE_MS
+  ) {
     asSetAttackRatio(ratio);
     lastApplied = ratio;
+    lastWriteMs = now;
   }
 
   // Peak/break-even pin the ratio to MIN when troops sit below the setpoint —
@@ -183,6 +193,7 @@ export function asAttackRatioStart(): void {
   lastApplied = -1;
   lastMode = null;
   lastTelemetryMs = 0;
+  lastWriteMs = 0;
   s.setAttackRatioRunning(true);
   if (timer) clearInterval(timer);
   timer = setInterval(tick, TICK_MS);

@@ -12,6 +12,8 @@ import { version as pkgVersion } from "../../package.json";
 interface Status {
   ok: boolean;
   gameTabConnected: boolean;
+  /** An OpenFront tab exists — even if its content script isn't answering. */
+  gameTabPresent: boolean;
   externalOpen: boolean;
   inGameView: "disguised" | "revealed" | "hidden" | null;
 }
@@ -19,6 +21,7 @@ interface Status {
 const EMPTY: Status = {
   ok: false,
   gameTabConnected: false,
+  gameTabPresent: false,
   externalOpen: false,
   inGameView: null,
 };
@@ -36,6 +39,7 @@ export default function PopupApp() {
         setStatus({
           ok: true,
           gameTabConnected: !!resp.gameTabConnected,
+          gameTabPresent: !!resp.gameTabPresent,
           externalOpen: !!resp.externalOpen,
           inGameView: resp.inGameView ?? null,
         });
@@ -71,7 +75,14 @@ export default function PopupApp() {
     });
   }, [refresh]);
 
+  const reloadGameTab = useCallback(() => {
+    chrome.runtime.sendMessage({ type: "RELOAD_GAME_TAB" }, refresh);
+  }, [refresh]);
+
   const connected = status.gameTabConnected;
+  // Tab exists but its content script isn't answering — almost always the
+  // extension was reloaded/updated over an already-open game tab.
+  const needsRefresh = status.gameTabPresent && !connected;
   const igv = status.inGameView;
   const igvLabel =
     igv === "revealed" ? "controls open"
@@ -94,9 +105,24 @@ export default function PopupApp() {
       <div style={S.statusBox}>
         <StatusRow
           label="Game tab"
-          value={loading ? "…" : connected ? "connected" : "not on OpenFront"}
-          color={connected ? "#7ff2a3" : "#ff6b6b"}
+          value={
+            loading ? "…"
+            : connected ? "connected"
+            : needsRefresh ? "needs refresh"
+            : "not on OpenFront"
+          }
+          color={connected ? "#7ff2a3" : needsRefresh ? "#f2c94c" : "#ff6b6b"}
         />
+        {needsRefresh && !loading && (
+          <div style={{ display: "flex", alignItems: "center", gap: 6, marginTop: 4 }}>
+            <span style={{ color: "#f2c94c", fontSize: 10, flex: 1 }}>
+              Extension was updated — reload the game tab to reconnect.
+            </span>
+            <button style={btn(false)} onClick={reloadGameTab}>
+              Reload tab
+            </button>
+          </div>
+        )}
         <StatusRow label="In-game" value={igvLabel} color="#c5d0e6" />
         <StatusRow
           label="External"

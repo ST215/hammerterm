@@ -268,6 +268,9 @@ function onBridgeMessage(e: MessageEvent): void {
     case "status":
       handleStatus(payload);
       break;
+    case "wire-stats":
+      useStore.getState().setWireCount60(Number(payload?.count60) || 0);
+      break;
     case "mouse-target":
       handleMouseTarget(payload);
       break;

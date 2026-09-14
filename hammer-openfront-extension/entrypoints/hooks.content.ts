@@ -97,6 +97,9 @@ export default defineContentScript({
     // Latest per-player packed stat quad while coalescing a replay's tick flood,
     // keyed by smallID → [tilesOwned, gold, troops].
     const pendingStats = new Map<number, [number, number, number]>();
+    // Width of one record in the game's packedPlayerUpdates array:
+    // [smallID, tilesOwned, gold, troops, goldEarned] (goldEarned unused here).
+    const GAME_STAT_STRIDE = 5;
     let pendingTick = 0;
 
     function flushCoalesced() {
@@ -204,14 +207,19 @@ export default defineContentScript({
           }
         }
 
-        // Packed per-player stat quads [smallID, tilesOwned, gold, troops].
-        // v0.32+ (commit bca980f) moved tilesOwned/gold/troops off PlayerUpdate
-        // object diffs onto this transferable Float64Array — the only per-tick
-        // source of live troop counts (the governor's hard floor depends on it).
+        // Packed per-player stat records. The GAME's record is
+        // [smallID, tilesOwned, gold, troops, goldEarned] (5-wide since
+        // upstream e3eb9df8; was a quad before — the game-contract test pins
+        // the current shape). v0.32+ (commit bca980f) moved these off
+        // PlayerUpdate object diffs onto this transferable Float64Array — the
+        // only per-tick source of live troop counts (the governor's hard floor
+        // depends on it). We normalize here to the extension-internal 4-stride
+        // [smallID, tilesOwned, gold, troops] that bridge.handlePlayerStats
+        // expects; goldEarned is unused.
         const packedStats = gameUpdate.packedPlayerUpdates;
         if (packedStats?.length) {
           if (isReplayMode) {
-            for (let i = 0; i + 3 < packedStats.length; i += 4) {
+            for (let i = 0; i + GAME_STAT_STRIDE - 1 < packedStats.length; i += GAME_STAT_STRIDE) {
               pendingStats.set(packedStats[i], [
                 packedStats[i + 1],
                 packedStats[i + 2],
@@ -220,7 +228,11 @@ export default defineContentScript({
             }
             scheduleFlush();
           } else {
-            emit("player-stats", { stats: Array.from(packedStats) });
+            const stats: number[] = [];
+            for (let i = 0; i + GAME_STAT_STRIDE - 1 < packedStats.length; i += GAME_STAT_STRIDE) {
+              stats.push(packedStats[i], packedStats[i + 1], packedStats[i + 2], packedStats[i + 3]);
+            }
+            emit("player-stats", { stats });
           }
         }
 
@@ -631,6 +643,9 @@ export default defineContentScript({
         hasGold: false,
         hasEmoji: false,
         hasQuickChatKey: false,
+        hasTarget: false,
+        hasAction: false,
+        instFieldCount: -1,
         type: null,
       };
 
@@ -657,6 +672,12 @@ export default defineContentScript({
           result.hasEmoji = result.hasEmoji || "emoji" in inst;
           result.hasQuickChatKey =
             result.hasQuickChatKey || "quickChatKey" in inst;
+          result.hasTarget = result.hasTarget || "target" in inst;
+          result.hasAction = result.hasAction || "action" in inst;
+          result.instFieldCount = Math.max(
+            result.instFieldCount,
+            Object.keys(inst).length,
+          );
         } catch {}
       }
 
@@ -668,6 +689,14 @@ export default defineContentScript({
       else if (result.hasRecipient && result.hasQuickChatKey)
         result.type = "quickchat";
       else if (result.hasRecipient) result.type = "recipient_only";
+      // Embargo classes carry no `recipient` so the branches above skip them.
+      // SendEmbargoIntentEvent = {target, action}; SendEmbargoAllIntentEvent
+      // has `action` as its ONLY field (arity 1). Signature-matched because
+      // production class names are minified.
+      else if (result.hasTarget && result.hasAction && !result.hasTroops)
+        result.type = "embargo";
+      else if (result.hasAction && result.instFieldCount === 1)
+        result.type = "embargo_all";
 
       return result;
     }
@@ -704,6 +733,22 @@ export default defineContentScript({
     // game-originated attacks match the field signature — the extension's own
     // sends (troops/gold/emoji/alliance) never carry {targetID|dst, troops}
     // without a recipient, so they can't be double-governed here.
+    // Wire-budget estimate: timestamps of events that become server intents
+    // (the server locks the whole client out at 150 intents/min). We can only
+    // count what crosses this bus — attacks, our sends, native comms — so the
+    // number is an undercount; builds/upgrades etc. aren't identifiable.
+    const wireStamps: number[] = [];
+    let lastWireCount = -1;
+
+    function looksLikeWireIntent(evt: any): boolean {
+      if (!evt || typeof evt !== "object") return false;
+      if ("recipient" in evt) return true; // donate/emoji/quickchat/alliance
+      if (isAttackEvent(evt)) return true; // land + boat attacks
+      if ("action" in evt && ("target" in evt || Object.keys(evt).length === 1))
+        return true; // embargo / embargo_all
+      return false;
+    }
+
     function wrapEmit(): void {
       if (emitWrapped || !eventBus || typeof eventBus.emit !== "function") return;
       const origEmit = eventBus.emit.bind(eventBus);
@@ -719,11 +764,23 @@ export default defineContentScript({
             if (res.swallow) return undefined; // no headroom — drop the attack
             if (res.clamped) evt.troops = res.troops;
           }
+          if (looksLikeWireIntent(evt)) wireStamps.push(Date.now());
         } catch {}
         return origEmit(evt, ...rest);
       };
       emitWrapped = true;
-      console.log("[Hammer:Main] Wrapped eventBus.emit for attack-floor clamp");
+      // Push the 60s count to the bridge ~1/sec, only when it changed.
+      intervalIds.push(
+        setInterval(() => {
+          const cutoff = Date.now() - 60_000;
+          while (wireStamps.length && wireStamps[0] < cutoff) wireStamps.shift();
+          if (wireStamps.length !== lastWireCount) {
+            lastWireCount = wireStamps.length;
+            emit("wire-stats", { count60: lastWireCount });
+          }
+        }, 1000),
+      );
+      console.log("[Hammer:Main] Wrapped eventBus.emit for attack-floor clamp + wire count");
     }
 
     function findEventBus(): boolean {
@@ -1178,25 +1235,9 @@ export default defineContentScript({
         } else {
           console.warn("[Hammer:Main] Troops send: eventBus=", !!eventBus, "eventClasses.troops=", !!eventClasses.troops);
         }
-        if (
-          gameSocket &&
-          gameSocket.readyState === 1 &&
-          currentClientID
-        ) {
-          gameSocket.send(
-            JSON.stringify({
-              type: "intent",
-              intent: {
-                type: "donate_troops",
-                clientID: currentClientID,
-                recipient: targetId,
-                troops: amount,
-              },
-            }),
-          );
-          emit("send-result", { action, success: true, method: "websocket" });
-          return;
-        }
+        // No WebSocket fallback: since upstream d70e4865 (v0.33) every frame
+        // on the game socket is zbin-encoded binary and the server KICKS the
+        // client on a frame it can't decode. EventBus is the only send path.
         emit("send-result", { action, success: false });
       } else if (action === "gold") {
         if (eventBus && eventClasses.gold) {
@@ -1219,25 +1260,7 @@ export default defineContentScript({
         } else {
           console.warn("[Hammer:Main] Gold send: eventBus=", !!eventBus, "eventClasses.gold=", !!eventClasses.gold);
         }
-        if (
-          gameSocket &&
-          gameSocket.readyState === 1 &&
-          currentClientID
-        ) {
-          gameSocket.send(
-            JSON.stringify({
-              type: "intent",
-              intent: {
-                type: "donate_gold",
-                clientID: currentClientID,
-                recipient: targetId,
-                gold: Number(amount),
-              },
-            }),
-          );
-          emit("send-result", { action, success: true, method: "websocket" });
-          return;
-        }
+        // No WebSocket fallback (binary wire — see donate_troops note).
         emit("send-result", { action, success: false });
       } else if (action === "emoji") {
         if (eventBus && eventClasses.emoji) {
@@ -1261,25 +1284,8 @@ export default defineContentScript({
             console.warn("[Hammer:Main] Emoji EventBus emit failed:", err);
           }
         }
-        // WebSocket fallback for targeted emoji (broadcast only works via EventBus)
-        if (
-          gameSocket &&
-          gameSocket.readyState === 1 &&
-          currentClientID &&
-          recipientId !== "AllPlayers"
-        ) {
-          gameSocket.send(
-            JSON.stringify({
-              type: "intent",
-              intent: {
-                type: "emoji",
-                clientID: currentClientID,
-                recipient: recipientId,
-                emoji: emojiIndex,
-              },
-            }),
-          );
-        }
+        // No WebSocket fallback (binary wire — see donate_troops note).
+        emit("send-result", { action: "emoji", recipientId, emojiIndex, success: false });
       } else if (action === "quickchat") {
         if (
           eventBus &&
@@ -1300,22 +1306,8 @@ export default defineContentScript({
             }
           }
         }
-        if (
-          gameSocket &&
-          gameSocket.readyState === 1 &&
-          currentClientID
-        ) {
-          const intent: any = {
-            type: "quick_chat",
-            clientID: currentClientID,
-            recipient: recipientId,
-            quickChatKey: key,
-          };
-          if (targetPlayerId) intent.target = targetPlayerId;
-          gameSocket.send(
-            JSON.stringify({ type: "intent", intent }),
-          );
-        }
+        // No WebSocket fallback (binary wire — see donate_troops note).
+        emit("send-result", { action: "quickchat", recipientId, key, success: false });
       } else if (action === "alliance") {
         const diag: Record<string, unknown> = {
           action,
@@ -1378,65 +1370,62 @@ export default defineContentScript({
         }
         emit("send-result", { action: "betray", recipientId, success: false });
       } else if (action === "embargo") {
-        // Trade embargo — WebSocket intent only
+        // Trade embargo — SendEmbargoIntentEvent(target: PlayerView, action).
+        // Was WebSocket-only; the binary wire (d70e4865) killed raw-JSON
+        // intents, so this now rides the EventBus like everything else.
         const { targetId: embargoTarget, embargoAction } = data;
-        if (
-          gameSocket &&
-          gameSocket.readyState === 1 &&
-          currentClientID &&
-          embargoTarget
-        ) {
-          gameSocket.send(
-            JSON.stringify({
-              type: "intent",
-              intent: {
-                type: "embargo",
-                clientID: currentClientID,
-                targetID: embargoTarget,
-                action: embargoAction, // "start" = stop trading, "stop" = resume trading
-              },
-            }),
-          );
-          emit("send-result", {
-            action: "embargo",
-            targetId: embargoTarget,
-            embargoAction,
-            success: true,
-            method: "websocket",
-          });
-        } else {
-          console.warn("[Hammer:Main] Embargo failed: no gameSocket or clientID");
-          emit("send-result", {
-            action: "embargo",
-            targetId: embargoTarget,
-            embargoAction,
-            success: false,
-          });
+        if (eventBus && eventClasses.embargo && embargoTarget) {
+          const pv = getPlayerView(embargoTarget);
+          if (pv) {
+            try {
+              const evt = new eventClasses.embargo(pv, embargoAction);
+              eventBus.emit(evt);
+              emit("send-result", {
+                action: "embargo",
+                targetId: embargoTarget,
+                embargoAction, // "start" = stop trading, "stop" = resume trading
+                success: true,
+                method: "eventbus",
+              });
+              return;
+            } catch (err) {
+              console.warn("[Hammer:Main] Embargo EventBus emit failed:", err);
+            }
+          }
         }
+        console.warn(
+          "[Hammer:Main] Embargo failed: eventBus=", !!eventBus,
+          "embargoClass=", !!eventClasses.embargo,
+        );
+        emit("send-result", {
+          action: "embargo",
+          targetId: embargoTarget,
+          embargoAction,
+          success: false,
+        });
       } else if (action === "embargo_all") {
-        // Embargo/resume ALL players — single server-side intent (OpenFront v0.30+)
+        // Embargo/resume ALL players — SendEmbargoAllIntentEvent(action).
         const { embargoAction } = data;
-        if (gameSocket && gameSocket.readyState === 1 && currentClientID) {
-          gameSocket.send(
-            JSON.stringify({
-              type: "intent",
-              intent: {
-                type: "embargo_all",
-                clientID: currentClientID,
-                action: embargoAction, // "start" = stop all, "stop" = resume all
-              },
-            }),
-          );
-          emit("send-result", {
-            action: "embargo_all",
-            embargoAction,
-            success: true,
-            method: "websocket",
-          });
-        } else {
-          console.warn("[Hammer:Main] Embargo all failed: no gameSocket or clientID");
-          emit("send-result", { action: "embargo_all", embargoAction, success: false });
+        if (eventBus && eventClasses.embargo_all) {
+          try {
+            const evt = new eventClasses.embargo_all(embargoAction);
+            eventBus.emit(evt);
+            emit("send-result", {
+              action: "embargo_all",
+              embargoAction, // "start" = stop all, "stop" = resume all
+              success: true,
+              method: "eventbus",
+            });
+            return;
+          } catch (err) {
+            console.warn("[Hammer:Main] Embargo-all EventBus emit failed:", err);
+          }
         }
+        console.warn(
+          "[Hammer:Main] Embargo all failed: eventBus=", !!eventBus,
+          "embargoAllClass=", !!eventClasses.embargo_all,
+        );
+        emit("send-result", { action: "embargo_all", embargoAction, success: false });
       } else if (action === "capture-mouse") {
         // ALT+M: resolve tile under mouse cursor, return owner info.
         // Prefer the game's own coordinate math (works under WebGL2); fall
@@ -1580,7 +1569,7 @@ export default defineContentScript({
         timeoutIds.length = 0;
         intervalIds.length = 0;
       },
-      version: "15.22.0-ext",
+      version: "15.23.0-ext",
     };
 
     console.log("[Hammer:Main] Hooks installed at document_start");

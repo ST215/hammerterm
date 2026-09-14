@@ -1,4 +1,5 @@
 import type { StateCreator } from "zustand";
+import type { PaceProfileId } from "@shared/logic/pace";
 
 export interface CommsRecentEntry {
   type: string;
@@ -12,6 +13,12 @@ export interface CommsPendingQC {
   targetId: string;
 }
 
+export interface CommsActiveBatch {
+  label: string;
+  sent: number;
+  total: number;
+}
+
 const RECENT_CAP = 20;
 
 export interface CommsSlice {
@@ -21,6 +28,10 @@ export interface CommsSlice {
   commsPendingQC: CommsPendingQC | null;
   commsRecentSent: CommsRecentEntry[];
   allianceCommsExpanded: Map<string, boolean>;
+  /** Multi-target send pacing profile. Persisted setting — survives resetComms. */
+  commsPaceProfile: PaceProfileId;
+  /** Active paced batch (context-local; shown by the status strip). */
+  commsActiveBatch: CommsActiveBatch | null;
 
   setCommsTargets: (targets: Set<string>) => void;
   addCommsTarget: (id: string) => void;
@@ -29,6 +40,8 @@ export interface CommsSlice {
   setCommsGroupMode: (mode: string) => void;
   toggleCommsOthersExpanded: () => void;
   setCommsPendingQC: (pending: CommsPendingQC | null) => void;
+  setCommsPaceProfile: (profile: PaceProfileId) => void;
+  setCommsActiveBatch: (batch: CommsActiveBatch | null) => void;
   addCommsRecentSent: (entry: CommsRecentEntry) => void;
   toggleAllianceCommsExpanded: (id: string) => void;
   resetComms: () => void;
@@ -41,6 +54,8 @@ export const createCommsSlice: StateCreator<CommsSlice, [], [], CommsSlice> = (s
   commsPendingQC: null,
   commsRecentSent: [],
   allianceCommsExpanded: new Map(),
+  commsPaceProfile: "quick" as PaceProfileId,
+  commsActiveBatch: null,
 
   setCommsTargets: (targets) => set({ commsTargets: targets }),
 
@@ -67,6 +82,10 @@ export const createCommsSlice: StateCreator<CommsSlice, [], [], CommsSlice> = (s
 
   setCommsPendingQC: (pending) => set({ commsPendingQC: pending }),
 
+  setCommsPaceProfile: (profile) => set({ commsPaceProfile: profile }),
+
+  setCommsActiveBatch: (batch) => set({ commsActiveBatch: batch }),
+
   addCommsRecentSent: (entry) =>
     set((s) => ({
       commsRecentSent: [entry, ...s.commsRecentSent].slice(0, RECENT_CAP),
@@ -85,5 +104,6 @@ export const createCommsSlice: StateCreator<CommsSlice, [], [], CommsSlice> = (s
       commsPendingQC: null,
       commsRecentSent: [],
       allianceCommsExpanded: new Map(),
+      commsActiveBatch: null,
     }),
 });

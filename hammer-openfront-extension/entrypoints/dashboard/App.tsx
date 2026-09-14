@@ -12,6 +12,7 @@ const LOCAL_KEYS = new Set([
   // Comms selections (user picks targets in dashboard)
   "commsTargets", "commsGroupMode", "commsOthersExpanded",
   "commsPendingQC", "commsRecentSent", "allianceCommsExpanded",
+  "commsPaceProfile", "commsActiveBatch",
   // Reciprocate config
   "reciprocateMode", "reciprocateAutoPct", "reciprocateNotifyDuration",
   "reciprocateEnabled", "reciprocateOnGold", "reciprocateOnTroops",

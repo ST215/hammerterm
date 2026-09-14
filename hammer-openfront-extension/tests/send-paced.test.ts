@@ -45,6 +45,59 @@ describe("sendPaced", () => {
     expect(fn).toHaveBeenCalledTimes(3);
   });
 
+  test("honors a custom spacing interval (user-set commsPaceMs)", () => {
+    const fn = vi.fn();
+    sendPaced(["a", "b", "c"], fn, { spacingMs: 2500 });
+
+    expect(fn).toHaveBeenCalledTimes(1);
+    // Well past the old 900ms default but short of the custom pace: no send.
+    vi.advanceTimersByTime(2499);
+    expect(fn).toHaveBeenCalledTimes(1);
+    vi.advanceTimersByTime(1);
+    expect(fn).toHaveBeenCalledTimes(2);
+    vi.advanceTimersByTime(2500);
+    expect(fn).toHaveBeenCalledTimes(3);
+  });
+
+  test("default jitter scales with spacing (proportional, ~45%)", () => {
+    // Math.random mocked to 0 elsewhere; here force max jitter to observe it.
+    (Math.random as ReturnType<typeof vi.fn>).mockReturnValue(1);
+    const fn = vi.fn();
+    sendPaced(["a", "b"], fn, { spacingMs: 400 });
+    expect(fn).toHaveBeenCalledTimes(1);
+    // Max gap = spacing + 45% jitter = 400 + 180.
+    vi.advanceTimersByTime(579);
+    expect(fn).toHaveBeenCalledTimes(1);
+    vi.advanceTimersByTime(1);
+    expect(fn).toHaveBeenCalledTimes(2);
+  });
+
+  test("delayFirst schedules even the first send after a gap", () => {
+    const fn = vi.fn();
+    sendPaced(["a", "b"], fn, { spacingMs: 6000, jitterMs: 0, delayFirst: true });
+
+    // Nothing fires synchronously — a human can't send instantly.
+    expect(fn).not.toHaveBeenCalled();
+    vi.advanceTimersByTime(5999);
+    expect(fn).not.toHaveBeenCalled();
+    vi.advanceTimersByTime(1);
+    expect(fn).toHaveBeenCalledTimes(1);
+    vi.advanceTimersByTime(6000);
+    expect(fn).toHaveBeenCalledTimes(2);
+  });
+
+  test("longPauses doubles a gap when the chance hits", () => {
+    // Math.random is mocked to 0 in beforeEach: jitter contributes 0 and the
+    // long-pause roll (0 < 0.15) ALWAYS hits, so every gap is exactly 2×spacing.
+    const fn = vi.fn();
+    sendPaced(["a", "b"], fn, { spacingMs: 1000, jitterMs: 0, longPauses: true });
+    expect(fn).toHaveBeenCalledTimes(1);
+    vi.advanceTimersByTime(1999);
+    expect(fn).toHaveBeenCalledTimes(1);
+    vi.advanceTimersByTime(1);
+    expect(fn).toHaveBeenCalledTimes(2);
+  });
+
   test("single target fires immediately with no pending timer", () => {
     const fn = vi.fn();
     sendPaced(["solo"], fn, { spacingMs: 900 });

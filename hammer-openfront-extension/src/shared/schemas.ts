@@ -51,6 +51,9 @@ export const PersistedStateSchema = z.object({
   broadcastUseSequence: z.boolean().default(false),
   // Activity feed / notification preferences
   screenPopupsEnabled: z.boolean().default(false),
+  // .catch() maps any legacy stored value (e.g. the removed "custom") to quick
+  // instead of failing hydration.
+  commsPaceProfile: z.enum(["instant", "quick", "brisk", "human"]).default("quick").catch("quick"),
   toastInboundTroops: z.boolean().default(true),
   toastInboundGold: z.boolean().default(true),
   toastOutboundTroops: z.boolean().default(true),

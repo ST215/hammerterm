@@ -6,6 +6,14 @@ import { useContentWidth } from "@ui/hooks/useContentWidth";
 import { short, dTroops } from "@shared/utils";
 import { splitClanGroups, groupByTeam } from "@shared/logic/clan-tags";
 import { sendEmoji, sendQuickChat, sendPaced, type PacedHandle } from "@content/game/send";
+import {
+  PACE_PROFILE_IDS,
+  durationLabel,
+  estimateBatchMs,
+  paceRangeLabel,
+  resolvePace,
+  type PaceProfileId,
+} from "@shared/logic/pace";
 import { EMOJI_TABLE } from "@shared/emoji-table";
 import { Section, PresetButton, PretextText } from "@ui/components/ds";
 import { TargetTag } from "@ui/components/TargetTag";
@@ -83,6 +91,14 @@ function keyToLabel(key: string): string {
 
 const GROUP_MODES = ["team", "allies", "all", "others", "clear"] as const;
 
+// Multi-target send pacing profile chip labels.
+const PACE_LABELS: Record<PaceProfileId, string> = {
+  instant: "Instant",
+  quick: "Quick",
+  brisk: "Brisk",
+  human: "Human",
+};
+
 // Scannable selectable row — readable name, relationship tag, short troops, and
 // an obvious selected state (check glyph + strong border). Adapted from
 // AlliancesView's PlayerRow. Reused for both the target lists and the QC picker.
@@ -126,6 +142,8 @@ export default function CommsView() {
   const contentWidth = useContentWidth();
   const commsTargets = useStore((s) => s.commsTargets);
   const commsGroupMode = useStore((s) => s.commsGroupMode);
+  const commsPaceProfile = useStore((s) => s.commsPaceProfile);
+  const setCommsPaceProfile = useStore((s) => s.setCommsPaceProfile);
   const commsRecentSent = useStore((s) => s.commsRecentSent);
   const myTeam = useStore((s) => s.myTeam);
   const myAllies = useStore((s) => s.myAllies);
@@ -147,26 +165,30 @@ export default function CommsView() {
   const [search, setSearch] = useState("");
   const [targetSearch, setTargetSearch] = useState("");
 
-  // Paced-batch progress + cancel handle (also cancelled on new-match reset).
-  const [paced, setPaced] = useState<{ sent: number; total: number } | null>(null);
+  // Paced-batch state lives in the store (comms slice) so the StatusStrip can
+  // show progress/cancel from any tab; cancelled on new-match reset too.
   const pacerRef = useRef<PacedHandle | null>(null);
-  const runPaced = useCallback((ids: string[], fn: (id: string) => void) => {
+  const runPaced = useCallback((ids: string[], fn: (id: string) => void, label: string) => {
     pacerRef.current?.cancel();
     if (ids.length <= 1) {
       if (ids.length === 1) fn(ids[0]);
-      setPaced(null);
       return;
     }
-    setPaced({ sent: 0, total: ids.length });
+    // Read pace at call time (not via closure) so the callback stays stable.
+    const s = useStore.getState();
+    const pace = resolvePace(s.commsPaceProfile);
+    s.setCommsActiveBatch({ label, sent: 0, total: ids.length });
     pacerRef.current = sendPaced(ids, fn, {
-      onProgress: (p) => setPaced(p.done || p.sent >= p.total ? null : p),
+      spacingMs: pace.minMs,
+      jitterMs: pace.maxMs - pace.minMs,
+      delayFirst: pace.delayFirst,
+      longPauses: pace.longPauses,
+      onProgress: (p) =>
+        useStore.getState().setCommsActiveBatch(
+          p.done || p.sent >= p.total ? null : { label, sent: p.sent, total: p.total },
+        ),
     });
   }, []);
-  const cancelPaced = useCallback(() => {
-    pacerRef.current?.cancel();
-    setPaced(null);
-  }, []);
-
   const { otherHumans, otherBots } = useMemo(() => {
     const humans: PlayerData[] = [];
     const bots: PlayerData[] = [];
@@ -238,7 +260,7 @@ export default function CommsView() {
 
   function handleSendEmoji(idx: number) {
     if (commsTargets.size === 0) return;
-    runPaced([...commsTargets], (tid) => sendEmoji(tid, idx));
+    runPaced([...commsTargets], (tid) => sendEmoji(tid, idx), EMOJI_TABLE[idx] || "emoji");
     addRecentSent({
       type: "emoji",
       label: EMOJI_TABLE[idx] || "?",
@@ -253,8 +275,8 @@ export default function CommsView() {
       setPendingQCKey(fullKey);
       return;
     }
-    runPaced([...commsTargets], (tid) => sendQuickChat(tid, fullKey));
     const label = fullKey.split(".")[1] || fullKey;
+    runPaced([...commsTargets], (tid) => sendQuickChat(tid, fullKey), keyToLabel(label));
     addRecentSent({
       type: "qc",
       label: keyToLabel(label),
@@ -265,8 +287,8 @@ export default function CommsView() {
 
   function handlePendingTarget(targetId: string) {
     if (!pendingQCKey) return;
-    runPaced([...commsTargets], (tid) => sendQuickChat(tid, pendingQCKey, targetId));
     const label = pendingQCKey.split(".")[1] || pendingQCKey;
+    runPaced([...commsTargets], (tid) => sendQuickChat(tid, pendingQCKey, targetId), keyToLabel(label));
     addRecentSent({
       type: "qc",
       label: keyToLabel(label),
@@ -368,6 +390,28 @@ export default function CommsView() {
             />
           ))}
         </div>
+        <div className="flex items-center gap-1 mb-0.5">
+          <span className="text-2xs text-hammer-dim mr-0.5" title="How multi-target sends are spaced. Brisk (3-7s) and Human (6-14s) randomize each gap and delay the first send too, like finding each player by hand.">Pace</span>
+          {PACE_PROFILE_IDS.map((p) => (
+            <PresetButton
+              key={p}
+              label={PACE_LABELS[p]}
+              active={commsPaceProfile === p}
+              onClick={() => setCommsPaceProfile(p)}
+            />
+          ))}
+        </div>
+        {(() => {
+          const pace = resolvePace(commsPaceProfile);
+          const n = commsTargets.size;
+          return (
+            <div className="text-2xs text-hammer-dim mb-1.5">
+              each send {paceRangeLabel(pace)} apart
+              {pace.delayFirst && " · first send delayed too"}
+              {n > 1 && ` · ${n} msgs ≈ ${durationLabel(estimateBatchMs(n, pace))}`}
+            </div>
+          );
+        })()}
 
         {filteredTeammates.length > 0 && (
           <div className="mb-1">
@@ -512,13 +556,7 @@ export default function CommsView() {
         )}
       </Section>
 
-      {paced && (
-        <div className="flex items-center gap-1.5 mt-1 mb-1 px-1.5 py-1 rounded border border-hammer-green/40 bg-hammer-green/10 text-2xs text-hammer-green">
-          <span>sending {paced.sent}/{paced.total}</span>
-          <span className="text-hammer-dim">·</span>
-          <button onClick={cancelPaced} className="text-hammer-red hover:underline cursor-pointer bg-transparent border-none p-0 font-mono">cancel</button>
-        </div>
-      )}
+      {/* Batch progress + cancel now live in the StatusStrip (visible on any tab). */}
 
       {/* Emojis — bigger, tighter grid */}
       <Section title="Emojis">

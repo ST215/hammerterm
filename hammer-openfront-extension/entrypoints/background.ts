@@ -23,7 +23,7 @@ function debouncedSave(state: PersistedState) {
   }, DEBOUNCE_MS);
 }
 
-const VERSION = "15.22.0-ext";
+const VERSION = "15.23.0-ext";
 
 export default defineBackground(() => {
   console.log("[Hammer] Background service worker started");
@@ -35,21 +35,57 @@ export default defineBackground(() => {
   // OPEN_DASHBOARD would otherwise create a second window.
   let launchingDashboard = false;
 
+  // ---- MV3 resilience -------------------------------------------------
+  // Chrome kills this service worker after ~30s idle, wiping gameTabId and
+  // dashboardWindowId. The content script announces CONTENT_READY only once
+  // at page load, so a cold-started worker would otherwise answer "no game
+  // tab" until the tab is refreshed — a dead-looking popup. Never trust the
+  // in-memory cache alone: when a cached id is null, re-resolve by URL query.
+
+  function resolveGameTab(cb: (tabId: number | null) => void) {
+    if (gameTabId !== null) {
+      cb(gameTabId);
+      return;
+    }
+    chrome.tabs.query(
+      { url: ["*://openfront.io/*", "*://*.openfront.io/*"] },
+      (tabs) => {
+        const tab = tabs?.[0];
+        gameTabId = tab?.id ?? null;
+        cb(gameTabId);
+      },
+    );
+  }
+
+  function resolveDashboardWindow(cb: (windowId: number | null) => void) {
+    if (dashboardWindowId !== null) {
+      cb(dashboardWindowId);
+      return;
+    }
+    chrome.tabs.query({ url: chrome.runtime.getURL("/dashboard.html") }, (tabs) => {
+      const tab = tabs?.[0];
+      dashboardWindowId = tab?.windowId ?? null;
+      cb(dashboardWindowId);
+    });
+  }
+
   // Tell the game-tab content script the authoritative external-window state.
   // The content script applies setExternalOpen(open), which drives inGameView
   // via the externalOpen invariant (open ⇒ in-game hidden; closed leaves the
   // overlay as-is — Hammer is silent by default, recover via the popup).
   function notifyExternalState(open: boolean) {
-    if (gameTabId === null) return;
-    try {
-      chrome.tabs.sendMessage(
-        gameTabId,
-        { type: "EXTERNAL_STATE", open },
-        () => void chrome.runtime.lastError, // swallow "no receiver"
-      );
-    } catch {
-      /* tab gone */
-    }
+    resolveGameTab((tabId) => {
+      if (tabId === null) return;
+      try {
+        chrome.tabs.sendMessage(
+          tabId,
+          { type: "EXTERNAL_STATE", open },
+          () => void chrome.runtime.lastError, // swallow "no receiver"
+        );
+      } catch {
+        /* tab gone */
+      }
+    });
   }
 
   // Handle messages from popup and content scripts
@@ -65,23 +101,19 @@ export default defineBackground(() => {
     }
 
     if (message.type === "GET_GAME_TAB") {
-      if (gameTabId !== null) {
-        sendResponse({ ok: true, tabId: gameTabId });
-      } else {
-        // Fallback: service worker may have restarted, query by URL
-        chrome.tabs.query(
-          { url: ["*://openfront.io/*", "*://*.openfront.io/*"] },
-          (tabs) => {
-            const tab = tabs?.[0];
-            if (tab?.id) {
-              gameTabId = tab.id;
-              sendResponse({ ok: true, tabId: tab.id });
-            } else {
-              sendResponse({ ok: false, tabId: null });
-            }
-          },
-        );
-      }
+      resolveGameTab((tabId) => {
+        sendResponse({ ok: tabId !== null, tabId });
+      });
+      return true;
+    }
+
+    if (message.type === "RELOAD_GAME_TAB") {
+      // Popup's recovery for a game tab whose content script is dead (e.g.
+      // the extension was reloaded/updated over an already-open tab).
+      resolveGameTab((tabId) => {
+        if (tabId !== null) chrome.tabs.reload(tabId);
+        sendResponse({ ok: tabId !== null });
+      });
       return true;
     }
 
@@ -92,20 +124,22 @@ export default defineBackground(() => {
         return true;
       }
       // Reuse existing dashboard window if it's still open
-      if (dashboardWindowId !== null) {
-        chrome.windows.get(dashboardWindowId, (win) => {
-          if (chrome.runtime.lastError || !win) {
-            dashboardWindowId = null;
-            openDashboardWindow(sendResponse);
-          } else {
-            chrome.windows.update(dashboardWindowId!, { focused: true });
-            notifyExternalState(true);
-            sendResponse({ ok: true });
-          }
-        });
-      } else {
-        openDashboardWindow(sendResponse);
-      }
+      resolveDashboardWindow((winId) => {
+        if (winId !== null) {
+          chrome.windows.get(winId, (win) => {
+            if (chrome.runtime.lastError || !win) {
+              dashboardWindowId = null;
+              openDashboardWindow(sendResponse);
+            } else {
+              chrome.windows.update(winId, { focused: true });
+              notifyExternalState(true);
+              sendResponse({ ok: true });
+            }
+          });
+        } else {
+          openDashboardWindow(sendResponse);
+        }
+      });
       return true;
     }
 
@@ -128,17 +162,19 @@ export default defineBackground(() => {
     }
 
     if (message.type === "CLOSE_DASHBOARD") {
-      if (dashboardWindowId !== null) {
-        chrome.windows.remove(dashboardWindowId, () => {
-          void chrome.runtime.lastError; // window already gone
-          dashboardWindowId = null;
+      resolveDashboardWindow((winId) => {
+        if (winId !== null) {
+          chrome.windows.remove(winId, () => {
+            void chrome.runtime.lastError; // window already gone
+            dashboardWindowId = null;
+            notifyExternalState(false);
+            sendResponse({ ok: true });
+          });
+        } else {
           notifyExternalState(false);
           sendResponse({ ok: true });
-        });
-      } else {
-        notifyExternalState(false);
-        sendResponse({ ok: true });
-      }
+        }
+      });
       return true;
     }
 
@@ -163,28 +199,41 @@ export default defineBackground(() => {
     if (message.type === "GET_STATUS") {
       // Report live control-center status. externalOpen is authoritative here
       // (background owns the window); inGameView is fetched from the content
-      // script, which is the store's source of truth.
-      const externalOpen = dashboardWindowId !== null;
-      const respond = (inGameView: string | null, connected: boolean) =>
-        sendResponse({
-          ok: true,
-          version: VERSION,
-          externalOpen,
-          gameTabConnected: connected,
-          inGameView,
+      // script, which is the store's source of truth. gameTabPresent vs
+      // gameTabConnected: a present tab whose ping fails has a dead content
+      // script (extension reloaded over it) — the popup offers a tab reload.
+      resolveDashboardWindow((winId) => {
+        const externalOpen = winId !== null;
+        const respond = (
+          inGameView: string | null,
+          connected: boolean,
+          present: boolean,
+          tabId: number | null,
+        ) =>
+          sendResponse({
+            ok: true,
+            version: VERSION,
+            externalOpen,
+            gameTabConnected: connected,
+            gameTabPresent: present,
+            gameTabId: tabId,
+            inGameView,
+          });
+        resolveGameTab((tabId) => {
+          if (tabId === null) {
+            respond(null, false, false, null);
+            return;
+          }
+          try {
+            chrome.tabs.sendMessage(tabId, { type: "GET_IN_GAME_VIEW" }, (resp) => {
+              if (chrome.runtime.lastError || !resp) respond(null, false, true, tabId);
+              else respond(resp.inGameView ?? null, true, true, tabId);
+            });
+          } catch {
+            respond(null, false, true, tabId);
+          }
         });
-      if (gameTabId === null) {
-        respond(null, false);
-        return true;
-      }
-      try {
-        chrome.tabs.sendMessage(gameTabId, { type: "GET_IN_GAME_VIEW" }, (resp) => {
-          if (chrome.runtime.lastError || !resp) respond(null, false);
-          else respond(resp.inGameView ?? null, true);
-        });
-      } catch {
-        respond(null, false);
-      }
+      });
       return true;
     }
 
@@ -192,24 +241,28 @@ export default defineBackground(() => {
       // Boot sync: the content script asks whether the dashboard window is open
       // so a page reload mid-session can't desync overlay state from a still-open
       // external window. background owns dashboardWindowId — authoritative.
-      sendResponse({ ok: true, open: dashboardWindowId !== null });
+      resolveDashboardWindow((winId) => {
+        sendResponse({ ok: true, open: winId !== null });
+      });
       return true;
     }
 
     if (message.type === "SET_IN_GAME_VIEW") {
       // From the popup control center — forward to the content script.
-      if (gameTabId !== null) {
-        try {
-          chrome.tabs.sendMessage(
-            gameTabId,
-            { type: "SET_IN_GAME_VIEW", view: message.view },
-            () => void chrome.runtime.lastError,
-          );
-        } catch {
-          /* tab gone */
+      resolveGameTab((tabId) => {
+        if (tabId !== null) {
+          try {
+            chrome.tabs.sendMessage(
+              tabId,
+              { type: "SET_IN_GAME_VIEW", view: message.view },
+              () => void chrome.runtime.lastError,
+            );
+          } catch {
+            /* tab gone */
+          }
         }
-      }
-      sendResponse({ ok: true });
+        sendResponse({ ok: true });
+      });
       return true;
     }
 
@@ -222,15 +275,17 @@ export default defineBackground(() => {
   // sync via the externalOpen invariant.
   chrome.commands?.onCommand.addListener((command) => {
     if (command !== "toggle-external") return;
-    if (dashboardWindowId !== null) {
-      chrome.windows.remove(dashboardWindowId, () => {
-        void chrome.runtime.lastError; // window already gone
-        dashboardWindowId = null;
-        notifyExternalState(false);
-      });
-    } else {
-      openDashboardWindow(() => {});
-    }
+    resolveDashboardWindow((winId) => {
+      if (winId !== null) {
+        chrome.windows.remove(winId, () => {
+          void chrome.runtime.lastError; // window already gone
+          dashboardWindowId = null;
+          notifyExternalState(false);
+        });
+      } else {
+        openDashboardWindow(() => {});
+      }
+    });
   });
 
   function openDashboardWindow(sendResponse: (response: any) => void) {

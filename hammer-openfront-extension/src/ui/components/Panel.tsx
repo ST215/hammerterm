@@ -1,6 +1,7 @@
 import { useState, useRef, useCallback, useEffect, type ReactNode } from "react";
 import { useStore } from "@store/index";
 import { SIZES } from "@shared/constants";
+import StatusStrip from "./StatusStrip";
 
 interface PanelProps {
   header: ReactNode;
@@ -120,6 +121,7 @@ export default function Panel({ header, children }: PanelProps) {
       >
         {children}
       </div>
+      <StatusStrip />
     </div>
   );
 }

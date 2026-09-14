@@ -40,6 +40,12 @@ export interface UISlice {
   /** Show the Growth HUD overlay (independent of auto-troops running). */
   growthHudEnabled: boolean;
   panelWidth: number;
+  /**
+   * Estimated intents on the wire in the last 60s (our sends + observed
+   * game-originated intent events). Fed from MAIN world ~1/sec; the server
+   * locks the client out at 150/min. Undercount — not everything is visible.
+   */
+  wireCount60: number;
 
   setView: (view: string) => void;
   togglePaused: () => void;
@@ -62,6 +68,7 @@ export interface UISlice {
   setScreenPopupsEnabled: (v: boolean) => void;
   setGrowthHudEnabled: (v: boolean) => void;
   setPanelWidth: (w: number) => void;
+  setWireCount60: (n: number) => void;
 }
 
 export const createUISlice: StateCreator<UISlice, [], [], UISlice> = (set) => ({
@@ -83,6 +90,7 @@ export const createUISlice: StateCreator<UISlice, [], [], UISlice> = (set) => ({
   screenPopupsEnabled: false,
   growthHudEnabled: true,
   panelWidth: 850,
+  wireCount60: 0,
 
   setView: (view) => set({ view }),
   togglePaused: () => set((s) => ({ paused: !s.paused })),
@@ -116,4 +124,6 @@ export const createUISlice: StateCreator<UISlice, [], [], UISlice> = (set) => ({
   setScreenPopupsEnabled: (v) => set({ screenPopupsEnabled: v }),
   setGrowthHudEnabled: (v) => set({ growthHudEnabled: v }),
   setPanelWidth: (w) => set((s) => (s.panelWidth === w ? s : { panelWidth: w })),
+
+  setWireCount60: (n) => set((s) => (s.wireCount60 === n ? s : { wireCount60: n })),
 });

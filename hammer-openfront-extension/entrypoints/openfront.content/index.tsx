@@ -79,7 +79,7 @@ export default defineContentScript({
         ui.remove();
         delete (window as any).__HAMMER__;
       },
-      version: "15.22.0-ext",
+      version: "15.23.0-ext",
     };
 
     // Listen for messages from popup/background. The store here is the source

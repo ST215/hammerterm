@@ -311,31 +311,66 @@ describe("packedPlayerUpdates quad layout matches game", () => {
     expect(gameUpdates).toContain("packedPlayerUpdates?: Float64Array");
   });
 
-  test("quad order is [smallID, tilesOwned, gold, troops]", () => {
-    // The extension (hooks.content.ts / bridge.ts / worker-hook.ts) unpacks
-    // stats[i..i+3] as smallID, tilesOwned, gold, troops. Pin that order
-    // against the game's encoder in PlayerImpl.toUpdate → statsOut.push(...).
+  test("record is exactly [smallID, tilesOwned, gold, troops, goldEarned]", () => {
+    // The extension (hooks.content.ts GAME_STAT_STRIDE) strides the game's
+    // packed array 5-wide and forwards only the first four fields. Pin BOTH
+    // the field order AND the exact record width against the game's encoder
+    // in PlayerImpl.toUpdate → statsOut.push(...): an inserted or appended
+    // field upstream must fail this test, not silently misalign the unpack
+    // (a 5th field, goldEarned, was appended in upstream e3eb9df8 and did
+    // exactly that to the previous 4-wide assumption).
     const m = playerImpl.match(/statsOut\.push\(([\s\S]*?)\);/);
     expect(m, "statsOut.push(...) not found in PlayerImpl.toUpdate").toBeTruthy();
     const body = m![1];
+    const args = body.split(",").map((s) => s.trim()).filter(Boolean);
+    expect(args).toHaveLength(5);
     const iSmall = body.indexOf("smallID");
     const iTiles = body.indexOf("tilesOwned");
     const iGold = body.indexOf("gold");
     const iTroops = body.indexOf("troops");
+    const iEarned = body.indexOf("goldEarned");
     expect(iSmall).toBeGreaterThanOrEqual(0);
     expect(iTiles).toBeGreaterThan(iSmall);
     expect(iGold).toBeGreaterThan(iTiles);
     expect(iTroops).toBeGreaterThan(iGold);
+    expect(iEarned).toBeGreaterThan(iTroops);
   });
 
-  test("doc comment names the same quad order", () => {
-    expect(gameUpdates).toContain("[smallID, tilesOwned, gold, troops]");
+  test("doc comment names the same record order", () => {
+    expect(gameUpdates).toContain("[smallID, tilesOwned, gold, troops, goldEarned]");
   });
 });
 
 // ═══════════════════════════════════════════════════════
 // DONATE EVENT INDEX + SHAPE (v0.32+ commit 41ef675)
 // ═══════════════════════════════════════════════════════
+// ═══════════════════════════════════════════════════════
+// BINARY WEBSOCKET WIRE (v0.33+ commits 7d99bbef/d70e4865)
+// ═══════════════════════════════════════════════════════
+describe("game socket is zbin binary — raw JSON intents are forbidden", () => {
+  // The extension must NEVER send raw JSON on the game socket: every frame is
+  // zbin-encoded and the server KICKS the client on a frame it can't decode
+  // (SocketIngress decode failure → kick). All intents ride the EventBus.
+  const transport = OF("src/client/Transport.ts");
+
+  test("client Transport encodes frames with encodeClientMessage", () => {
+    expect(transport).toContain("encodeClientMessage(");
+    expect(transport).not.toContain("send(JSON.stringify");
+  });
+
+  test("server kicks on undecodable frames", () => {
+    const ingress = OF("src/server/SocketIngress.ts");
+    expect(ingress).toContain("decodeClientMessage");
+    expect(ingress).toMatch(/kick/i);
+  });
+
+  test("zbin wire declares no JSON fallback", () => {
+    // The doc comment wraps across lines — normalize comment continuations.
+    const wire = OF("src/core/ZbinWire.ts").replace(/\n\/\/\s*/g, " ");
+    expect(wire).toMatch(/no JSON fallback/i);
+  });
+});
+
 describe("DonateEvent contract matches game", () => {
   const gameUpdates = OF("src/core/game/GameUpdates.ts");
 

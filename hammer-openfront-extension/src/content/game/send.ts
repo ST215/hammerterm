@@ -160,8 +160,14 @@ export interface PacedHandle {
 interface PacedOptions {
   spacingMs?: number;
   jitterMs?: number;
+  /** Delay the FIRST send by a normal gap too (a human can't send instantly). */
+  delayFirst?: boolean;
+  /** ~15% of gaps double, like a person losing a target on the map. */
+  longPauses?: boolean;
   onProgress?: (p: PacedProgress) => void;
 }
+
+const LONG_PAUSE_CHANCE = 0.15;
 
 // Active paced batches, tracked module-level so cancelAllPaced() (fired on
 // new-match reset) can stop every in-flight batch — otherwise a paced blast
@@ -180,7 +186,16 @@ export function sendPaced(
   fn: (id: string) => void,
   opts: PacedOptions = {},
 ): PacedHandle {
-  const { spacingMs = 900, jitterMs = 400, onProgress } = opts;
+  // Jitter defaults to ~45% of spacing so a user-tuned pace keeps the same
+  // human-feel proportions at any interval. (Pace profiles pass an explicit
+  // jitter of maxMs − minMs, making the gap uniform over [min, max].)
+  const {
+    spacingMs = 900,
+    jitterMs = Math.round(spacingMs * 0.45),
+    delayFirst = false,
+    longPauses = false,
+    onProgress,
+  } = opts;
   let idx = 0;
   let timer: ReturnType<typeof setTimeout> | null = null;
   let cancelled = false;
@@ -200,6 +215,12 @@ export function sendPaced(
     },
   };
 
+  function nextGap(): number {
+    let gap = spacingMs + Math.random() * jitterMs;
+    if (longPauses && Math.random() < LONG_PAUSE_CHANCE) gap *= 2;
+    return gap;
+  }
+
   function step(): void {
     if (cancelled) return;
     fn(ids[idx]);
@@ -209,7 +230,7 @@ export function sendPaced(
       handle.cancel();
       return;
     }
-    timer = setTimeout(step, spacingMs + Math.random() * jitterMs);
+    timer = setTimeout(step, nextGap());
   }
 
   activePacers.add(handle);
@@ -217,7 +238,12 @@ export function sendPaced(
     handle.cancel();
     return handle;
   }
-  step(); // first target fires immediately
+  if (delayFirst) {
+    // Humanized: even the first message takes find-the-player time.
+    timer = setTimeout(step, nextGap());
+  } else {
+    step(); // first target fires immediately
+  }
   return handle;
 }
 

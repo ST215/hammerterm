@@ -6,6 +6,7 @@ import { short, dTroops, num } from "@shared/utils";
 import { readMyPlayer } from "@shared/logic/player-helpers";
 import { splitClanGroups, groupByTeam } from "@shared/logic/clan-tags";
 import { sendEmoji, sendQuickChat, asSendTroops, asSendGold, sendAllianceRequest, sendBetray, sendPaced, type PacedHandle } from "@content/game/send";
+import { resolvePace } from "@shared/logic/pace";
 import { EMOJI_COMPACT } from "@shared/emoji-table";
 import { StatCard } from "@ui/components/ds";
 import type { PlayerData } from "@shared/types";
@@ -172,23 +173,29 @@ export default function AlliancesView() {
 
   // Paced-batch progress. AlliancesView selection is local useState, so its
   // cancel path uses this module-level handle (also cancelled on new-match reset).
-  const [paced, setPaced] = useState<{ sent: number; total: number } | null>(null);
+  // Batch state lives in the store (comms slice) so the StatusStrip shows
+  // progress/cancel from any tab; pace comes from the shared profile setting.
   const pacerRef = useRef<PacedHandle | null>(null);
-  const runPaced = useCallback((ids: string[], fn: (id: string) => void) => {
+  const runPaced = useCallback((ids: string[], fn: (id: string) => void, label: string) => {
     pacerRef.current?.cancel();
     if (ids.length <= 1) {
       if (ids.length === 1) fn(ids[0]);
-      setPaced(null);
       return;
     }
-    setPaced({ sent: 0, total: ids.length });
+    // Read pace at call time (not via closure) so the callback stays stable.
+    const s = useStore.getState();
+    const pace = resolvePace(s.commsPaceProfile);
+    s.setCommsActiveBatch({ label, sent: 0, total: ids.length });
     pacerRef.current = sendPaced(ids, fn, {
-      onProgress: (p) => setPaced(p.done || p.sent >= p.total ? null : p),
+      spacingMs: pace.minMs,
+      jitterMs: pace.maxMs - pace.minMs,
+      delayFirst: pace.delayFirst,
+      longPauses: pace.longPauses,
+      onProgress: (p) =>
+        useStore.getState().setCommsActiveBatch(
+          p.done || p.sent >= p.total ? null : { label, sent: p.sent, total: p.total },
+        ),
     });
-  }, []);
-  const cancelPaced = useCallback(() => {
-    pacerRef.current?.cancel();
-    setPaced(null);
   }, []);
 
   // Team health
@@ -248,11 +255,11 @@ export default function AlliancesView() {
   }, []);
   const clearSelected = useCallback(() => setSelected(new Set()), []);
   const sendAllySelected = useCallback(() => {
-    runPaced([...selected], (id) => sendAllianceRequest(id));
+    runPaced([...selected], (id) => sendAllianceRequest(id), "ally req");
     setSelected(new Set());
   }, [selected, runPaced]);
   const sendBetraySelected = useCallback(() => {
-    runPaced([...betraySelected], (id) => sendBetray(id));
+    runPaced([...betraySelected], (id) => sendBetray(id), "betray");
     setBetraySelected(new Set());
   }, [betraySelected, runPaced]);
   const selectAllAllies = useCallback(() => setBetraySelected(new Set(allies.map((p) => p.id))), [allies]);
@@ -263,13 +270,7 @@ export default function AlliancesView() {
 
   return (
     <div>
-      {paced && (
-        <div className="flex items-center gap-1.5 mb-1 px-1.5 py-1 rounded border border-hammer-green/40 bg-hammer-green/10 text-2xs text-hammer-green">
-          <span>sending {paced.sent}/{paced.total}</span>
-          <span className="text-hammer-dim">·</span>
-          <button onClick={cancelPaced} className="text-hammer-red hover:underline cursor-pointer bg-transparent border-none p-0 font-mono">cancel</button>
-        </div>
-      )}
+      {/* Batch progress + cancel now live in the StatusStrip (visible on any tab). */}
       {!hasAny && (
         <div className="flex flex-col items-center justify-center text-hammer-muted font-mono text-sm py-4">
           <div className="text-base mb-1">No teammates or allies yet</div>

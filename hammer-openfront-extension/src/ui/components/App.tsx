@@ -6,6 +6,7 @@ import Panel from "./Panel";
 import HeaderButtons from "./HeaderButtons";
 import TabBar from "./TabBar";
 import DisguisedCard from "./DisguisedCard";
+import StatusStrip from "./StatusStrip";
 import ReciprocatePopup from "./ReciprocatePopup";
 import DonationToast from "./DonationToast";
 import StatusToast from "./StatusToast";
@@ -149,6 +150,7 @@ export default function App({ mode }: AppProps) {
           </ViewErrorBoundary>
         </div>
       </div>
+      <StatusStrip />
     </div>
   );
 }
