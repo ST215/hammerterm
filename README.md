@@ -2,188 +2,147 @@
 
 Automation and intelligence companion for [OpenFront.io](https://openfront.io).
 
-Hammer Terminal is a Chrome Extension that hooks into the OpenFront game client to provide automated resource management, alliance intelligence, donation tracking, and diplomatic tools — all from an in-game overlay or a detachable dashboard window.
+Hammer Terminal is a Chrome extension that hooks into the OpenFront game client to provide an attack-ratio governor, automated resource sharing, donation tracking, alliance intelligence, and paced diplomacy tools — from an in-game overlay or a detachable dashboard window. It loads silently: nothing appears on the game screen until you ask for it.
 
-## Origin
+Built against OpenFront **v0.35**.
 
-This project started as `hammer-scripts/hammer.js`, a single-file console injection script (v10.x). The extension supersedes it with a proper Chrome Extension architecture, React UI, and persistent state. The legacy script and its architecture docs remain in `hammer-scripts/` for reference.
+## Install (no build needed)
+
+Works in Chrome (and Chromium browsers such as Edge or Brave) on Mac, Windows, and Linux.
+
+1. Download the latest `hammer-openfront-extension-<version>-chrome.zip` from [Releases](https://github.com/ST215/hammerterm/releases).
+2. Unzip it somewhere permanent (Chrome loads the extension from that folder — don't delete it).
+3. Open `chrome://extensions` and turn on **Developer mode** (top right).
+4. Click **Load unpacked** and select the unzipped folder (the one containing `manifest.json`).
+5. Refresh any open OpenFront tab.
+
+**Updating:** unzip the new release over the old folder (or into a new one and load that), click the reload arrow on Hammer's card in `chrome://extensions`, then refresh the game tab. If the toolbar popup says **needs refresh**, click **Reload tab**.
+
+## Controls
+
+| Control | What it does |
+|---|---|
+| Toolbar icon | Control center: show the in-game panel (Analytics / Controls / Hide), launch or close the external window, reset views |
+| **Alt+Shift+H** | Toggle the external dashboard window (set or change it at `chrome://extensions/shortcuts`) |
+| **Alt+G** | Toggle the attack governor — e.g. to land a counter-attack it's holding |
+| **Alt+F** | Toggle Auto Troops / Auto Gold |
+| **Alt+M** | Set the player under your cursor as the auto-send target |
 
 ## Features
 
-- **Auto Troops** — automatically send troops to teammates/allies above a configurable threshold
-- **Auto Gold** — distribute gold to teammates on a timed interval
-- **Attack Ratio** — governor for the game's attack-ratio slider while you do the fighting. Switchable modes: **Manual** (observe only), **Assist** (hold a set %), **Break-even** (hold your army at a target %), **Peak 42%** (max regen throughput). A **pre-emptive floor** caps the ratio by remaining headroom so rapid clicking can't drain you through your reserve, plus a **Send cap** against over-sends and live telemetry. Reads live troops so protection reacts instantly; writes are client-side (no server intent)
-- **Reciprocate** — automatically return resources when you receive donations (cross-resource: gold in, troops back). Includes **Palantir mode** — sacrifice-aware smart reciprocation that weighs donor sacrifice ratio, loyalty, team relationship, and your power phase. **Thank-you sends**: optionally fire a ❤️ heart or "thanks" quickchat to any donor (auto toggle or manual button), independent of send-back and working in every mode. Auto-send modes reset to off each match (values remembered) so nothing carries into a new game unexpectedly
-- **Trading View** — consolidated tab showing inbound/outbound donation history with cumulative stats and running totals
-- **CIA** — real-time threat intelligence tracking all server-wide transfers, betrayal alerts, leaderboard
-- **Comms** — send emoji sequences and coordinate with allies; search players by name
-- **Alliances** — view teammates vs allies, manage diplomacy, search and filter players
-- **Broadcast** — timed emoji sequence broadcaster with configurable sequences and cadence
-- **Donation Toasts** — enriched popups when you receive resources: donor history, cumulative totals, ordinal count (1st/2nd/3rd gift)
-- **Settings tab** — one place to configure all four popups (Reciprocate, Donation Toast, Status Toast, Growth HUD): master on/off switch, per-popup enable toggle, 3×3 position picker, scale slider, and a **Test** button to preview each before going live
-- **Popups in any view mode** — notifications render on the game screen whether the panel is showing the analytics card, the full controls, or hidden entirely
-- **Replay support** — Hammer auto-detects match replays: throttles hard so the fast-forwarded playback doesn't lag, pauses all automation, and still ingests data. Load a replay you weren't even in (a friend's match) to pull its analytics
-- **In-game view modes** — the overlay defaults to an innocuous "match analytics" card (stream-safe), expands to full controls on demand, or hides entirely; the extension toolbar icon is the master control center for switching and recovery
-- **Dashboard Window** — detach the panel into a full browser window alongside the game for a second monitor; the in-game overlay hides while it drives, and returns when you close it
-- **Match Export** — export all trading/economy data (CIA transfers, flow graph, player totals, donation feeds) as structured JSON for offline analysis
-- **Replay Viewer** — visualize exported match data: flow charts, leaderboards, timeline, net balance table, and suspicious pattern detection. **Export & View** opens it bundled in the extension with your data already loaded; it also ships standalone (`hammer-replay-viewer/index.html`) for file-drop use
-- **Flight Recorder** — structured event logger for diagnostics, exportable as JSON
+- **Attack Ratio governor** — you still choose where and when to attack; the governor decides how many troops each attack takes.
+  - **Peak 42%** — each attack sends only your surplus above 42% of max troops, the level where troops regrow fastest. At or below 42%, attacks are held until you regen.
+  - **Hold %** — the same at a level you choose. **Fixed %** — a fixed share per attack with a "never drop below" floor. **Watch** — numbers only.
+  - Reads your true max troops from the game (cities included) and counts troops already sent but not yet confirmed by the server, so rapid clicking can't overspend.
+  - Stays in standby each match until your troops first reach the target, so early expansion is untouched. Remembers its settings and on/off state across matches. Nothing is sent to the server — it only shapes your own attacks.
+- **Auto Troops / Auto Gold** — send to teammates or allies on a cooldown, by ratio or Palantir (surplus above the regen peak), with thresholds.
+- **Reciprocate** — return resources when you receive donations (cross-resource: gold in, troops back), including **Palantir mode** (sacrifice-aware) and optional thank-you sends. Auto modes reset to off each match.
+- **Comms** — emoji and every OpenFront quick-chat phrase, to one player or many. Multi-player sends are paced: a 0.3s–20s slider plus **Humanize** (randomized gaps, delayed first send, occasional long pause); presets Instant / Quick / Brisk / Human.
+- **Alliances** — teammates vs allies, multi-select alliance requests and betrayals (paced).
+- **Status strip** — a one-line footer on every tab: estimated intents used against the server's 150/minute limit (attack clicks count too), plus any paced send in progress with time left and cancel.
+- **Hammer view** — at a glance: troop capacity and peak-regen cue, donations received and top supporters, quick governor controls.
+- **Trading / Summary** — inbound and outbound donation history, totals, port income.
+- **CIA** — server-wide transfer intelligence, betrayal alerts, leaderboard.
+- **Broadcast** — timed emoji sequences.
+- **Pop-ups** — donation alerts ("X sent you troops/gold") are on by default and work on their own; every other pop-up (reciprocate, status, growth HUD, outbound toasts) is off until you enable it in **Settings**, which also has per-pop-up position, scale, and a Test button.
+- **Silent by default** — the overlay loads hidden. Open it from the toolbar icon, or use the external window on a second monitor; the external window keeps working across matches and reconnects on its own when the game page reloads.
+- **Replay support** — replays are auto-detected: automation pauses, data is still ingested.
+- **Match Export / Replay Viewer / Flight Recorder** — see below.
 
-## Tech Stack
+Every game action goes through the game's own event system (never raw network messages) and a shared rate limiter that stays under OpenFront's server limits (10/s, 150/min).
 
-- [WXT](https://wxt.dev/) — Chrome Extension framework (Manifest V3)
-- React 18 — UI components
-- Zustand — state management
-- Tailwind CSS v4 — styling (JetBrains Mono, pixel-based theme)
-- TypeScript — everything is typed
-- Vitest — unit tests (446+ tests)
-
-## Getting Started
+## Build from source
 
 ```bash
 cd hammer-openfront-extension
 npm install
-```
-
-### Development
-
-```bash
-npm run dev          # HMR dev mode, auto-reloads extension
-npm run build        # Production build
-npm run zip          # Build + package as .zip
-npm test             # Run all tests (vitest run)
-npm run test:watch   # Watch mode (vitest)
+npm run build        # production build → .output/chrome-mv3/
+npm run zip          # build + package the release zip
+npm run dev          # HMR dev mode
+npm test             # Vitest suite
 npm run typecheck    # tsc --noEmit
 ```
 
-### Loading in Chrome
-
-1. Run `npm run build` (or `npm run dev` for development)
-2. Open `chrome://extensions`
-3. Enable **Developer mode**
-4. Click **Load unpacked**
-5. Select `.output/chrome-mv3`
+Then load `.output/chrome-mv3/` with **Load unpacked** as above.
 
 ### Testing
 
-- `npm test` — full Vitest suite (446+ tests). Should be green except the DOM-dependent `.todo()` tests (they require real browser/game APIs).
-- `npm run typecheck` — `tsc --noEmit`. A handful of WXT auto-import errors (`defineBackground`, `defineContentScript`, `createShadowRootUi`) are expected and harmless; everything else should be clean.
-- **Game-contract tests** (`tests/game-contract.test.ts`) validate the extension's hardcoded constants (intent types, emoji table, quick-chat keys, `GameUpdateType` indices) against the cloned `OpenFrontIO` repo — they catch protocol drift when OpenFront updates.
-- **Live / manual verification** is still required for anything that touches the DOM, hooks, view modes, or replays — use the Flight Recorder route below.
+- `npm test` — full Vitest suite (580+ tests). The `.todo()` tests need real browser/game APIs.
+- `npm run typecheck` — a handful of WXT auto-import errors (`defineBackground`, `defineContentScript`, `createShadowRootUi`) and three known test-file type nits are expected; everything else should be clean.
+- **Game-contract tests** (`tests/game-contract.test.ts`) check the extension against a sibling clone of the game (`../OpenFrontIO`): event-class shapes, update indices, packed stat layout, donation events, the quick-chat catalog, the binary-only wire, and the troop formulas the governor relies on. They fail loudly when OpenFront changes something the extension depends on.
+- **Governor simulation** (`tests/attack-governor.test.ts`) replays spam-clicking against the game's regen formula at 1–12 tick latencies and asserts troops hold the 42% target.
 
 ## Architecture
 
 ```
-MAIN world (hooks.content.ts)
-  |  Intercepts Worker, WebSocket, Canvas, GameView, EventBus
+MAIN world (entrypoints/hooks.content.ts) — runs beside the game
+  |  Wraps Worker (player stats), patches GameView (donations, display events),
+  |  wraps the EventBus: sends via the game's own event classes, and runs the
+  |  ATTACK GOVERNOR on every attack the player fires
   |  Posts data via window.postMessage
   v
-ISOLATED world (content/bridge.ts)
-  |  Routes messages to Zustand store
-  |  Runs automation engines (auto-troops, auto-gold, reciprocate, attack-ratio)
+ISOLATED world (src/content/bridge.ts) — the game tab's content script
+  |  Routes messages to the Zustand store (the source of truth)
+  |  Automation runtime: auto-troops, auto-gold, broadcast, reciprocate loops
+  |  run HERE only, whichever window toggled them
   v
-Zustand Store (store/index.ts)
-  |  Slices: ui, player, donations, auto-troops, auto-gold,
-  |          reciprocate, comms, cia, donation-toasts, recorder
+React UI (src/ui/)
+  |  Overlay (shadow DOM on the game page) — inGameView: hidden | disguised | revealed
+  |  Dashboard (external window), Popup (toolbar control center)
   v
-React UI (ui/)
-  |  Overlay (shadow DOM on game page) — inGameView: disguised | revealed | hidden
-  |  Dashboard (detached window via background service worker)
-  |  Popup (toolbar icon) — master control center
-  v
-Dashboard Sync (chrome.runtime.Port)
-     Game tab <-> Dashboard window, 500ms snapshots
-     LOCAL_KEYS pattern prevents clobbering user interactions
+Dashboard sync (chrome.runtime.Port)
+     Game tab → window: snapshots every 500ms; the window adopts game-owned settings
+     Window → game tab: edits pushed immediately ("sync-local"); intents re-queued
+     through the game tab's rate limiter
 ```
 
-### View modes & control
+Every match ends with the game page reloading, so the MAIN-world hooks reinstall each match and the external window reconnects automatically.
 
-The in-game overlay has one canonical presentation state, `inGameView`:
-
-- **disguised** (default) — an innocuous "match analytics" card with Reveal / Launch / Hide buttons. Stream-safe.
-- **revealed** — the full Hammer terminal (tab bar + active view).
-- **hidden** — nothing on the game page except popups.
-
-The background service worker owns the external window's lifecycle and is the single source of truth for `externalOpen` (invariant: external open ⇒ in-game hidden; closing it restores the disguised card). The **extension toolbar icon** is the always-available control center — switch view modes, launch/focus/close the external window, and **Reset views** to recover any stuck state.
-
-## Directory Structure
+### Directory structure
 
 ```
 hammer-openfront-extension/
   entrypoints/
-    hooks.content.ts       # MAIN world injection (Worker/WS/Canvas hooks)
-    content.ts             # ISOLATED world entry (bridge + automation)
-    background.ts          # Service worker (tab mgmt, config persistence)
-    dashboard/             # Detached dashboard window (React app)
+    hooks.content.ts         # MAIN world: hooks, sends, attack governor
+    openfront.content/       # ISOLATED world entry (bridge, runtime, overlay)
+    background.ts            # Service worker: window/tab mgmt, config storage, hotkey
+    dashboard/               # External window app
+    popup/                   # Toolbar control center
   src/
     content/
-      bridge.ts            # Message router (MAIN -> store)
-      automation/          # reciprocate-engine, auto-troops, auto-gold, broadcast, attack-ratio
-      game/                # send.ts (game commands), message-processor.ts
-    store/
-      index.ts             # Combined Zustand store
-      slices/              # Slice files (ui, player, donations, etc.)
-    ui/
-      components/          # App, TabBar, HeaderButtons, design system (ds/)
-      views/               # SummaryView, CIAView, TradingView, BroadcastView, etc.
+      bridge.ts              # MAIN → store router, dashboard port
+      automation/            # runtime.ts (loop owner), auto-troops, auto-gold,
+                             # broadcast, reciprocate-engine, attack-ratio (config sync)
+      game/                  # send.ts (rate limiter, pacer), message-processor, keyboard
+    store/slices/            # Zustand slices
+    ui/                      # components/ (App, Panel, StatusStrip, ds/), views/
     shared/
-      constants.ts         # Message types, intervals, limits
-      types.ts             # PlayerData, shared interfaces
-      logic/               # Pure functions (cia.ts, player-helpers.ts)
-      serialize.ts         # Store serialization for dashboard sync
-      notif-position.ts    # Notification position types + CSS helpers
-    recorder.ts            # Flight recorder (standalone, no store dependency)
-  tests/                   # Vitest test files
-hammer-replay-viewer/
-  index.html               # Static match data visualization app (no build step)
+      logic/                 # Pure logic: attack-governor, pace, troop-math, cia, ...
+      dashboard-sync.ts      # Which keys sync between window and game tab
+      quick-chat.ts          # Quick-chat catalog (must match the game's QuickChat.json)
+      schemas.ts             # Persisted settings schema
+  tests/                     # Vitest
+hammer-replay-viewer/        # Standalone match-data viewer (no build step)
+hammer-scripts/              # Legacy single-file console script (v10.x, superseded)
 ```
 
-## Replay Viewer
+### Key concepts
 
-Export match data from the **Help** tab ("Export Match Data" button), then open `hammer-replay-viewer/index.html` in any browser and drop the JSON file.
+**Settings sync** — Keys the user edits are listed in `LOCAL_KEYS` (`src/shared/dashboard-sync.ts`). Edits in the external window push to the game tab immediately; the window adopts the game tab's values from snapshots except for window-only keys (current tab, size, in-progress selections) and anything edited in the last 2s. If you add a user setting, add it to `LOCAL_KEYS` — and to `PersistedStateSchema` (`src/shared/schemas.ts`) if it should survive a reload. Toggles that make the extension *send* things (auto-troops, auto-gold, broadcast, reciprocate auto) are deliberately not persisted and reset every match.
 
-Features:
-- **Player selector** — anyone can pick any player's POV from the dropdown (not just the original player)
-- **Overview cards** — total transfers, gold/troops moved, partner count
-- **Donor/Recipient leaderboards** — horizontal bar charts (Chart.js)
-- **Timeline** — gold + troops activity bucketed by minute
-- **Net balance table** — per-partner gave/received/net breakdown
-- **Flow table** — all player→player transfer pairs from the flow graph
-- **Suspicious patterns** — feeder alerts (>5M gold to single target) and resource sink detection, always global
+**Units** — the game stores troops at 10× what it displays; convert with `dTroops()` for anything user-facing.
+
+**Ally vs teammate** — teammates share a team; allies are alliance partners. Betrayal alerts only fire for teammates.
+
+**Cross-resource reciprocation** — receive gold, send troops back (and vice versa). Intentional.
+
+## Match Export & Replay Viewer
+
+**Export Match Data** (Help tab) saves all trading/economy data as JSON; **Export & View** opens it in the bundled viewer. The standalone viewer (`hammer-replay-viewer/index.html`) also accepts a dropped JSON file: per-player POV, donor/recipient leaderboards, activity timeline, net balances, transfer flows, and suspicious-pattern detection.
 
 ## Flight Recorder
 
-Toggle recording from the header **REC** button or the Recorder tab. While recording, all automation decisions, message processing, hook discovery, and errors are captured as structured events.
-
-Export as JSON and share recordings for offline analysis and debugging. Events are structured as `{t, cat, evt, d}` with millisecond timestamps relative to recording start.
-
-Categories: `hook`, `bridge`, `msg`, `recip`, `auto-t`, `auto-g`, `cmd`, `error`
-
-### Recording test route (not yet verified end-to-end)
-
-> ⚠️ **Untested:** this capture → export → inspect loop hasn't been validated on the current build. Use it to confirm the v15.15–15.17 changes behave live, and report findings back. Tracked in `ROADMAP.md`.
-
-1. Build (`npm run build`) and load `.output/chrome-mv3/` unpacked in Chrome.
-2. Open OpenFront, start (or join) a match — singleplayer team mode is fastest.
-3. Click **REC** in the panel header (or the Recorder tab) to start recording.
-4. Exercise the things you want to verify, then **Export** the recording (downloads `hammer-recording-<timestamp>.json`).
-5. Inspect the JSON for the metrics that prove the recent work:
-   - `displayEventsReceived` vs `displayEventsProcessed` — both should climb (processed > 0). This is the old "0 processed" bug check.
-   - `playerUpdatesReceived` / `playerUpdatesApplied` / `playerUpdatesThrottled` — applied should be far below received during normal play (throttle working).
-   - `intentsBlockedReplay` — should be 0 in a live game, and > 0 if you load a replay with automation on.
-6. **Replay checks:** load a match replay and confirm the tool stays responsive, `hook/replay {isReplay:true}` appears, and (for a replay you weren't in) CIA/Summary still populate.
-
-The exported JSON can also be dropped into `hammer-replay-viewer/index.html` if it's a match-data export (see above) — note the flight recording and the match-data export are two different files.
-
-## Key Concepts
-
-**LOCAL_KEYS** — Store keys that represent user-interactive state (toggles, percentages, mode selections, position preferences, `inGameView`/`externalOpen`). The dashboard never overwrites these from game tab snapshots. If you add a new user setting, add it to `LOCAL_KEYS` in `entrypoints/dashboard/App.tsx` — and, if it should survive a refresh, to `PersistedStateSchema` in `src/shared/schemas.ts` (config only; presentation and live automation toggles are deliberately not persisted).
-
-**Ally vs Teammate** — Teammates share a team (`player.team === myTeam`). Allies are alliance partners (`myAllies.has(player.smallID)`). `asIsAlly()` returns true for both. Betrayal alerts only fire for teammates.
-
-**Cross-resource reciprocation** — When you receive gold, Hammer sends troops back (and vice versa). This is intentional design, not a bug.
-
-**Dashboard sync** — The game tab content script pushes full store snapshots to the dashboard every 500ms via `chrome.runtime.Port`. LOCAL_KEYS are excluded from incoming patches. The dashboard pushes LOCAL_KEYS changes back to the game tab via `sync-local` messages.
+Toggle **REC** in the panel header (or the Recorder tab) to capture automation decisions, message processing, hook discovery, and errors as structured events (`{t, cat, evt, d}`), then export the JSON for debugging. Useful metrics: `displayEventsReceived` / `displayEventsProcessed` (both should climb), `playerUpdatesApplied` far below `playerUpdatesReceived` (throttle working), `intentsBlockedReplay` (0 in live games).
 
 ## License
 

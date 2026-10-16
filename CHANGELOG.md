@@ -4,6 +4,69 @@ All notable changes to Hammer Control Panel will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [15.24.0] - 2026-10-16 "Solid Governor, Stable Sync"
+
+Synced to OpenFront v0.35 (the game is now a monorepo; no runtime contract broke).
+
+### Changed
+
+- **Attack governor rebuilt to run beside the game.** It reads your exact max troops from the game
+  (cities included) and tracks troops already sent but not yet confirmed by the server, so rapid
+  clicking can't overspend. Peak/Hold send only the surplus above the target (capped per attack);
+  below it, attacks are held. Standby each match until troops first reach the target. Remembers
+  settings and on/off across matches. Modes relabeled Peak 42% / Hold % / Fixed % / Watch.
+- **Alt+G** toggles the governor.
+- **Comms pace:** 0.3s–20s slider with −/+ steps and a Humanize toggle; presets are shortcuts.
+  Default is Brisk (3–7s, humanized).
+- **Donation alerts** have their own switch (on by default), independent of other pop-ups.
+- All automation loops run in the game tab regardless of which window started them.
+
+### Fixed
+
+- **Governor dumped troops late game** — the max-troops estimate ignored cities, so big armies
+  read as 200%+ of max and every attack sent the cap.
+- **Clobbering dumped troops** — clicks were sized against a troop count that didn't yet reflect
+  in-flight attacks; the server then sent whatever was left.
+- **External window had to be reopened every match** — its reconnect budget (5 tries, never reset)
+  ran out during the page reload that ends every match. It now reconnects indefinitely, shows a
+  banner instead of blanking, opens on your real settings, and replays edits made mid-reload.
+- Closing the external window silently killed loops started from it.
+- Betray did nothing (sent an alliance request instead of a break).
+- Donations/display events processed up to 9× per tick (inflated totals and CIA).
+- A gold donation of 0 would send a third of your gold; NaN/negative amounts (a server kick) are refused.
+- Alt hotkeys also triggered the game's keyup binds (Alt+M toggled the coordinate grid).
+- Removed quick-chat phrase that would error; catalog now matches the game.
+
+## [15.23.0] - 2026-09-14 "v0.34 Sync, Pacing Control"
+
+### Changed
+
+- Comms pace presets and a status strip (intent budget vs the server's 150/min limit, active paced
+  send with cancel) on every tab.
+
+### Fixed
+
+- **OpenFront v0.33 binary wire:** removed raw-JSON socket fallbacks that would get the client
+  kicked; embargo now goes through the game's event bus.
+- **v0.34 packed stats** grew a 5th field; the 4-wide unpack misaligned live troop data.
+- Toolbar popup froze mid-game after Chrome restarted the service worker; it now re-finds the game
+  tab and offers **Reload tab** when the page needs a refresh.
+
+## [15.22.0] - 2026-07-11 "Silent by Default"
+
+### Changed
+
+- Loads hidden; **Alt+Shift+H** toggles the external window; pop-ups default off.
+- Hammer view redesigned around donations received, a troop-capacity cue, and governor controls.
+- Multi-player comms sends paced instead of burst; scannable player rows.
+
+### Fixed
+
+- **OpenFront v0.32:** live troop stats and donations moved to new update channels upstream and
+  had stopped arriving; port income re-routed.
+- Per-click attack floor so rapid clicks can't drain the reserve; governor fully stops on match reset.
+- Troops/gold status view blanking and resizing.
+
 ## [15.21.0] - 2026-06-02 "Attack-Ratio Governor: Control Model + Hard Floor"
 
 Refines the Attack Ratio governor (introduced in 15.19.0) based on play testing.
