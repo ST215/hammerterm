@@ -1,136 +1,105 @@
 /**
- * Tests for dashboard state sync — verifies that LOCAL_KEYS are excluded
- * from snapshot application and that the serialize round-trip works for
- * store-like state.
+ * Dashboard (external window) ↔ game tab sync rules — exercised through the
+ * real shared module the window uses (src/shared/dashboard-sync.ts).
  */
 import { describe, expect, test } from "vitest";
 import { serialize, deserialize } from "../src/shared/serialize";
 import type { CIAState } from "../src/shared/types";
 import { createCIAState } from "../src/shared/logic/cia";
+import {
+  LOCAL_KEYS,
+  TOUCH_GUARD_MS,
+  WINDOW_ONLY_KEYS,
+  filterSnapshotPatch,
+} from "../src/shared/dashboard-sync";
 
-// Mirror the LOCAL_KEYS set from dashboard/App.tsx
-const LOCAL_KEYS = new Set([
-  "view", "paused", "sizeIdx", "inGameView", "externalOpen",
-  "commsTargets", "commsGroupMode", "commsOthersExpanded",
-  "commsPendingQC", "commsRecentSent", "allianceCommsExpanded",
-  "reciprocateMode", "reciprocateRatio", "reciprocateType",
-  "reciprocateEnabled", "reciprocateOnGold", "reciprocateOnTroops",
-  "reciprocatePopupsEnabled",
-]);
+const NOW = 1_000_000;
 
-function filterSnapshot(data: Record<string, any>): Record<string, any> {
-  const patch: Record<string, any> = {};
-  for (const [key, val] of Object.entries(data)) {
-    if (typeof val !== "function" && !LOCAL_KEYS.has(key)) {
-      patch[key] = val;
-    }
-  }
-  return patch;
-}
-
-describe("dashboard snapshot filtering", () => {
-  test("excludes UI navigation / presentation keys from snapshot", () => {
-    const snapshot = {
-      view: "cia",
-      paused: true,
-      sizeIdx: 2,
-      inGameView: "revealed",
-      externalOpen: true,
-      playersById: new Map([["p1", { name: "Alice" }]]),
-      mySmallID: 1,
-    };
-
-    const serialized = serialize(snapshot);
-    const deserialized = deserialize(serialized);
-    const filtered = filterSnapshot(deserialized);
-
-    expect(filtered.view).toBeUndefined();
-    expect(filtered.paused).toBeUndefined();
-    expect(filtered.inGameView).toBeUndefined();
-    expect(filtered.externalOpen).toBeUndefined();
-    expect(filtered.playersById).toBeInstanceOf(Map);
-    expect(filtered.mySmallID).toBe(1);
+describe("snapshot adoption", () => {
+  test("window-only presentation & in-progress selections are never adopted", () => {
+    const patch = filterSnapshotPatch(
+      {
+        view: "cia",
+        paused: true,
+        sizeIdx: 2,
+        inGameView: "revealed",
+        externalOpen: true,
+        commsTargets: new Set(["p1"]),
+        commsActiveBatch: { label: "x", sent: 1, total: 2 },
+      },
+      new Map(),
+      NOW,
+    );
+    expect(patch).toEqual({});
   });
 
-  test("presentation keys are local (snapshots never clobber them)", () => {
-    // inGameView/externalOpen must stay user/background-controlled so a 500ms
-    // game-tab snapshot can't flip the external window's own view state.
-    for (const key of ["inGameView", "externalOpen", "view", "paused", "sizeIdx"]) {
-      expect(LOCAL_KEYS.has(key)).toBe(true);
-    }
+  test("game data is adopted", () => {
+    const patch = filterSnapshotPatch(
+      { mySmallID: 1, currentClientID: "abc", attackRatioTelemetry: null },
+      new Map(),
+      NOW,
+    );
+    expect(patch).toEqual({ mySmallID: 1, currentClientID: "abc", attackRatioTelemetry: null });
   });
 
-  test("excludes comms selection keys from snapshot", () => {
-    const snapshot = {
+  test("settings the game tab owns ARE adopted, so the window opens on your real config", () => {
+    const patch = filterSnapshotPatch(
+      { attackRatioRunning: true, attackRatioMaxCap: 25, commsPaceMs: 10000, reciprocateMode: "manual" },
+      new Map(),
+      NOW,
+    );
+    expect(patch).toEqual({
+      attackRatioRunning: true,
+      attackRatioMaxCap: 25,
+      commsPaceMs: 10000,
+      reciprocateMode: "manual",
+    });
+  });
+
+  test("a setting edited here within the guard window isn't reverted by a stale snapshot", () => {
+    const touched = new Map([["attackRatioRunning", NOW - 100]]);
+    const patch = filterSnapshotPatch({ attackRatioRunning: false, attackRatioMaxCap: 25 }, touched, NOW);
+    expect(patch).toEqual({ attackRatioMaxCap: 25 });
+  });
+
+  test("once the guard expires the game tab's value wins again", () => {
+    const touched = new Map([["attackRatioRunning", NOW - TOUCH_GUARD_MS - 1]]);
+    const patch = filterSnapshotPatch({ attackRatioRunning: false }, touched, NOW);
+    expect(patch).toEqual({ attackRatioRunning: false });
+  });
+
+  test("functions are dropped", () => {
+    expect(filterSnapshotPatch({ setX: () => {} }, new Map(), NOW)).toEqual({});
+  });
+
+  test("every window-only key is also a LOCAL_KEY (edits still push to the game tab)", () => {
+    for (const key of WINDOW_ONLY_KEYS) expect(LOCAL_KEYS.has(key), key).toBe(true);
+  });
+
+  test("new governor, pace and alert settings are synced keys", () => {
+    for (const key of [
+      "attackRatioRunning", "attackRatioMode", "attackRatioMaxCap",
+      "commsPaceMs", "commsPaceHuman", "donationAlertsEnabled",
+    ]) {
+      expect(LOCAL_KEYS.has(key), key).toBe(true);
+      expect(WINDOW_ONLY_KEYS.has(key), key).toBe(false);
+    }
+  });
+});
+
+describe("serialize round-trip (snapshots and sync-local)", () => {
+  test("Sets/Maps survive — sync-local edits used to arrive as {}", () => {
+    const edits = {
       commsTargets: new Set(["p1", "p2"]),
-      commsGroupMode: "team",
-      commsOthersExpanded: true,
-      commsPendingQC: { key: "hello", targetId: "" },
-      commsRecentSent: [{ type: "emoji", label: "👍", targetName: "Alice", ts: 1000 }],
       allianceCommsExpanded: new Map([["p1", true]]),
-      currentClientID: "abc123",
     };
-
-    const serialized = serialize(snapshot);
-    const deserialized = deserialize(serialized);
-    const filtered = filterSnapshot(deserialized);
-
-    expect(filtered.commsTargets).toBeUndefined();
-    expect(filtered.commsGroupMode).toBeUndefined();
-    expect(filtered.commsOthersExpanded).toBeUndefined();
-    expect(filtered.currentClientID).toBe("abc123");
-  });
-
-  test("preserves game data keys in snapshot", () => {
-    const snapshot = {
-      playersById: new Map([["p1", { id: "p1", name: "Alice", troops: 1000 }]]),
-      playersBySmallId: new Map([[1, { id: "p1", name: "Alice", troops: 1000 }]]),
-      mySmallID: 1,
-      myTeam: 2,
-      myAllies: new Set([3, 4]),
-      inbound: new Map([["p2", { gold: 500, troops: 0, count: 1 }]]),
-      asTroopsRunning: true,
-      asGoldRunning: false,
-      ciaState: createCIAState(),
-    };
-
-    const serialized = serialize(snapshot);
-    const deserialized = deserialize(serialized);
-    const filtered = filterSnapshot(deserialized);
-
-    expect(filtered.playersById).toBeInstanceOf(Map);
-    expect(filtered.mySmallID).toBe(1);
-    expect(filtered.myTeam).toBe(2);
-    expect(filtered.myAllies).toBeInstanceOf(Set);
-    expect(filtered.myAllies.has(3)).toBe(true);
-    expect(filtered.inbound).toBeInstanceOf(Map);
-    expect(filtered.asTroopsRunning).toBe(true);
-    expect(filtered.asGoldRunning).toBe(false);
-  });
-
-  test("excludes reciprocate config keys from snapshot", () => {
-    const snapshot = {
-      reciprocateMode: "auto",
-      reciprocateRatio: 50,
-      reciprocateType: "gold",
-      reciprocateEnabled: true,
-      reciprocateOnGold: true,
-      reciprocateOnTroops: false,
-      reciprocatePopupsEnabled: true,
-      mySmallID: 1,
-      currentClientID: "abc123",
-    };
-
-    const serialized = serialize(snapshot);
-    const deserialized = deserialize(serialized);
-    const filtered = filterSnapshot(deserialized);
-
-    expect(filtered.reciprocateMode).toBeUndefined();
-    expect(filtered.reciprocateRatio).toBeUndefined();
-    expect(filtered.reciprocateType).toBeUndefined();
-    expect(filtered.reciprocateEnabled).toBeUndefined();
-    expect(filtered.mySmallID).toBe(1);
-    expect(filtered.currentClientID).toBe("abc123");
+    // Chrome port messages are JSON; mirror that.
+    const wire = JSON.parse(JSON.stringify(serialize(edits)));
+    const back = deserialize(wire);
+    expect(back.commsTargets).toBeInstanceOf(Set);
+    expect([...back.commsTargets]).toEqual(["p1", "p2"]);
+    expect(back.allianceCommsExpanded).toBeInstanceOf(Map);
+    expect(back.allianceCommsExpanded.get("p1")).toBe(true);
   });
 
   test("CIA state with Maps/Sets round-trips correctly", () => {

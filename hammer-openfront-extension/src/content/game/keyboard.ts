@@ -92,7 +92,7 @@ const keydownHandler = (e: KeyboardEvent): void | false => {
 
     // Debounce rapid toggles
     if (Date.now() - lastTroopsToggle < 600) {
-      consumedCodes.add(e.code);
+      consumedCodes.set(e.code, Date.now());
       return false;
     }
     lastTroopsToggle = Date.now();
@@ -121,7 +121,7 @@ const keydownHandler = (e: KeyboardEvent): void | false => {
     e.preventDefault();
     e.stopImmediatePropagation();
     if (Date.now() - lastGovernorToggle < 400) {
-      consumedCodes.add(e.code);
+      consumedCodes.set(e.code, Date.now());
       return false;
     }
     lastGovernorToggle = Date.now();
@@ -133,15 +133,21 @@ const keydownHandler = (e: KeyboardEvent): void | false => {
     // The game fires its keybinds on KEYUP and ignores Alt (G = ground attack,
     // M = coordinate grid), so the release of a key we just consumed must be
     // swallowed too — by code, since Alt may already be up by then.
-    consumedCodes.add(e.code);
+    consumedCodes.set(e.code, Date.now());
     return false;
   }
 };
 
-const consumedCodes = new Set<string>();
+// code → when we consumed its keydown. Entries expire so a keyup lost to a
+// focus change can't swallow the NEXT plain press of that key (G = attack).
+const consumedCodes = new Map<string, number>();
+const CONSUMED_KEYUP_MS = 2000;
 
 const keyupHandler = (e: KeyboardEvent): void => {
-  if (!consumedCodes.delete(e.code)) return;
+  const at = consumedCodes.get(e.code);
+  if (at === undefined) return;
+  consumedCodes.delete(e.code);
+  if (Date.now() - at > CONSUMED_KEYUP_MS) return;
   e.preventDefault();
   e.stopImmediatePropagation();
 };

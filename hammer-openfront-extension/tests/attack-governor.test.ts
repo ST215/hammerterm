@@ -9,9 +9,12 @@ import {
   allowedSend,
   armLevel,
   decideClick,
+  governAttack,
   pendingTotal,
+  recordSend,
   settlePending,
   targetFraction,
+  type ClickContext,
   type GovernorConfig,
   type PendingSend,
 } from "../src/shared/logic/attack-governor";
@@ -130,23 +133,34 @@ describe("decideClick", () => {
   });
 });
 
-describe("clobbering: rapid clicks before the server deducts", () => {
-  test("with the ledger, a burst can't spend below the target", () => {
+function ctx(over: Partial<ClickContext> = {}): ClickContext {
+  return {
+    cfg: cfg(),
+    active: true,
+    engaged: true,
+    troops: 0.8 * M,
+    maxTroops: M,
+    regenPerTick: 0,
+    tick: 100,
+    nowMs: 0,
+    ...over,
+  };
+}
+
+describe("clobbering: rapid clicks before the server deducts (real governAttack path)", () => {
+  test("a burst against an unchanged observed count can't spend below the target", () => {
     // Five clicks land before the first deduction is visible: observed troops
-    // stay at 80% for all of them. Without the ledger each would send the same
-    // surplus and the server would drain the army to zero.
-    const observed = 0.8 * M;
-    const pending: PendingSend[] = [];
+    // stay at 80% for all of them. Each click goes through the same function
+    // the MAIN-world emit wrap runs; the ledger it returns carries forward.
+    let pending: PendingSend[] = [];
     let total = 0;
     for (let i = 0; i < 5; i++) {
-      const eff = observed - pendingTotal(pending);
-      const d = decideClick(cfg(), observed * 0.75, eff, M);
-      if (!d.held) {
-        pending.push({ amount: d.troops, tick: 100, t: 0, base: observed });
-        total += d.troops;
-      }
+      const out = governAttack(ctx({ nowMs: i * 30 }), pending, 0.8 * M * 0.75);
+      pending = out.pending;
+      if (!out.held) total += out.troops;
     }
-    expect(observed - total).toBeGreaterThanOrEqual(PEAK_PCT * M - 1);
+    expect(0.8 * M - total).toBeGreaterThanOrEqual(PEAK_PCT * M - 1);
+    expect(pendingTotal(pending)).toBe(total);
   });
 
   test("without the ledger the same burst would drain the army", () => {
@@ -160,22 +174,62 @@ describe("clobbering: rapid clicks before the server deducts", () => {
     }
     expect(left).toBeLessThan(PEAK_PCT * M);
   });
+
+  test("standby / inactive: clicks pass untouched but are still recorded", () => {
+    const out = governAttack(ctx({ engaged: false }), [], 12345);
+    expect(out).toMatchObject({ troops: 12345, held: false, trimmed: false });
+    expect(pendingTotal(out.pending)).toBe(12345);
+  });
+
+  test("a held click records nothing", () => {
+    const out = governAttack(ctx({ troops: 0.3 * M }), [], 5000);
+    expect(out.held).toBe(true);
+    expect(out.pending).toHaveLength(0);
+  });
+
+  test("troop donations in flight count against the next attack", () => {
+    // 0.8M home, a 300k donation just left (not yet deducted): only 500k is
+    // really home → surplus above 420k is 80k, not 380k.
+    const pending = recordSend([], 300_000, { troops: 0.8 * M, tick: 100, nowMs: 0 });
+    const out = governAttack(ctx({ nowMs: 10 }), pending, 0.8 * M * 0.75);
+    expect(out.troops).toBe(Math.floor(0.5 * M - PEAK_PCT * M));
+  });
 });
 
 describe("settlePending", () => {
-  const send: PendingSend = { amount: 100, tick: 10, t: 0, base: 1000 };
+  const send = (amount: number, tick = 10, t = 0, base = 1000): PendingSend => ({ amount, tick, t, base });
 
-  test("stays pending until ticks pass AND troops dipped", () => {
-    expect(settlePending([send], 10 + SETTLE_TICKS - 1, 500, 900)).toHaveLength(1);
-    expect(settlePending([send], 10 + SETTLE_TICKS, 500, 1001)).toHaveLength(1);
-    expect(settlePending([send], 10 + SETTLE_TICKS, 500, 900)).toHaveLength(0);
+  test("settles once ticks have passed AND troops actually dropped", () => {
+    const p = [send(100)];
+    expect(settlePending(p, 10 + SETTLE_TICKS - 1, 500, 900)).toHaveLength(1); // too soon
+    expect(settlePending(p, 10 + SETTLE_TICKS, 500, 1001)).toHaveLength(1); // no drop yet
+    expect(settlePending(p, 10 + SETTLE_TICKS, 500, 900)).toHaveLength(0);
   });
 
-  test("hard-expires after SETTLE_MAX_MS (rejected attack)", () => {
-    expect(settlePending([send], 11, SETTLE_MAX_MS, 5000)).toHaveLength(0);
+  test("a slow round trip doesn't settle early — ticks alone aren't enough", () => {
+    // 20 ticks later, deduction still not visible: stays pending.
+    expect(settlePending([send(100)], 30, 2000, 1000)).toHaveLength(1);
   });
 
-  test("lag stalls ticks, so the send stays pending", () => {
-    expect(settlePending([send], 10, 2000, 900)).toHaveLength(1);
+  test("FIFO: a big first deduction doesn't settle the second send too", () => {
+    const p = [send(500), send(100)];
+    // Only the first 500 has landed: 1000 → 500.
+    const left = settlePending(p, 10 + SETTLE_TICKS, 500, 500);
+    expect(left).toHaveLength(1);
+    expect(left[0].amount).toBe(100);
+    // Both landed: 1000 → 400.
+    expect(settlePending(p, 10 + SETTLE_TICKS, 500, 400)).toHaveLength(0);
+  });
+
+  test("regen since the send is accounted for (it would mask small sends)", () => {
+    // 100 sent; 10 ticks of +30 regen = +300 → observed 1200 even after the
+    // 100 deduction (1000 − 100 + 300). Without regen accounting this never
+    // settles; with it, the expected no-deduction level is 1300.
+    expect(settlePending([send(100)], 20, 900, 1200, 0)).toHaveLength(1);
+    expect(settlePending([send(100)], 20, 900, 1200, 30)).toHaveLength(0);
+  });
+
+  test("hard-expires after SETTLE_MAX_MS (rejected attack never deducts)", () => {
+    expect(settlePending([send(100)], 11, SETTLE_MAX_MS, 5000)).toHaveLength(0);
   });
 });

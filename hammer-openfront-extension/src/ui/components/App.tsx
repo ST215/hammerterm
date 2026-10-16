@@ -97,13 +97,13 @@ export default function App({ mode }: AppProps) {
     // stay on while every other popup is off.
     const notifications = screenPopupsEnabled ? (
       <>
-        <DonationToast />
+        <DonationToast inbound={donationAlertsEnabled} outbound />
         <ReciprocatePopup />
         <StatusToast />
         <GrowthHUD />
       </>
     ) : donationAlertsEnabled ? (
-      <DonationToast inboundOnly />
+      <DonationToast inbound outbound={false} />
     ) : null;
 
     // "hidden": only popups on the game screen (no panel chrome at all).

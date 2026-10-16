@@ -10,7 +10,7 @@
 
 import { useStore } from "@store/index";
 import type { PlayerData } from "@shared/types";
-import { serialize } from "@shared/serialize";
+import { deserialize, serialize } from "@shared/serialize";
 import { processDisplayMessage, processDonateEvent, drainPendingMessages } from "./game/message-processor";
 import { setMyLiveTroops } from "./hooks/worker-hook";
 import { cancelAllPaced, relayDashboardCommand } from "./game/send";
@@ -110,7 +110,8 @@ function startDashboardSync(port: chrome.runtime.Port): void {
     if (msg.type === "sync-local" && msg.data) {
       // Dashboard pushes LOCAL_KEY changes so automation stays in sync
       record("bridge", "sync-local", { keys: Object.keys(msg.data) });
-      useStore.setState(msg.data);
+      // Port messages are JSON: Sets/Maps (comms selections) arrive encoded.
+      useStore.setState(deserialize(msg.data));
     }
   });
 
@@ -298,8 +299,12 @@ function onBridgeMessage(e: MessageEvent): void {
 // ---------------------------------------------------------------------------
 
 export function handleGovernorTelemetry(payload: any): void {
-  if (!payload || !(Number(payload.maxTroops) > 0)) return;
   const store = useStore.getState();
+  if (!payload || !(Number(payload.maxTroops) > 0)) {
+    // No live player (dead / spectating / between matches): clear the readout.
+    if (payload) store.setAttackRatioTelemetry(null);
+    return;
+  }
   store.setMyCap(Number(payload.maxTroops), Number(payload.regenPerSec) || 0);
   store.setAttackRatioTelemetry({
     state: payload.state,

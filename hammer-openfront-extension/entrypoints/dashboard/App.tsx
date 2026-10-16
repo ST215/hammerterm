@@ -1,59 +1,13 @@
 import { useEffect, useRef, useState } from "react";
 import { useStore } from "@store/index";
-import { deserializeWithSharing, mapsEqual, setsEqual } from "@shared/serialize";
+import { deserializeWithSharing, mapsEqual, serialize, setsEqual } from "@shared/serialize";
 import HammerApp from "@ui/components/App";
+import {
+  LOCAL_KEYS,
+  TOUCH_GUARD_MS,
+  filterSnapshotPatch,
+} from "@shared/dashboard-sync";
 
-// Keys the user edits in this window. Edits push to the game tab immediately
-// (sync-local); see WINDOW_ONLY_KEYS below for which of them also flow back.
-const LOCAL_KEYS = new Set([
-  // UI navigation / presentation
-  "view", "paused", "sizeIdx", "inGameView", "externalOpen",
-  // Comms selections (user picks targets in dashboard)
-  "commsTargets", "commsGroupMode", "commsOthersExpanded",
-  "commsPendingQC", "commsRecentSent", "allianceCommsExpanded",
-  "commsPaceMs", "commsPaceHuman", "commsActiveBatch",
-  // Reciprocate config
-  "reciprocateMode", "reciprocateAutoPct", "reciprocateNotifyDuration",
-  "reciprocateEnabled", "reciprocateOnGold", "reciprocateOnTroops",
-  "reciprocatePopupsEnabled", "palantirMinPct", "palantirMaxPct", "popupScale",
-  "thankEnabled", "thankMode",
-  // Auto-troops config
-  "asTroopsRunning", "asTroopsTargets", "asTroopsRatio",
-  "asTroopsThreshold", "asTroopsCooldownSec",
-  "asTroopsAllTeamMode", "asTroopsAllAlliesMode",
-  // Auto-gold config
-  "asGoldRunning", "asGoldTargets", "asGoldRatio",
-  "asGoldThreshold", "asGoldCooldownSec",
-  "asGoldAllTeamMode", "asGoldAllAlliesMode",
-  // Attack-ratio governor config (telemetry stays out — it flows content→dashboard)
-  "attackRatioRunning", "attackRatioMode", "attackRatioBasePct",
-  "attackRatioBreakevenPct", "attackRatioFloorPct", "attackRatioMaxCap",
-  // Activity feed toggles
-  "screenPopupsEnabled", "donationAlertsEnabled", "growthHudEnabled",
-  "toastInboundTroops", "toastInboundGold", "toastOutboundTroops", "toastOutboundGold",
-  "toastScale", "statusToastScale",
-  // Notification positions
-  "reciprocatePosition", "donationPosition", "statusPosition", "growthPosition",
-  // CIA user preferences
-  "ciaWindowMs", "ciaFeedFilter",
-  // Broadcast config
-  "broadcastEnabled", "broadcastEmojiIndex", "broadcastSequence",
-  "broadcastUseSequence",
-  // Recorder (only the toggle — count & events come from content script snapshots)
-  "recorderOn",
-]);
-
-// Window-local presentation & in-progress selections: never adopted from the
-// game tab. Every OTHER LOCAL_KEY is a setting/toggle the GAME TAB owns: it's
-// adopted from snapshots (so this window opens showing your real settings and
-// reflects changes made in the overlay or by hotkey) unless you edited it here
-// within TOUCH_GUARD_MS — so an in-flight snapshot can't revert your click.
-const WINDOW_ONLY_KEYS = new Set([
-  "view", "paused", "sizeIdx", "inGameView", "externalOpen",
-  "commsTargets", "commsGroupMode", "commsOthersExpanded",
-  "commsPendingQC", "commsRecentSent", "allianceCommsExpanded", "commsActiveBatch",
-]);
-const TOUCH_GUARD_MS = 2000;
 
 export default function DashboardApp() {
   const [connected, setConnected] = useState(false);
@@ -116,7 +70,7 @@ export default function DashboardApp() {
         for (const key of keys) pendingLocal.add(key);
         return;
       }
-      try { port.postMessage({ type: "sync-local", data: changes }); } catch { /* port died */ }
+      try { port.postMessage({ type: "sync-local", data: serialize(changes) }); } catch { /* port died */ }
     });
 
     // Intercept sendToMainWorld calls (window.postMessage with __hammer flag)
@@ -162,17 +116,11 @@ export default function DashboardApp() {
                 touchedAt.set(key, now);
               }
               pendingLocal.clear();
-              try { port.postMessage({ type: "sync-local", data }); } catch { /* port died */ }
+              try { port.postMessage({ type: "sync-local", data: serialize(data) }); } catch { /* port died */ }
             }
             const currentState = useStore.getState();
             const data = deserializeWithSharing(msg.data, currentState);
-            const now = Date.now();
-            const patch: Record<string, any> = {};
-            for (const [key, val] of Object.entries(data)) {
-              if (typeof val === "function" || WINDOW_ONLY_KEYS.has(key)) continue;
-              if (LOCAL_KEYS.has(key) && now - (touchedAt.get(key) ?? 0) < TOUCH_GUARD_MS) continue;
-              patch[key] = val;
-            }
+            const patch = filterSnapshotPatch(data, touchedAt, Date.now());
 
             // Preserve dismissed state for notifications: if the dashboard
             // dismissed a notification, keep it dismissed even if the game tab
@@ -215,7 +163,11 @@ export default function DashboardApp() {
 
         port.onDisconnect.addListener(() => {
           // Null out port immediately so edits queue in pendingLocal instead.
+          // Edits posted just before the drop may have died with the old page
+          // (every match ends in a navigation) — queue those for replay too.
           port = null;
+          const cutoff = Date.now() - TOUCH_GUARD_MS;
+          for (const [key, at] of touchedAt) if (at >= cutoff) pendingLocal.add(key);
 
           if (!disposed) {
             setConnected(false);

@@ -15,8 +15,9 @@ import { isAttackEvent } from "@shared/logic/attack-clamp";
 import {
   allowedSend,
   armLevel,
-  decideClick,
+  governAttack,
   pendingTotal,
+  recordSend,
   settlePending,
   type GovernorConfig,
   type PendingSend,
@@ -758,6 +759,11 @@ export default defineContentScript({
     let govLastWriteMs = 0;
     let govWroteSlider = false;
     let govSlope: Array<{ t: number; troops: number }> = [];
+    // Last governor-config receipt. The ISOLATED side re-sends every 2s; if it
+    // goes silent (extension reloaded/updated mid-match) we stop governing
+    // rather than keep holding attacks with no UI left to turn us off.
+    let govCfgAt = 0;
+    const GOV_CFG_STALE_MS = 6000;
 
     function currentGame(): any {
       try {
@@ -785,6 +791,7 @@ export default defineContentScript({
       regenPerSec: number;
       tick: number;
       spawnPhase: boolean;
+      now: number;
     }
 
     /** My live numbers straight from the game, or null if there's no live me. */
@@ -818,12 +825,16 @@ export default defineContentScript({
         spawnPhase = !!game.inSpawnPhase?.();
       } catch {}
       if (!(maxT > 0)) return null;
-      return { game, troops, maxT, regenPerSec, tick, spawnPhase };
+      return { game, troops, maxT, regenPerSec, tick, spawnPhase, now: Date.now() };
     }
 
     function governorActive(s: MeSnapshot): boolean {
       return (
-        govCfg.running && govCfg.mode !== "manual" && !isReplayMode && !s.spawnPhase
+        govCfg.running &&
+        govCfg.mode !== "manual" &&
+        !isReplayMode &&
+        !s.spawnPhase &&
+        Date.now() - govCfgAt < GOV_CFG_STALE_MS
       );
     }
 
@@ -839,8 +850,8 @@ export default defineContentScript({
       } catch {}
     }
 
-    function effectiveTroops(s: MeSnapshot, now: number): number {
-      govPending = settlePending(govPending, s.tick, now, s.troops);
+    function effectiveTroops(s: MeSnapshot): number {
+      govPending = settlePending(govPending, s.tick, s.now, s.troops, s.regenPerSec / 10);
       return Math.max(0, s.troops - pendingTotal(govPending));
     }
 
@@ -849,8 +860,8 @@ export default defineContentScript({
     function governorTick(): void {
       const s = readMe();
       if (!s) return;
-      const now = Date.now();
-      const eff = effectiveTroops(s, now);
+      const now = s.now;
+      const eff = effectiveTroops(s);
       govSlope.push({ t: now, troops: s.troops });
       while (govSlope.length > 1 && now - govSlope[0].t > 4000) govSlope.shift();
 
@@ -859,7 +870,10 @@ export default defineContentScript({
         return;
       }
       if (!govEngaged && eff >= armLevel(govCfg, s.maxT)) govEngaged = true;
-      if (!govEngaged) return; // standby: native slider untouched
+      if (!govEngaged) {
+        releaseSlider(); // standby: the native slider is the player's again
+        return;
+      }
 
       const allowed = allowedSend(govCfg, eff, s.maxT);
       const ratio = Math.max(0.01, Math.min(1, s.troops > 0 ? allowed / s.troops : 0.01));
@@ -876,11 +890,18 @@ export default defineContentScript({
       }
     }
 
+    let govHadMe = false;
     function governorTelemetry(): void {
       const s = readMe();
-      if (!s) return;
-      const now = Date.now();
-      const eff = effectiveTroops(s, now);
+      if (!s) {
+        // Dead / spectating / between matches: clear the readout once rather
+        // than leave the last "governing" line frozen on screen.
+        if (govHadMe) emit("governor", { state: "off", maxTroops: 0 });
+        govHadMe = false;
+        return;
+      }
+      govHadMe = true;
+      const eff = effectiveTroops(s);
       const active = governorActive(s);
       const allowed = active && govEngaged ? allowedSend(govCfg, eff, s.maxT) : 0;
       let netSlope = 0;
@@ -923,27 +944,69 @@ export default defineContentScript({
      * Transport's listener, so trimming evt.troops (readonly is TS-only) or
      * dropping the event decides what reaches the server. Never increases a
      * request — retaliate's min(attack, ratio×troops) semantics survive.
+     * The decision + ledger logic is shared (attack-governor.ts governAttack).
      */
     function governClick(evt: any): boolean {
       const s = readMe();
       if (!s) return true;
-      const now = Date.now();
-      const eff = effectiveTroops(s, now);
-      if (governorActive(s) && govEngaged) {
-        const d = decideClick(govCfg, Number(evt.troops), eff, s.maxT);
-        if (d.held) {
-          govHeld++;
-          governorTelemetry(); // instant feedback for a held click
-          return false;
-        }
-        if (d.trimmed) {
-          evt.troops = d.troops;
-          govTrimmed++;
+      const out = governAttack(
+        {
+          cfg: govCfg,
+          active: governorActive(s),
+          engaged: govEngaged,
+          troops: s.troops,
+          maxTroops: s.maxT,
+          regenPerTick: s.regenPerSec / 10,
+          tick: s.tick,
+          nowMs: s.now,
+        },
+        govPending,
+        Number(evt.troops),
+      );
+      govPending = out.pending;
+      if (out.held) {
+        govHeld++;
+        governorTelemetry(); // instant feedback for a held click
+        return false;
+      }
+      if (out.trimmed) {
+        evt.troops = out.troops;
+        govTrimmed++;
+      }
+      return true;
+    }
+
+    /**
+     * Troop donations leave the army too — the game's own (radial menu, send
+     * modal) and ours (auto-troops, reciprocate). Record them in the ledger so
+     * a following attack can't spend troops that are already on their way out.
+     *
+     * The game's radial "donate to ally" action sends floor(uiState.attackRatio
+     * × troops). While we govern, that ratio is OUR surplus ratio (up to ~58%),
+     * not the player's slider — so put such a donation back on the player's
+     * own slider value. Our own sends carry explicit amounts that don't match.
+     */
+    function trackDonation(evt: any): void {
+      const s = readMe();
+      if (!s) return;
+      if (govWroteSlider && govLastRatio > 0 && typeof evt.troops === "number") {
+        const viaGovernedRatio = Math.floor(govLastRatio * s.troops);
+        if (Math.abs(evt.troops - viaGovernedRatio) <= 1) {
+          try {
+            const cp = document.querySelector("control-panel") as any;
+            if (typeof cp?.attackRatio === "number") {
+              evt.troops = Math.floor(cp.attackRatio * s.troops);
+            }
+          } catch {}
         }
       }
-      const sent = Number(evt.troops);
-      if (sent > 0) govPending.push({ amount: sent, tick: s.tick, t: now, base: s.troops });
-      return true;
+      // null = the engine's default (a third of troops, capped by recipient room).
+      const amount = typeof evt.troops === "number" ? evt.troops : s.troops / 3;
+      govPending = recordSend(govPending, amount, {
+        troops: s.troops,
+        tick: s.tick,
+        nowMs: s.now,
+      });
     }
 
     intervalIds.push(setInterval(governorTick, 100));
@@ -986,7 +1049,11 @@ export default defineContentScript({
       const origEmit = bus.emit.bind(bus);
       bus.emit = function (evt: any, ...rest: any[]) {
         try {
-          if (isAttackEvent(evt) && !governClick(evt)) return undefined;
+          if (isAttackEvent(evt)) {
+            if (!governClick(evt)) return undefined;
+          } else if (evt && typeof evt === "object" && "recipient" in evt && "troops" in evt) {
+            trackDonation(evt); // SendDonateTroopsIntentEvent {recipient, troops}
+          }
           if (looksLikeWireIntent(evt)) wireStamps.push(Date.now());
         } catch {}
         return origEmit(evt, ...rest);
@@ -1386,15 +1453,18 @@ export default defineContentScript({
       const { action, targetId, amount, recipientId, emojiIndex, key, targetPlayerId } =
         data;
 
-      // Retry discovery if classes are missing (they may not have been ready on first attempt)
-      ensureEventClasses();
+      // Retry discovery if classes are missing (they may not have been ready on
+      // first attempt). Only for real sends — not the 2s governor heartbeat.
+      if (action !== "governor-config" && action !== "capture-mouse") ensureEventClasses();
 
       // The binary wire doesn't validate on encode, and the server KICKS on a
       // donation with a NaN/negative amount (the game guards only attacks).
       // null is legitimate — it means the game's default "send a third".
       if ((action === "troops" || action === "gold") && amount != null) {
         const n = Number(amount);
-        if (!Number.isFinite(n) || n < 0) {
+        // < 1 too: Transport encodes gold 0 as null, which the engine reads as
+        // "donate a third of your gold"; a 0-troop donation is pointless.
+        if (!Number.isFinite(n) || n < 1) {
           console.warn("[Hammer:Main] Refusing donation with invalid amount:", amount);
           emit("send-result", { action, success: false, reason: "invalid-amount" });
           return;
@@ -1658,6 +1728,7 @@ export default defineContentScript({
         const mode = ["manual", "assist", "breakeven", "peak"].includes(c.mode)
           ? c.mode
           : "peak";
+        const prev = govCfg;
         govCfg = {
           running: !!c.running,
           mode,
@@ -1666,9 +1737,17 @@ export default defineContentScript({
           floorPct: Number(c.floorPct) || 0,
           capPct: Number(c.capPct) || 0,
         };
+        govCfgAt = Date.now();
         if (!govCfg.running || govCfg.mode === "manual") {
           govEngaged = false;
           releaseSlider();
+        } else if (
+          prev.mode !== govCfg.mode ||
+          prev.holdPct !== govCfg.holdPct ||
+          prev.floorPct !== govCfg.floorPct
+        ) {
+          // New target → back to standby until troops reach it, as promised.
+          govEngaged = false;
         }
       }
     }

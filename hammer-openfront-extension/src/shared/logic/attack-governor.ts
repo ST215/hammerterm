@@ -110,41 +110,101 @@ export function decideClick(
 // ---------- In-flight ledger ----------
 
 export interface PendingSend {
-  amount: number; // troops committed by the attack
-  tick: number; // game tick when the click was emitted
+  amount: number; // troops leaving: an attack, or a troop donation
+  tick: number; // game tick when it was emitted
   t: number; // wall-clock ms when emitted
   base: number; // observed troops at emit time
 }
 
-/** Game ticks after which a send's deduction should be visible (≈700ms RTT headroom). */
-export const SETTLE_TICKS = 8;
+/** Earliest a deduction can be visible (one server round trip in ticks). */
+export const SETTLE_TICKS = 4;
 /** Hard wall-clock expiry so a rejected attack can't hold troops forever. */
 export const SETTLE_MAX_MS = 3000;
 
 /**
- * Drop sends whose deduction is now reflected in the observed count. A send
- * settles once enough game ticks have passed AND troops have actually dipped
- * to/below the level seen at emit (a rejected attack never dips, so it lingers
- * until SETTLE_MAX_MS — erring toward holding, never toward over-sending).
- * Ticks only advance as server turns arrive, so lag stretches the window.
+ * Drop sends whose deduction is now reflected in the observed count.
+ *
+ * The server executes intents in order, so deductions land FIFO: walk the
+ * oldest sends first and settle each only once troops have dropped by (at
+ * least half of) everything sent up to and including it, measured from the
+ * oldest pending send's base. Requiring an actual drop — not just elapsed
+ * ticks — keeps a slow round trip from settling a send early (ticks keep
+ * arriving at 10/s even when the deduction lands late), and a dip from
+ * something unrelated rarely matches a cumulative drop of that size. Regen
+ * keeps adding troops meanwhile, so the bar rises by the expected regen since
+ * the oldest send (otherwise regen masks small, peak-farming-sized sends).
+ * A rejected attack never deducts, so it lingers until SETTLE_MAX_MS — erring
+ * toward holding, never toward over-sending.
  */
 export function settlePending(
   pending: PendingSend[],
   nowTick: number,
   nowMs: number,
   observedTroops: number,
+  regenPerTick = 0,
 ): PendingSend[] {
-  return pending.filter((p) => {
-    if (nowMs - p.t >= SETTLE_MAX_MS) return false;
-    const ticksPassed = nowTick - p.tick >= SETTLE_TICKS;
-    return !(ticksPassed && observedTroops <= p.base);
-  });
+  const live = pending.filter((p) => nowMs - p.t < SETTLE_MAX_MS);
+  if (live.length === 0) return live;
+  const base = live[0].base + Math.max(0, regenPerTick) * Math.max(0, nowTick - live[0].tick);
+  let dropped = 0;
+  let k = 0;
+  for (; k < live.length; k++) {
+    const p = live[k];
+    if (nowTick - p.tick < SETTLE_TICKS) break;
+    if (observedTroops > base - dropped - 0.5 * p.amount) break;
+    dropped += p.amount;
+  }
+  return k === 0 ? live : live.slice(k);
 }
 
 export function pendingTotal(pending: PendingSend[]): number {
   let sum = 0;
   for (const p of pending) sum += p.amount;
   return sum;
+}
+
+/** Live numbers the click decision needs (all troops internal units). */
+export interface ClickContext {
+  cfg: GovernorConfig;
+  active: boolean; // running, not manual, not replay/spawn phase
+  engaged: boolean; // past standby this match
+  troops: number; // observed troops (server-confirmed)
+  maxTroops: number;
+  regenPerTick: number;
+  tick: number;
+  nowMs: number;
+}
+
+export interface ClickOutcome extends ClickDecision {
+  pending: PendingSend[];
+}
+
+/**
+ * One attack the player just fired: settle the ledger, decide against the
+ * troops that are really still home, and record whatever is sent. This is the
+ * exact path the MAIN-world emit wrap runs.
+ */
+export function governAttack(
+  ctx: ClickContext,
+  pending: PendingSend[],
+  requested: number,
+): ClickOutcome {
+  const settled = settlePending(pending, ctx.tick, ctx.nowMs, ctx.troops, ctx.regenPerTick);
+  const eff = Math.max(0, ctx.troops - pendingTotal(settled));
+  let d: ClickDecision = { troops: requested, held: false, trimmed: false };
+  if (ctx.active && ctx.engaged) d = decideClick(ctx.cfg, requested, eff, ctx.maxTroops);
+  const out = d.held ? settled : recordSend(settled, d.troops, ctx);
+  return { ...d, pending: out };
+}
+
+/** Record troops leaving (attacks AND troop donations) so later clicks see them. */
+export function recordSend(
+  pending: PendingSend[],
+  amount: number,
+  ctx: Pick<ClickContext, "troops" | "tick" | "nowMs">,
+): PendingSend[] {
+  if (!(amount > 0) || !Number.isFinite(amount)) return pending;
+  return [...pending, { amount, tick: ctx.tick, t: ctx.nowMs, base: ctx.troops }];
 }
 
 function clamp01(x: number): number {
