@@ -35,8 +35,13 @@ export interface UISlice {
   donationPosition: NotifPosition;
   statusPosition: NotifPosition;
   growthPosition: NotifPosition;
-  /** Master switch — when false, no on-screen popups render at all. */
+  /** Master switch for on-screen popups (reciprocate, status, growth, outbound toasts). */
   screenPopupsEnabled: boolean;
+  /**
+   * Inbound donation alerts ("X sent you troops/gold"). Independent of the
+   * master switch so they can stay on while every other popup is off.
+   */
+  donationAlertsEnabled: boolean;
   /** Show the Growth HUD overlay (independent of auto-troops running). */
   growthHudEnabled: boolean;
   panelWidth: number;
@@ -66,6 +71,7 @@ export interface UISlice {
   setStatusPosition: (v: NotifPosition) => void;
   setGrowthPosition: (v: NotifPosition) => void;
   setScreenPopupsEnabled: (v: boolean) => void;
+  setDonationAlertsEnabled: (v: boolean) => void;
   setGrowthHudEnabled: (v: boolean) => void;
   setPanelWidth: (w: number) => void;
   setWireCount60: (n: number) => void;
@@ -88,6 +94,7 @@ export const createUISlice: StateCreator<UISlice, [], [], UISlice> = (set) => ({
   statusPosition: "center",
   growthPosition: "bottom-left",
   screenPopupsEnabled: false,
+  donationAlertsEnabled: true,
   growthHudEnabled: true,
   panelWidth: 850,
   wireCount60: 0,
@@ -122,6 +129,7 @@ export const createUISlice: StateCreator<UISlice, [], [], UISlice> = (set) => ({
   setStatusPosition: (v) => set({ statusPosition: v }),
   setGrowthPosition: (v) => set({ growthPosition: v }),
   setScreenPopupsEnabled: (v) => set({ screenPopupsEnabled: v }),
+  setDonationAlertsEnabled: (v) => set({ donationAlertsEnabled: v }),
   setGrowthHudEnabled: (v) => set({ growthHudEnabled: v }),
   setPanelWidth: (w) => set((s) => (s.panelWidth === w ? s : { panelWidth: w })),
 

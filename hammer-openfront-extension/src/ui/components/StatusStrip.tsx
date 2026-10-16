@@ -15,7 +15,8 @@ const CELLS = 8;
 export default function StatusStrip() {
   const wireCount60 = useStore((s) => s.wireCount60);
   const batch = useStore((s) => s.commsActiveBatch);
-  const profile = useStore((s) => s.commsPaceProfile);
+  const paceMs = useStore((s) => s.commsPaceMs);
+  const paceHuman = useStore((s) => s.commsPaceHuman);
   const setBatch = useStore((s) => s.setCommsActiveBatch);
 
   if (wireCount60 <= 0 && !batch) return null;
@@ -29,7 +30,7 @@ export default function StatusStrip() {
         ? "text-hammer-gold"
         : "text-hammer-red";
 
-  const pace = resolvePace(profile);
+  const pace = resolvePace(paceMs, paceHuman);
   // Every remaining send needs one gap (delayFirst=true counts n gaps for n sends).
   const remainingMs = batch
     ? estimateBatchMs(batch.total - batch.sent, { ...pace, delayFirst: true })

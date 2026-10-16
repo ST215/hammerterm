@@ -1,5 +1,4 @@
 import type { StateCreator } from "zustand";
-import type { PaceProfileId } from "@shared/logic/pace";
 
 export interface CommsRecentEntry {
   type: string;
@@ -28,8 +27,10 @@ export interface CommsSlice {
   commsPendingQC: CommsPendingQC | null;
   commsRecentSent: CommsRecentEntry[];
   allianceCommsExpanded: Map<string, boolean>;
-  /** Multi-target send pacing profile. Persisted setting — survives resetComms. */
-  commsPaceProfile: PaceProfileId;
+  /** Multi-target send pacing (persisted — survive resetComms). Average gap, ms. */
+  commsPaceMs: number;
+  /** Humanize: wider random gaps, delayed first send, occasional long pause. */
+  commsPaceHuman: boolean;
   /** Active paced batch (context-local; shown by the status strip). */
   commsActiveBatch: CommsActiveBatch | null;
 
@@ -40,7 +41,7 @@ export interface CommsSlice {
   setCommsGroupMode: (mode: string) => void;
   toggleCommsOthersExpanded: () => void;
   setCommsPendingQC: (pending: CommsPendingQC | null) => void;
-  setCommsPaceProfile: (profile: PaceProfileId) => void;
+  setCommsPace: (ms: number, human: boolean) => void;
   setCommsActiveBatch: (batch: CommsActiveBatch | null) => void;
   addCommsRecentSent: (entry: CommsRecentEntry) => void;
   toggleAllianceCommsExpanded: (id: string) => void;
@@ -54,7 +55,8 @@ export const createCommsSlice: StateCreator<CommsSlice, [], [], CommsSlice> = (s
   commsPendingQC: null,
   commsRecentSent: [],
   allianceCommsExpanded: new Map(),
-  commsPaceProfile: "quick" as PaceProfileId,
+  commsPaceMs: 5000,
+  commsPaceHuman: true,
   commsActiveBatch: null,
 
   setCommsTargets: (targets) => set({ commsTargets: targets }),
@@ -82,7 +84,7 @@ export const createCommsSlice: StateCreator<CommsSlice, [], [], CommsSlice> = (s
 
   setCommsPendingQC: (pending) => set({ commsPendingQC: pending }),
 
-  setCommsPaceProfile: (profile) => set({ commsPaceProfile: profile }),
+  setCommsPace: (ms, human) => set({ commsPaceMs: ms, commsPaceHuman: human }),
 
   setCommsActiveBatch: (batch) => set({ commsActiveBatch: batch }),
 

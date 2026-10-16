@@ -17,6 +17,7 @@ import { describe, expect, test } from "vitest";
 import { EMOJI_TABLE, EMOJI_COMPACT } from "../src/shared/emoji-table";
 import { GameUpdateType, MessageType, CAPTURED_SHIP_GOLD_KEY } from "../src/shared/constants";
 import quickChatData from "../../OpenFrontIO/resources/QuickChat.json";
+import { QC_CATEGORIES, QC_NEEDS_TARGET } from "../src/shared/quick-chat";
 
 // Read OpenFront source text so packed-stats + DonateEvent contracts are pinned
 // against the actual game, not a hand-copied constant. (process.cwd() is the
@@ -78,43 +79,14 @@ const ALLIANCES_QUICK_CHATS = [
   { key: "misc.go", label: "Go!" },
 ];
 
-const COMMS_QC_ITEMS: { key: string; needsTarget?: boolean }[] = [
-  { key: "greet.hello" },
-  { key: "greet.good_luck" },
-  { key: "greet.well_played" },
-  { key: "greet.thanks" },
-  { key: "greet.gg" },
-  { key: "greet.bye" },
-  { key: "greet.oops" },
-  { key: "help.troops" },
-  { key: "help.gold" },
-  { key: "help.help_defend", needsTarget: true },
-  { key: "help.alliance" },
-  { key: "help.no_attack" },
-  { key: "help.trade_partners" },
-  { key: "attack.attack", needsTarget: true },
-  { key: "attack.focus", needsTarget: true },
-  { key: "attack.finish", needsTarget: true },
-  { key: "attack.mirv", needsTarget: true },
-  { key: "attack.build_warships" },
-  { key: "defend.defend", needsTarget: true },
-  { key: "defend.defend_from", needsTarget: true },
-  { key: "defend.dont_attack", needsTarget: true },
-  { key: "defend.ally", needsTarget: true },
-  { key: "defend.build_posts" },
-  { key: "misc.go" },
-  { key: "misc.strategy" },
-  { key: "misc.team_up", needsTarget: true },
-  { key: "misc.build_closer" },
-  { key: "warnings.strong", needsTarget: true },
-  { key: "warnings.weak", needsTarget: true },
-  { key: "warnings.betrayed", needsTarget: true },
-  { key: "warnings.getting_big", needsTarget: true },
-  { key: "warnings.mirv_soon", needsTarget: true },
-  { key: "warnings.snowballing", needsTarget: true },
-  { key: "warnings.cheating", needsTarget: true },
-  { key: "warnings.stop_trading", needsTarget: true },
-];
+// The exact catalog CommsView renders (shared module), not a hand copy — a
+// key the game removed throws in its binary encoder, so drift must fail here.
+const COMMS_QC_ITEMS: { key: string; needsTarget?: boolean }[] = QC_CATEGORIES.flatMap((cat) =>
+  cat.keys.map((k) => {
+    const key = `${cat.prefix}.${k}`;
+    return QC_NEEDS_TARGET.has(key) ? { key, needsTarget: true } : { key };
+  }),
+);
 
 // ═══════════════════════════════════════════════════════
 // QUICK CHAT KEY FORMAT TESTS
@@ -143,6 +115,13 @@ describe("quick chat keys match game protocol", () => {
       expect(parts.length, `"${key}" must be exactly "category.key"`).toBe(2);
       expect(parts[0].length, `"${key}" category must not be empty`).toBeGreaterThan(0);
       expect(parts[1].length, `"${key}" key must not be empty`).toBeGreaterThan(0);
+    }
+  });
+
+  test("CommsView offers every quick chat phrase the game has", () => {
+    const offered = new Set(COMMS_QC_ITEMS.map((q) => q.key));
+    for (const key of VALID_QC_KEYS) {
+      expect(offered.has(key), `game phrase "${key}" missing from CommsView`).toBe(true);
     }
   });
 
@@ -232,7 +211,7 @@ describe("emoji table matches game", () => {
 describe("worker message format matches game", () => {
   test("game_update_batch uses gameUpdates property (not updates)", () => {
     // Simulates what the Worker sends — this is the exact shape from
-    // OpenFrontIO/src/core/worker/WorkerMessages.ts:GameUpdateBatchMessage
+    // OpenFrontIO/packages/engine-api/src/worker/WorkerMessages.ts:GameUpdateBatchMessage
     const batchMessage = {
       type: "game_update_batch" as const,
       gameUpdates: [
@@ -304,8 +283,8 @@ describe("GameUpdateType constants", () => {
 // PACKED PLAYER STATS QUAD LAYOUT (v0.32+ commit bca980f)
 // ═══════════════════════════════════════════════════════
 describe("packedPlayerUpdates quad layout matches game", () => {
-  const playerImpl = OF("src/core/game/PlayerImpl.ts");
-  const gameUpdates = OF("src/core/game/GameUpdates.ts");
+  const playerImpl = OF("packages/engine/src/game/PlayerImpl.ts");
+  const gameUpdates = OF("packages/engine-api/src/game/GameUpdates.ts");
 
   test("GameUpdateViewData still carries packedPlayerUpdates", () => {
     expect(gameUpdates).toContain("packedPlayerUpdates?: Float64Array");
@@ -366,13 +345,13 @@ describe("game socket is zbin binary — raw JSON intents are forbidden", () => 
 
   test("zbin wire declares no JSON fallback", () => {
     // The doc comment wraps across lines — normalize comment continuations.
-    const wire = OF("src/core/ZbinWire.ts").replace(/\n\/\/\s*/g, " ");
+    const wire = OF("packages/shared/src/ZbinWire.ts").replace(/\n\/\/\s*/g, " ");
     expect(wire).toMatch(/no JSON fallback/i);
   });
 });
 
 describe("DonateEvent contract matches game", () => {
-  const gameUpdates = OF("src/core/game/GameUpdates.ts");
+  const gameUpdates = OF("packages/engine-api/src/game/GameUpdates.ts");
 
   test("DonateEvent is the last GameUpdateType member (index 23)", () => {
     // Our constants pin DonateEvent = 23; the game defines it as the final
@@ -408,8 +387,8 @@ describe("DonateEvent contract matches game", () => {
 // PORT / CAPTURED-SHIP GOLD CONTRACT (v0.32: mt=20 became CHAT)
 // ═══════════════════════════════════════════════════════
 describe("captured-trade-ship gold (port income) contract matches game", () => {
-  const gameTs = OF("src/core/game/Game.ts");
-  const tradeShip = OF("src/core/execution/TradeShipExecution.ts");
+  const gameTs = OF("packages/engine-api/src/game/GameTypes.ts");
+  const tradeShip = OF("packages/engine/src/execution/TradeShipExecution.ts");
 
   test("CAPTURED_ENEMY_UNIT is index 11 in the game's MessageType enum", () => {
     // The game's MessageType is a plain auto-incremented enum; its numeric
@@ -430,5 +409,69 @@ describe("captured-trade-ship gold (port income) contract matches game", () => {
     // numeric channel. Both must survive to the extension's display payload.
     expect(tradeShip).toContain(`"${CAPTURED_SHIP_GOLD_KEY}"`);
     expect(tradeShip).toContain("MessageType.CAPTURED_ENEMY_UNIT");
+  });
+});
+
+// ═══════════════════════════════════════════════════════
+// ALLIANCE REQUEST vs BREAK (betray)
+// ═══════════════════════════════════════════════════════
+describe("alliance request / break classes match game", () => {
+  const transport = OF("src/client/Transport.ts");
+
+  test("both are {requestor, recipient} — discovery must tell them apart", () => {
+    for (const cls of ["SendAllianceRequestIntentEvent", "SendBreakAllianceIntentEvent"]) {
+      const m = transport.match(new RegExp(`class ${cls}[^{]*\\{\\s*constructor\\(([^)]*)\\)`));
+      expect(m, `${cls} not found`).toBeTruthy();
+      expect(m![1]).toMatch(/requestor/);
+      expect(m![1]).toMatch(/recipient/);
+    }
+  });
+
+  test("Transport subscribes request BEFORE break (discovery's fallback order)", () => {
+    const req = transport.indexOf("subscribe(SendAllianceRequestIntentEvent");
+    const brk = transport.indexOf("subscribe(SendBreakAllianceIntentEvent");
+    expect(req).toBeGreaterThan(-1);
+    expect(brk).toBeGreaterThan(req);
+  });
+
+  test("the break listener's source names 'Break' (discovery's primary signal)", () => {
+    const at = transport.indexOf("subscribe(SendBreakAllianceIntentEvent");
+    expect(transport.slice(at, at + 160)).toMatch(/Break/);
+  });
+});
+
+// ═══════════════════════════════════════════════════════
+// ATTACK GOVERNOR DEPENDENCIES
+// ═══════════════════════════════════════════════════════
+describe("attack governor contracts match game", () => {
+  const config = OF("packages/engine-lib/src/configuration/Config.ts");
+  const attackExec = OF("packages/engine/src/execution/AttackExecution.ts");
+  const gameView = OF("src/client/view/GameView.ts");
+  const controlPanel = OF("src/client/hud/layers/ControlPanel.ts");
+
+  test("config exposes maxTroops(player) and troopIncreaseRate(player)", () => {
+    // The governor reads the EXACT cap (cities included) instead of estimating.
+    expect(config).toMatch(/\bmaxTroops\(player: PlayerLike\): number/);
+    expect(config).toMatch(/\btroopIncreaseRate\(player: PlayerLike\): number/);
+  });
+
+  test("regen still peaks at ~42%: (10 + troops^0.73/4) * (1 - troops/max)", () => {
+    expect(config).toMatch(/10 \+ pow\(player\.troops\(\), 0\.73\) \/ 4/);
+    expect(config).toMatch(/1 - player\.troops\(\) \/ max/);
+  });
+
+  test("an attack takes min(owner troops, requested) at execution — why the in-flight ledger exists", () => {
+    expect(attackExec).toMatch(/Math\.min\(this\._owner\.troops\(\), this\.startTroops\)/);
+  });
+
+  test("GameView exposes ticks(), config(), myPlayer() for the MAIN-world governor", () => {
+    expect(gameView).toMatch(/\bticks\(\): Tick/);
+    expect(gameView).toMatch(/\bconfig\(\)/);
+    expect(gameView).toMatch(/\bmyPlayer\(\)/);
+  });
+
+  test("ControlPanel keeps its own attackRatio (restored to uiState on release)", () => {
+    expect(controlPanel).toMatch(/attackRatio: number/);
+    expect(controlPanel).toMatch(/this\.uiState\.attackRatio = /);
   });
 });

@@ -23,7 +23,7 @@ function debouncedSave(state: PersistedState) {
   }, DEBOUNCE_MS);
 }
 
-const VERSION = "15.23.0-ext";
+const VERSION = "15.24.0-ext";
 
 export default defineBackground(() => {
   console.log("[Hammer] Background service worker started");

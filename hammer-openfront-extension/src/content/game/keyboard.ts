@@ -69,6 +69,7 @@ export async function captureMouseTarget(): Promise<void> {
 // ---------- keydownHandler ----------
 
 let lastTroopsToggle = 0;
+let lastGovernorToggle = 0;
 
 const keydownHandler = (e: KeyboardEvent): void | false => {
   let handled = false;
@@ -91,6 +92,7 @@ const keydownHandler = (e: KeyboardEvent): void | false => {
 
     // Debounce rapid toggles
     if (Date.now() - lastTroopsToggle < 600) {
+      consumedCodes.add(e.code);
       return false;
     }
     lastTroopsToggle = Date.now();
@@ -113,7 +115,35 @@ const keydownHandler = (e: KeyboardEvent): void | false => {
     handled = true;
   }
 
-  if (handled) return false;
+  // ALT+G: toggle the attack governor — the escape hatch when it's holding
+  // clicks you need to land (e.g. a counter-attack below your target level).
+  if (e.altKey && e.code === "KeyG") {
+    e.preventDefault();
+    e.stopImmediatePropagation();
+    if (Date.now() - lastGovernorToggle < 400) {
+      consumedCodes.add(e.code);
+      return false;
+    }
+    lastGovernorToggle = Date.now();
+    import("../automation/attack-ratio").then((m) => m.asAttackRatioToggle());
+    handled = true;
+  }
+
+  if (handled) {
+    // The game fires its keybinds on KEYUP and ignores Alt (G = ground attack,
+    // M = coordinate grid), so the release of a key we just consumed must be
+    // swallowed too — by code, since Alt may already be up by then.
+    consumedCodes.add(e.code);
+    return false;
+  }
+};
+
+const consumedCodes = new Set<string>();
+
+const keyupHandler = (e: KeyboardEvent): void => {
+  if (!consumedCodes.delete(e.code)) return;
+  e.preventDefault();
+  e.stopImmediatePropagation();
 };
 
 // ---------- Install / Remove ----------
@@ -122,6 +152,7 @@ export function installKeyboardHandler(): void {
   if (installed) return;
   // CRITICAL: Use capture phase (true) to intercept BEFORE the game
   window.addEventListener("keydown", keydownHandler, true);
+  window.addEventListener("keyup", keyupHandler, true);
   installed = true;
   log("[KEYBOARD] Handler installed");
 }
@@ -129,6 +160,8 @@ export function installKeyboardHandler(): void {
 export function removeKeyboardHandler(): void {
   if (!installed) return;
   window.removeEventListener("keydown", keydownHandler, true);
+  window.removeEventListener("keyup", keyupHandler, true);
+  consumedCodes.clear();
   installed = false;
   log("[KEYBOARD] Handler removed");
 }

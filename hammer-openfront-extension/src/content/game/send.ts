@@ -280,39 +280,26 @@ export function asSendGold(targetId: string, amount: number): boolean {
 
 // ---------- asSetAttackRatio ----------
 
-/**
- * Set the game's attack-ratio slider (fraction 0.01–1.0 of troops committed per
- * manual attack). This is a pure client-side write — it sends NO server intent,
- * so it deliberately bypasses the rate-limiter queue and may be called as often
- * as the governor likes. Blocked only during replay playback.
- */
-export function asSetAttackRatio(ratio: number): void {
-  if (useStore.getState().isReplay) return;
-  const clamped = Math.max(0.01, Math.min(1.0, ratio));
-  sendToMainWorld({ action: "set-attack-ratio", amount: clamped });
-}
+// ---------- Relay from the external window ----------
+
+/** Payload actions that become server intents (and so count against limits). */
+const INTENT_ACTIONS = new Set([
+  "troops", "gold", "emoji", "quickchat", "alliance", "betray", "embargo", "embargo_all",
+]);
 
 /**
- * Push the governor's absolute reserve floor (INTERNAL troop units) to the
- * MAIN world, where the per-click emit-wrap clamps manual attacks so they can
- * never spend below it. Refreshed every governor tick. Client-side only — no
- * server intent, so it bypasses the rate limiter. Blocked during replay.
+ * Commands relayed from the external dashboard window. That window has its
+ * own module copy (and its own limiter), so intents are re-queued through THIS
+ * tab's limiter — otherwise dashboard comms + game-tab automation could each
+ * use a full budget and together exceed the server's 10/s · 150/min kick line.
+ * Client-side commands (governor config, mouse capture) pass straight through.
  */
-export function asSetAttackFloor(floorTroops: number): void {
-  if (useStore.getState().isReplay) return;
-  sendToMainWorld({ action: "set-attack-floor", amount: Math.max(0, floorTroops) });
-}
-
-/**
- * Hand the attack ratio back to the player's native slider. Reads the game's
- * ControlPanel (which the player's own drag / T-Y keep current) and copies its
- * value into the shared uiState, so after the governor disengages the next
- * manual attack uses the visible slider's value, not the governor's last write.
- * Client-side only — not rate-limited.
- */
-export function asReleaseAttackRatio(): void {
-  if (useStore.getState().isReplay) return;
-  sendToMainWorld({ action: "release-attack-ratio" });
+export function relayDashboardCommand(payload: any): void {
+  if (payload && INTENT_ACTIONS.has(payload.action)) {
+    enqueueIntent(payload, "cmd", `relay.${payload.action}`, {}, `[SEND] Relayed ${payload.action} from external window`);
+  } else {
+    sendToMainWorld(payload);
+  }
 }
 
 // ---------- sendEmoji ----------

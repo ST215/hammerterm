@@ -12,12 +12,13 @@ function ordinal(n: number): string {
   return n + (s[(v - 20) % 10] || s[v] || s[0]);
 }
 
-export default function DonationToast() {
-  const toasts = useStore((s) => s.donationToasts);
+export default function DonationToast({ inboundOnly = false }: { inboundOnly?: boolean }) {
+  const allToasts = useStore((s) => s.donationToasts);
   const history = useStore((s) => s.donationHistory);
   const dismiss = useStore((s) => s.dismissDonationToast);
   const toastScale = useStore((s) => s.toastScale);
   const position = useStore((s) => s.donationPosition);
+  const toasts = inboundOnly ? allToasts.filter((t) => t.direction === "in") : allToasts;
 
   useEffect(() => {
     if (toasts.length === 0) return;

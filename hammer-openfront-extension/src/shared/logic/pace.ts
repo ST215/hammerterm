@@ -1,14 +1,14 @@
 /**
- * Comms pacing profiles — how multi-target sends are spaced out.
+ * Comms pacing — how multi-target sends are spaced out.
  *
- * A profile resolves to a [minMs, maxMs] gap range plus two humanizing flags:
- * delayFirst (a real person can't have sent the first message the instant
- * they decided to) and longPauses (occasionally a gap doubles, like losing a
- * target on the map). All presets — no free-typed ranges; number inputs
- * proved too clunky to use mid-match.
+ * Two settings, no typing (number inputs proved clunky mid-match):
+ *   - a gap picked from PACE_STOPS_MS (slider / −+ buttons / preset chips)
+ *   - Humanize: widen the randomness, delay the first send too (a person
+ *     can't send the instant they decide), and occasionally double a gap
+ *     (like losing a target on the map).
+ * The gap is the AVERAGE spacing; the resolved [min, max] range is what the
+ * pacer draws each gap from.
  */
-
-export type PaceProfileId = "instant" | "quick" | "brisk" | "human";
 
 export interface ResolvedPace {
   minMs: number;
@@ -17,25 +17,47 @@ export interface ResolvedPace {
   longPauses: boolean;
 }
 
-export const PACE_PROFILES: Record<PaceProfileId, ResolvedPace> = {
-  instant: { minMs: 300, maxMs: 450, delayFirst: false, longPauses: false },
-  quick: { minMs: 900, maxMs: 1400, delayFirst: false, longPauses: false },
-  brisk: { minMs: 3000, maxMs: 7000, delayFirst: true, longPauses: true },
-  human: { minMs: 6000, maxMs: 14000, delayFirst: true, longPauses: true },
-};
+/** Selectable average gaps, ms. */
+export const PACE_STOPS_MS = [
+  300, 500, 750, 1000, 1500, 2000, 3000, 4000, 5000, 7000, 10000, 14000, 20000,
+];
 
-export const PACE_PROFILE_IDS: PaceProfileId[] = [
-  "instant",
-  "quick",
-  "brisk",
-  "human",
+/** One-click shortcuts onto the slider. */
+export const PACE_PRESETS: { label: string; ms: number; human: boolean }[] = [
+  { label: "Instant", ms: 300, human: false },
+  { label: "Quick", ms: 1000, human: false },
+  { label: "Brisk", ms: 5000, human: true },
+  { label: "Human", ms: 10000, human: true },
 ];
 
 /** Chance that a longPauses gap doubles (mirrored in sendPaced). */
 export const LONG_PAUSE_CHANCE = 0.15;
 
-export function resolvePace(profile: PaceProfileId): ResolvedPace {
-  return PACE_PROFILES[profile] ?? PACE_PROFILES.quick;
+/** Snap any stored value to the nearest selectable stop. */
+export function nearestStopIndex(ms: number): number {
+  let best = 0;
+  for (let i = 1; i < PACE_STOPS_MS.length; i++) {
+    if (Math.abs(PACE_STOPS_MS[i] - ms) < Math.abs(PACE_STOPS_MS[best] - ms)) best = i;
+  }
+  return best;
+}
+
+export function resolvePace(gapMs: number, human: boolean): ResolvedPace {
+  const ms = PACE_STOPS_MS[nearestStopIndex(gapMs)];
+  if (human) {
+    return {
+      minMs: Math.round(ms * 0.6),
+      maxMs: Math.round(ms * 1.4),
+      delayFirst: true,
+      longPauses: true,
+    };
+  }
+  return {
+    minMs: Math.round(ms * 0.85),
+    maxMs: Math.round(ms * 1.15),
+    delayFirst: false,
+    longPauses: false,
+  };
 }
 
 /** Estimated total duration of an n-target batch under a resolved pace. */
@@ -47,7 +69,12 @@ export function estimateBatchMs(n: number, pace: ResolvedPace): number {
   return Math.round(gaps * avg);
 }
 
-/** "6–14s" / "0.3–0.5s" style range label. */
+/** "0.3s" / "2s" / "14s" — a single gap. */
+export function gapLabel(ms: number): string {
+  return `${(ms / 1000).toFixed(ms < 1000 ? 1 : ms < 2000 ? 1 : 0).replace(/\.0$/, "")}s`;
+}
+
+/** "4–8s" / "0.3–0.4s" style range label. */
 export function paceRangeLabel(pace: ResolvedPace): string {
   const s = (ms: number) =>
     (ms / 1000).toFixed(ms < 1000 ? 1 : 0).replace(/\.0$/, "");

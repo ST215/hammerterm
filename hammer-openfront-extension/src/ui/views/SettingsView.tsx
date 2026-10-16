@@ -54,6 +54,8 @@ const testBtn =
 
 export default function SettingsView() {
   const screenPopupsEnabled = useStore((s) => s.screenPopupsEnabled);
+  const donationAlertsEnabled = useStore((s) => s.donationAlertsEnabled);
+  const setDonationAlertsEnabled = useStore((s) => s.setDonationAlertsEnabled);
   const setScreenPopupsEnabled = useStore((s) => s.setScreenPopupsEnabled);
 
   // Reciprocate popup
@@ -103,14 +105,21 @@ export default function SettingsView() {
   return (
     <div>
       <Section title="Popups">
+        <label className="flex items-center gap-2 cursor-pointer text-2xs mb-1.5">
+          <input type="checkbox" checked={donationAlertsEnabled} onChange={(e) => setDonationAlertsEnabled(e.target.checked)} className="accent-hammer-green" />
+          <span className={donationAlertsEnabled ? "text-hammer-text" : "text-hammer-dim"}>
+            Donation alerts — pop up when someone sends you troops or gold
+          </span>
+        </label>
         <label className="flex items-center gap-2 cursor-pointer text-2xs">
           <input type="checkbox" checked={screenPopupsEnabled} onChange={(e) => setScreenPopupsEnabled(e.target.checked)} className="accent-hammer-green" />
           <span className={screenPopupsEnabled ? "text-hammer-text" : "text-hammer-dim"}>
-            Master switch — show on-screen popups (every view mode)
+            All other popups — reciprocate, status, growth, outbound toasts
           </span>
         </label>
         <div className="text-2xs text-hammer-dim mt-1">
-          When on, popups appear on the game screen regardless of whether the panel is shown or hidden.
+          Popups appear on the game screen whether the panel is shown or hidden. Donation alerts
+          work on their own even with everything else off; the per-type toggles below still apply.
         </div>
       </Section>
 

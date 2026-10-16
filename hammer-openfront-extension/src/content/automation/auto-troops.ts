@@ -75,7 +75,12 @@ function asTroopsTick(): void {
   if (!me) return;
 
   let troops = Number(me.troops || 0);
-  const maxT = estimateMaxTroops(me.tilesOwned ?? 0, me.smallID ?? 0, cityLevelSumByOwner);
+  // Exact cap from the game (cities included) once known — the tiles-only
+  // estimate undercounts late game and made Palantir over-send.
+  const maxT =
+    s.myMaxTroops > 0
+      ? s.myMaxTroops
+      : estimateMaxTroops(me.tilesOwned ?? 0, me.smallID ?? 0, cityLevelSumByOwner);
   const troopPct = maxT > 0 ? (troops / maxT) * 100 : 0;
 
   // Palantir manages its own floor (42%); fixed ratio uses the threshold setting
@@ -152,21 +157,26 @@ function asTroopsTick(): void {
 
 // ---------- Start / Stop ----------
 
+// UI toggles only flip the flag — safe from the overlay or the external
+// window. The loop itself runs in the game tab (automation runtime), so it
+// never lives in a window that can be closed out from under it.
 export function asTroopsStart(): void {
-  const s = useStore.getState();
-  if (s.asTroopsRunning) return; // Already running
-  s.setAsTroopsRunning(true);
-  if (asTroopsTimer) clearInterval(asTroopsTimer);
-  asTroopsTimer = setInterval(asTroopsTick, 800);
-  registerInterval(asTroopsTimer);
-  log("[AUTO-TROOPS] Started");
+  useStore.getState().setAsTroopsRunning(true);
 }
 
 export function asTroopsStop(): void {
   useStore.getState().setAsTroopsRunning(false);
-  if (asTroopsTimer) {
+}
+
+/** Game tab only (automation runtime): run or halt the loop to match the flag. */
+export function syncTroopsLoop(running: boolean): void {
+  if (running && !asTroopsTimer) {
+    asTroopsTimer = setInterval(asTroopsTick, 800);
+    registerInterval(asTroopsTimer);
+    log("[AUTO-TROOPS] Started");
+  } else if (!running && asTroopsTimer) {
     clearInterval(asTroopsTimer);
     asTroopsTimer = null;
+    log("[AUTO-TROOPS] Stopped");
   }
-  log("[AUTO-TROOPS] Stopped");
 }

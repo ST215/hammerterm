@@ -7,83 +7,21 @@ import { short, dTroops } from "@shared/utils";
 import { splitClanGroups, groupByTeam } from "@shared/logic/clan-tags";
 import { sendEmoji, sendQuickChat, sendPaced, type PacedHandle } from "@content/game/send";
 import {
-  PACE_PROFILE_IDS,
+  PACE_PRESETS,
+  PACE_STOPS_MS,
   durationLabel,
   estimateBatchMs,
+  gapLabel,
+  nearestStopIndex,
   paceRangeLabel,
   resolvePace,
-  type PaceProfileId,
 } from "@shared/logic/pace";
 import { EMOJI_TABLE } from "@shared/emoji-table";
+import { QC_CATEGORIES, QC_NEEDS_TARGET } from "@shared/quick-chat";
 import { Section, PresetButton, PretextText } from "@ui/components/ds";
 import { TargetTag } from "@ui/components/TargetTag";
 import { timeAgo } from "@shared/ui-helpers";
 import type { PlayerData } from "@shared/types";
-
-// All quickchat items from the game, organized by category
-const QC_NEEDS_TARGET = new Set([
-  "help.help_defend",
-  "attack.attack", "attack.mirv", "attack.focus", "attack.finish",
-  "defend.defend", "defend.defend_from", "defend.dont_attack", "defend.ally",
-  "misc.team_up",
-  "warnings.strong", "warnings.weak", "warnings.mirv_soon",
-  "warnings.has_allies", "warnings.no_allies",
-  "warnings.betrayed", "warnings.betrayed_me",
-  "warnings.getting_big", "warnings.danger_base",
-  "warnings.saving_for_mirv", "warnings.mirv_ready",
-  "warnings.snowballing", "warnings.cheating", "warnings.stop_trading",
-]);
-
-interface QCCategory {
-  title: string;
-  prefix: string;
-  keys: string[];
-}
-
-const QC_CATEGORIES: QCCategory[] = [
-  {
-    title: "Greetings",
-    prefix: "greet",
-    keys: [
-      "hello", "good_job", "good_luck", "have_fun", "gg",
-      "nice_to_meet", "well_played", "hi_again", "bye", "thanks",
-      "oops", "trust_me", "trust_broken", "ruining_games", "dont_do_that", "same_team",
-    ],
-  },
-  {
-    title: "Help",
-    prefix: "help",
-    keys: [
-      "troops", "troops_frontlines", "gold", "no_attack",
-      "sorry_attack", "alliance", "help_defend", "trade_partners",
-    ],
-  },
-  {
-    title: "Attack",
-    prefix: "attack",
-    keys: ["attack", "mirv", "focus", "finish", "build_warships"],
-  },
-  {
-    title: "Defend",
-    prefix: "defend",
-    keys: ["defend", "defend_from", "dont_attack", "ally", "build_posts"],
-  },
-  {
-    title: "Misc",
-    prefix: "misc",
-    keys: ["go", "strategy", "fun", "team_up", "pr", "build_closer", "coastline"],
-  },
-  {
-    title: "Warnings",
-    prefix: "warnings",
-    keys: [
-      "strong", "weak", "mirv_soon", "number1_warning", "stalemate",
-      "has_allies", "no_allies", "betrayed", "betrayed_me",
-      "getting_big", "danger_base", "saving_for_mirv", "mirv_ready",
-      "snowballing", "cheating", "stop_trading",
-    ],
-  },
-];
 
 function keyToLabel(key: string): string {
   return key.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
@@ -91,13 +29,6 @@ function keyToLabel(key: string): string {
 
 const GROUP_MODES = ["team", "allies", "all", "others", "clear"] as const;
 
-// Multi-target send pacing profile chip labels.
-const PACE_LABELS: Record<PaceProfileId, string> = {
-  instant: "Instant",
-  quick: "Quick",
-  brisk: "Brisk",
-  human: "Human",
-};
 
 // Scannable selectable row — readable name, relationship tag, short troops, and
 // an obvious selected state (check glyph + strong border). Adapted from
@@ -142,8 +73,9 @@ export default function CommsView() {
   const contentWidth = useContentWidth();
   const commsTargets = useStore((s) => s.commsTargets);
   const commsGroupMode = useStore((s) => s.commsGroupMode);
-  const commsPaceProfile = useStore((s) => s.commsPaceProfile);
-  const setCommsPaceProfile = useStore((s) => s.setCommsPaceProfile);
+  const commsPaceMs = useStore((s) => s.commsPaceMs);
+  const commsPaceHuman = useStore((s) => s.commsPaceHuman);
+  const setCommsPace = useStore((s) => s.setCommsPace);
   const commsRecentSent = useStore((s) => s.commsRecentSent);
   const myTeam = useStore((s) => s.myTeam);
   const myAllies = useStore((s) => s.myAllies);
@@ -176,7 +108,7 @@ export default function CommsView() {
     }
     // Read pace at call time (not via closure) so the callback stays stable.
     const s = useStore.getState();
-    const pace = resolvePace(s.commsPaceProfile);
+    const pace = resolvePace(s.commsPaceMs, s.commsPaceHuman);
     s.setCommsActiveBatch({ label, sent: 0, total: ids.length });
     pacerRef.current = sendPaced(ids, fn, {
       spacingMs: pace.minMs,
@@ -390,28 +322,12 @@ export default function CommsView() {
             />
           ))}
         </div>
-        <div className="flex items-center gap-1 mb-0.5">
-          <span className="text-2xs text-hammer-dim mr-0.5" title="How multi-target sends are spaced. Brisk (3-7s) and Human (6-14s) randomize each gap and delay the first send too, like finding each player by hand.">Pace</span>
-          {PACE_PROFILE_IDS.map((p) => (
-            <PresetButton
-              key={p}
-              label={PACE_LABELS[p]}
-              active={commsPaceProfile === p}
-              onClick={() => setCommsPaceProfile(p)}
-            />
-          ))}
-        </div>
-        {(() => {
-          const pace = resolvePace(commsPaceProfile);
-          const n = commsTargets.size;
-          return (
-            <div className="text-2xs text-hammer-dim mb-1.5">
-              each send {paceRangeLabel(pace)} apart
-              {pace.delayFirst && " · first send delayed too"}
-              {n > 1 && ` · ${n} msgs ≈ ${durationLabel(estimateBatchMs(n, pace))}`}
-            </div>
-          );
-        })()}
+        <PaceControl
+          gapMs={commsPaceMs}
+          human={commsPaceHuman}
+          targets={commsTargets.size}
+          onChange={setCommsPace}
+        />
 
         {filteredTeammates.length > 0 && (
           <div className="mb-1">
@@ -621,6 +537,87 @@ export default function CommsView() {
           </div>
         </Section>
       )}
+    </div>
+  );
+}
+
+/**
+ * Multi-target send speed. No typing (number inputs fight the game's hotkeys
+ * mid-match): preset shortcuts, a stepped slider with −/+ for fine steps, and
+ * a Humanize toggle. Applies to every multi-player send in Comms and Alliances.
+ */
+function PaceControl({
+  gapMs,
+  human,
+  targets,
+  onChange,
+}: {
+  gapMs: number;
+  human: boolean;
+  targets: number;
+  onChange: (ms: number, human: boolean) => void;
+}) {
+  const idx = nearestStopIndex(gapMs);
+  const stepTo = (i: number) =>
+    onChange(PACE_STOPS_MS[Math.max(0, Math.min(PACE_STOPS_MS.length - 1, i))], human);
+  const pace = resolvePace(gapMs, human);
+  const stepBtn =
+    "w-5 h-5 flex items-center justify-center text-xs leading-none rounded border border-hammer-border text-hammer-text bg-transparent cursor-pointer hover:border-hammer-blue disabled:opacity-30 disabled:cursor-default";
+
+  return (
+    <div className="mb-1.5">
+      <div className="flex flex-wrap items-center gap-1 mb-1">
+        <span className="text-2xs text-hammer-dim mr-0.5">Pace</span>
+        {PACE_PRESETS.map((p) => (
+          <PresetButton
+            key={p.label}
+            label={p.label}
+            active={PACE_STOPS_MS[idx] === p.ms && human === p.human}
+            onClick={() => onChange(p.ms, p.human)}
+          />
+        ))}
+      </div>
+      <div className="flex items-center gap-1.5">
+        <button className={stepBtn} disabled={idx === 0} onClick={() => stepTo(idx - 1)} title="Faster">
+          −
+        </button>
+        <input
+          type="range"
+          min={0}
+          max={PACE_STOPS_MS.length - 1}
+          step={1}
+          value={idx}
+          onChange={(e) => stepTo(Number(e.target.value))}
+          className="flex-1 min-w-0 accent-hammer-green cursor-pointer"
+          title="Average time between each send"
+        />
+        <button
+          className={stepBtn}
+          disabled={idx === PACE_STOPS_MS.length - 1}
+          onClick={() => stepTo(idx + 1)}
+          title="Slower"
+        >
+          +
+        </button>
+        <span className="text-2xs text-hammer-text w-9 text-right tabular-nums">~{gapLabel(PACE_STOPS_MS[idx])}</span>
+        <label
+          className="flex items-center gap-1 text-2xs cursor-pointer select-none"
+          title="Randomize each gap widely, delay the first send too, and occasionally pause longer — like finding each player by hand"
+        >
+          <input
+            type="checkbox"
+            checked={human}
+            onChange={(e) => onChange(PACE_STOPS_MS[idx], e.target.checked)}
+            className="accent-hammer-green"
+          />
+          <span className={human ? "text-hammer-text" : "text-hammer-dim"}>Humanize</span>
+        </label>
+      </div>
+      <div className="text-2xs text-hammer-dim mt-0.5">
+        each send {paceRangeLabel(pace)} apart
+        {pace.delayFirst && " · first send delayed too"}
+        {targets > 1 && ` · ${targets} msgs ≈ ${durationLabel(estimateBatchMs(targets, pace))}`}
+      </div>
     </div>
   );
 }

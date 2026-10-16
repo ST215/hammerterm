@@ -13,8 +13,7 @@ import type { PlayerData } from "@shared/types";
 import { serialize } from "@shared/serialize";
 import { processDisplayMessage, processDonateEvent, drainPendingMessages } from "./game/message-processor";
 import { setMyLiveTroops } from "./hooks/worker-hook";
-import { asAttackRatioStop } from "./automation/attack-ratio";
-import { cancelAllPaced } from "./game/send";
+import { cancelAllPaced, relayDashboardCommand } from "./game/send";
 import {
   record, startRecording, stopRecording,
   trackMetric, registerSnapshotProviders,
@@ -66,7 +65,10 @@ function startDashboardSync(port: chrome.runtime.Port): void {
 
   record("bridge", "dashboard.connect");
 
-  // Send initial snapshot
+  // Send initial snapshot. Clear the dedupe memory first — it belongs to the
+  // previous window, and skipping a "duplicate" here would leave a freshly
+  // opened window empty until some state happened to change.
+  lastSnapshotJson = "";
   sendSnapshot();
 
   // Periodic sync
@@ -92,7 +94,7 @@ function startDashboardSync(port: chrome.runtime.Port): void {
   // Listen for commands from dashboard
   port.onMessage.addListener((msg) => {
     if (msg.type === "command") {
-      sendToMainWorld(msg.payload);
+      relayDashboardCommand(msg.payload);
     }
     if (msg.type === "store-action") {
       // Dashboard wants to call a store action (e.g., setView, togglePaused)
@@ -271,6 +273,9 @@ function onBridgeMessage(e: MessageEvent): void {
     case "wire-stats":
       useStore.getState().setWireCount60(Number(payload?.count60) || 0);
       break;
+    case "governor":
+      handleGovernorTelemetry(payload);
+      break;
     case "mouse-target":
       handleMouseTarget(payload);
       break;
@@ -292,6 +297,27 @@ function onBridgeMessage(e: MessageEvent): void {
 // Message handlers
 // ---------------------------------------------------------------------------
 
+export function handleGovernorTelemetry(payload: any): void {
+  if (!payload || !(Number(payload.maxTroops) > 0)) return;
+  const store = useStore.getState();
+  store.setMyCap(Number(payload.maxTroops), Number(payload.regenPerSec) || 0);
+  store.setAttackRatioTelemetry({
+    state: payload.state,
+    mode: payload.mode,
+    ratio: Number(payload.ratio) || 0,
+    troops: Number(payload.troops) || 0,
+    maxTroops: Number(payload.maxTroops),
+    troopPct: Number(payload.troopPct) || 0,
+    regenPerSec: Number(payload.regenPerSec) || 0,
+    netSlope: Number(payload.netSlope) || 0,
+    pending: Number(payload.pending) || 0,
+    allowed: Number(payload.allowed) || 0,
+    armPct: Number(payload.armPct) || 0,
+    held: Number(payload.held) || 0,
+    trimmed: Number(payload.trimmed) || 0,
+  });
+}
+
 export function handleInit(payload: { clientID: string }): void {
   if (!payload?.clientID) return;
 
@@ -310,10 +336,8 @@ export function handleInit(payload: { clientID: string }): void {
     store.resetComms();
     store.resetCIA();
     store.resetDonationToasts();
-    // Engine-level stop: clears the control interval, releases the native slider,
-    // and disarms the MAIN-world attack-floor clamp — resetAttackRatio() alone
-    // only flips the slice flags and would leave a live loop / armed floor.
-    asAttackRatioStop();
+    // The governor keeps running across matches — the MAIN world re-arms it per
+    // match (standby until troops reach the arm level). Only clear readouts.
     store.resetAttackRatio();
     // Abort any in-flight paced comms/alliance batch so it can't keep firing
     // stale-PlayerID intents into the new match.

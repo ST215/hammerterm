@@ -4,7 +4,7 @@ import { z } from "zod";
  * Persisted user settings — survives game-tab refresh and tool close/reopen.
  *
  * Deliberately CONFIG ONLY: ratios, thresholds, targets, modes, positions,
- * sizes. We do NOT persist live "running/enabled" automation toggles
+ * sizes. We do NOT persist live "running/enabled" automation toggles that SEND
  * (asTroopsRunning, asGoldRunning, reciprocateEnabled, broadcastEnabled,
  * recorderOn) or presentation state (inGameView, externalOpen) — those reset
  * to safe defaults on every fresh load so automation never silently resumes
@@ -51,9 +51,20 @@ export const PersistedStateSchema = z.object({
   broadcastUseSequence: z.boolean().default(false),
   // Activity feed / notification preferences
   screenPopupsEnabled: z.boolean().default(false),
-  // .catch() maps any legacy stored value (e.g. the removed "custom") to quick
-  // instead of failing hydration.
-  commsPaceProfile: z.enum(["instant", "quick", "brisk", "human"]).default("quick").catch("quick"),
+  donationAlertsEnabled: z.boolean().default(true),
+  // Comms pacing: average gap between multi-target sends + humanize toggle.
+  commsPaceMs: z.number().min(100).max(60000).default(5000).catch(5000),
+  commsPaceHuman: z.boolean().default(true),
+  // Attack governor — persisted INCLUDING its on/off flag: it sends nothing to
+  // the server (it only shapes the player's own attacks), re-arms in standby
+  // each match, and the game page reloads at the end of every match, so a
+  // session-only flag silently switched it off between matches.
+  attackRatioRunning: z.boolean().default(false),
+  attackRatioMode: z.enum(["manual", "assist", "breakeven", "peak"]).default("peak").catch("peak"),
+  attackRatioBasePct: z.number().default(5),
+  attackRatioBreakevenPct: z.number().default(50),
+  attackRatioFloorPct: z.number().default(42),
+  attackRatioMaxCap: z.number().default(75),
   toastInboundTroops: z.boolean().default(true),
   toastInboundGold: z.boolean().default(true),
   toastOutboundTroops: z.boolean().default(true),

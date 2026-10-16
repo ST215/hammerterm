@@ -1,39 +1,62 @@
 /**
- * Pace-profile resolution + batch-duration estimates (src/shared/logic/pace.ts).
+ * Comms pacing (src/shared/logic/pace.ts): stepped gap + Humanize.
  */
 import { describe, expect, test } from "vitest";
 import {
-  PACE_PROFILES,
-  estimateBatchMs,
-  paceRangeLabel,
+  PACE_PRESETS,
+  PACE_STOPS_MS,
   durationLabel,
+  estimateBatchMs,
+  gapLabel,
+  nearestStopIndex,
+  paceRangeLabel,
   resolvePace,
 } from "../src/shared/logic/pace";
 
-describe("resolvePace", () => {
-  test("profiles resolve to their defined ranges", () => {
-    expect(resolvePace("instant")).toEqual(PACE_PROFILES.instant);
-    expect(resolvePace("quick")).toEqual(PACE_PROFILES.quick);
-    expect(resolvePace("brisk")).toEqual(PACE_PROFILES.brisk);
-    expect(resolvePace("human")).toEqual(PACE_PROFILES.human);
-  });
-
-  test("brisk and human are the humanized profiles", () => {
-    for (const p of [PACE_PROFILES.brisk, PACE_PROFILES.human]) {
-      expect(p.delayFirst).toBe(true);
-      expect(p.longPauses).toBe(true);
+describe("stops", () => {
+  test("ascending from 0.3s to 20s", () => {
+    expect(PACE_STOPS_MS[0]).toBe(300);
+    expect(PACE_STOPS_MS[PACE_STOPS_MS.length - 1]).toBe(20000);
+    for (let i = 1; i < PACE_STOPS_MS.length; i++) {
+      expect(PACE_STOPS_MS[i]).toBeGreaterThan(PACE_STOPS_MS[i - 1]);
     }
-    expect(PACE_PROFILES.instant.delayFirst).toBe(false);
-    expect(PACE_PROFILES.quick.delayFirst).toBe(false);
   });
 
-  test("brisk is faster than human", () => {
-    expect(PACE_PROFILES.brisk.minMs).toBeLessThan(PACE_PROFILES.human.minMs);
-    expect(PACE_PROFILES.brisk.maxMs).toBeLessThan(PACE_PROFILES.human.maxMs);
+  test("every preset sits exactly on a stop", () => {
+    for (const p of PACE_PRESETS) expect(PACE_STOPS_MS).toContain(p.ms);
   });
 
-  test("unknown stored profile falls back to quick", () => {
-    expect(resolvePace("custom" as never)).toEqual(PACE_PROFILES.quick);
+  test("odd stored values snap to the nearest stop", () => {
+    expect(PACE_STOPS_MS[nearestStopIndex(900)]).toBe(1000);
+    expect(PACE_STOPS_MS[nearestStopIndex(99999)]).toBe(20000);
+    expect(PACE_STOPS_MS[nearestStopIndex(0)]).toBe(300);
+  });
+});
+
+describe("resolvePace", () => {
+  test("plain: tight ±15% around the gap, first send immediate", () => {
+    expect(resolvePace(2000, false)).toEqual({
+      minMs: 1700,
+      maxMs: 2300,
+      delayFirst: false,
+      longPauses: false,
+    });
+  });
+
+  test("humanized: wide ±40%, first send delayed, occasional long pause", () => {
+    expect(resolvePace(5000, true)).toEqual({
+      minMs: 3000,
+      maxMs: 7000,
+      delayFirst: true,
+      longPauses: true,
+    });
+  });
+
+  test("Brisk preset is a faster Human", () => {
+    const brisk = PACE_PRESETS.find((p) => p.label === "Brisk")!;
+    const human = PACE_PRESETS.find((p) => p.label === "Human")!;
+    expect(brisk.human && human.human).toBe(true);
+    expect(brisk.ms).toBeLessThan(human.ms);
   });
 });
 
@@ -47,15 +70,21 @@ describe("estimateBatchMs", () => {
 
   test("long pauses inflate the average", () => {
     const base = { minMs: 1000, maxMs: 1000, delayFirst: false, longPauses: false };
-    const inflated = estimateBatchMs(11, { ...base, longPauses: true });
-    expect(inflated).toBeGreaterThan(estimateBatchMs(11, base));
+    expect(estimateBatchMs(11, { ...base, longPauses: true })).toBeGreaterThan(
+      estimateBatchMs(11, base),
+    );
   });
 });
 
 describe("labels", () => {
+  test("gap label", () => {
+    expect(gapLabel(300)).toBe("0.3s");
+    expect(gapLabel(1500)).toBe("1.5s");
+    expect(gapLabel(14000)).toBe("14s");
+  });
+
   test("range label", () => {
-    expect(paceRangeLabel(PACE_PROFILES.human)).toBe("6–14s");
-    expect(paceRangeLabel(PACE_PROFILES.instant)).toBe("0.3–0.5s");
+    expect(paceRangeLabel(resolvePace(5000, true))).toBe("3–7s");
   });
 
   test("duration label switches to minutes", () => {

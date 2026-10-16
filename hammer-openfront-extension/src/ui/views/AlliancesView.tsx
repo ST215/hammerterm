@@ -184,7 +184,7 @@ export default function AlliancesView() {
     }
     // Read pace at call time (not via closure) so the callback stays stable.
     const s = useStore.getState();
-    const pace = resolvePace(s.commsPaceProfile);
+    const pace = resolvePace(s.commsPaceMs, s.commsPaceHuman);
     s.setCommsActiveBatch({ label, sent: 0, total: ids.length });
     pacerRef.current = sendPaced(ids, fn, {
       spacingMs: pace.minMs,

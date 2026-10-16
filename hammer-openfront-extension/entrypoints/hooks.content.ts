@@ -11,7 +11,16 @@
  * Communicates with the ISOLATED world content script via window.postMessage.
  */
 
-import { isAttackEvent, clampAttackTroops } from "@shared/logic/attack-clamp";
+import { isAttackEvent } from "@shared/logic/attack-clamp";
+import {
+  allowedSend,
+  armLevel,
+  decideClick,
+  pendingTotal,
+  settlePending,
+  type GovernorConfig,
+  type PendingSend,
+} from "@shared/logic/attack-governor";
 
 export default defineContentScript({
   matches: ["*://openfront.io/*", "*://*.openfront.io/*"],
@@ -49,10 +58,6 @@ export default defineContentScript({
     // EventBus
     let eventBus: any = null;
     const eventClasses: Record<string, any> = {};
-    let emitWrapped = false;
-    // Absolute troop floor (internal units) the governor is currently enforcing.
-    // >0 arms the per-click attack clamp; 0 / cleared = clamp inactive.
-    let attackFloorAbs = 0;
 
     // Timers
     const timeoutIds: ReturnType<typeof setTimeout>[] = [];
@@ -519,19 +524,23 @@ export default defineContentScript({
     // ============================
 
     let gvAttempts = 0;
+    const seenUpdates = new WeakSet<object>();
 
     function hookGameView(): boolean {
       const ed = document.querySelector("events-display") as any;
       if (!ed?.game?.updatesSinceLastTick) return false;
 
+      // The game builds a NEW GameView every match; patch each instance once.
       const gv = ed.game;
-      if (gv.__hammerHooked && gameViewHooked) return true;
-      if (gv.__hammerHooked) delete gv.__hammerHooked;
+      if (gv.__hammerHooked) return true;
 
       const orig = gv.updatesSinceLastTick.bind(gv);
       gv.updatesSinceLastTick = function () {
         const updates = orig();
-        if (updates) {
+        // Up to ~9 HUD layers call this every tick and all get the SAME
+        // per-tick object — forward each tick's events once, not once per caller.
+        if (updates && typeof updates === "object" && !seenUpdates.has(updates)) {
+          seenUpdates.add(updates);
           const devts = updates[GUT_DISPLAY];
           if (devts?.length) {
             for (const evt of devts) {
@@ -593,41 +602,19 @@ export default defineContentScript({
       return true;
     }
 
-    // Never give up — game objects appear only after joining a match,
-    // which can be minutes after page load (lobby/queue wait).
-    // Fast poll for 20s, then slow poll every 2s indefinitely.
-    const gvInterval = setInterval(() => {
-      if (gameViewHooked) {
-        clearInterval(gvInterval);
-        return;
-      }
-      gvAttempts++;
-      hookGameView();
-    }, 100);
-    intervalIds.push(gvInterval);
-
-    // After 20s of fast polling, switch to slow polling
-    timeoutIds.push(
-      setTimeout(() => {
-        if (gameViewHooked) return;
-        clearInterval(gvInterval);
-        const slowGvInterval = setInterval(() => {
-          if (gameViewHooked) {
-            clearInterval(slowGvInterval);
-            return;
-          }
-          gvAttempts++;
-          hookGameView();
-        }, 2000);
-        intervalIds.push(slowGvInterval);
-      }, 20_000),
+    // Lifecycle watchdog — runs for the life of the page. Game objects appear
+    // only after joining a match (minutes after load), and every match builds
+    // a fresh GameView. Hooking once and stopping (the old behavior) left every
+    // match after the first with no donation/display events until a page
+    // refresh. Both checks are a querySelector + flag test when nothing changed.
+    intervalIds.push(
+      setInterval(() => {
+        gvAttempts++;
+        hookGameView();
+        findEventBus();
+      }, 250),
     );
-
-    // Try immediately + early delays
     hookGameView();
-    for (const delay of [50, 100, 250, 500]) {
-      timeoutIds.push(setTimeout(() => hookGameView(), delay));
-    }
 
     // ============================
     // EVENTBUS DISCOVERY
@@ -645,6 +632,7 @@ export default defineContentScript({
         hasQuickChatKey: false,
         hasTarget: false,
         hasAction: false,
+        hasRequestor: false,
         instFieldCount: -1,
         type: null,
       };
@@ -673,6 +661,7 @@ export default defineContentScript({
           result.hasQuickChatKey =
             result.hasQuickChatKey || "quickChatKey" in inst;
           result.hasTarget = result.hasTarget || "target" in inst;
+          result.hasRequestor = result.hasRequestor || "requestor" in inst;
           result.hasAction = result.hasAction || "action" in inst;
           result.instFieldCount = Math.max(
             result.instFieldCount,
@@ -704,16 +693,34 @@ export default defineContentScript({
     function discoverEventClasses() {
       if (!eventBus?.listeners) return;
 
-      for (const [cls] of eventBus.listeners.entries()) {
+      // Alliance request and break are BOTH {requestor, recipient}. Tell them
+      // apart by the listener's source (method names like
+      // onBreakAllianceRequestUIEvent survive minification), falling back to
+      // Transport's subscribe order: request first, break later.
+      const pairClasses: Array<{ cls: any; src: string }> = [];
+      for (const [cls, cbs] of eventBus.listeners.entries()) {
         const probe = probeClass(cls);
         if (probe.type === "recipient_only") {
-          // Alliance and betray use the same EventBus class (toggle)
-          if (!eventClasses.alliance) {
-            eventClasses.alliance = cls;
+          if (probe.hasRequestor) {
+            let src = "";
+            try {
+              src = (Array.isArray(cbs) ? cbs : [cbs])
+                .map((f: any) => Function.prototype.toString.call(f))
+                .join(" ");
+            } catch {}
+            pairClasses.push({ cls, src });
           }
         } else if (probe.type && !eventClasses[probe.type]) {
           eventClasses[probe.type] = cls;
         }
+      }
+      if (pairClasses.length > 0) {
+        const brk =
+          pairClasses.find((p) => /break/i.test(p.src)) ??
+          (pairClasses.length > 1 ? pairClasses[pairClasses.length - 1] : undefined);
+        const req = pairClasses.find((p) => p !== brk);
+        if (req && !eventClasses.alliance) eventClasses.alliance = req.cls;
+        if (brk && !eventClasses.breakAlliance) eventClasses.breakAlliance = brk.cls;
       }
 
       const types = Object.keys(eventClasses);
@@ -724,15 +731,224 @@ export default defineContentScript({
       emit("status", { hook: "eventbus", found: true, classes: types });
     }
 
-    // Per-click attack floor clamp. Wrap eventBus.emit so the game's own
-    // SendAttackIntentEvent/SendBoatAttackIntentEvent pass through us BEFORE
-    // Transport's listener runs. When the governor has armed a floor, clamp
-    // evt.troops to the headroom above the reserve read LIVE from the game
-    // object at emit time (evt.troops = uiState.attackRatio × troops(), both
-    // internal units), swallowing the attack when no headroom remains. Only
-    // game-originated attacks match the field signature — the extension's own
-    // sends (troops/gold/emoji/alliance) never carry {targetID|dst, troops}
-    // without a recipient, so they can't be double-governed here.
+    // ============================
+    // ATTACK GOVERNOR
+    // ============================
+    // Lives here, beside the game, so every number is exact and synchronous:
+    // live troops, the TRUE troop cap from game.config().maxTroops(me) (cities
+    // included — the old estimate ignored them and read late-game armies as
+    // 200%+ of max), and the instant of each click. The ISOLATED side only
+    // pushes config ("governor-config") and renders the telemetry we emit, so
+    // it works identically whether toggled from the overlay or external window.
+
+    let govCfg: GovernorConfig = {
+      running: false,
+      mode: "peak",
+      fixedPct: 20,
+      holdPct: 50,
+      floorPct: 42,
+      capPct: 75,
+    };
+    let govGame: any = null; // GameView the per-match state below belongs to
+    let govEngaged = false; // arms once troops first reach the arm level each match
+    let govPending: PendingSend[] = []; // sent but not yet deducted by the server
+    let govHeld = 0;
+    let govTrimmed = 0;
+    let govLastRatio = -1;
+    let govLastWriteMs = 0;
+    let govWroteSlider = false;
+    let govSlope: Array<{ t: number; troops: number }> = [];
+
+    function currentGame(): any {
+      try {
+        return (document.querySelector("events-display") as any)?.game ?? null;
+      } catch {
+        return null;
+      }
+    }
+
+    function resetGovernorMatch(game: any): void {
+      govGame = game;
+      govEngaged = false;
+      govPending = [];
+      govHeld = 0;
+      govTrimmed = 0;
+      govLastRatio = -1;
+      govWroteSlider = false;
+      govSlope = [];
+    }
+
+    interface MeSnapshot {
+      game: any;
+      troops: number;
+      maxT: number;
+      regenPerSec: number;
+      tick: number;
+      spawnPhase: boolean;
+    }
+
+    /** My live numbers straight from the game, or null if there's no live me. */
+    function readMe(): MeSnapshot | null {
+      const game = currentGame();
+      if (!game) return null;
+      if (game !== govGame) resetGovernorMatch(game);
+      let me: any = null;
+      try {
+        me = typeof game.myPlayer === "function" ? game.myPlayer() : game._myPlayer;
+      } catch {}
+      me = me ?? getMyPlayerView();
+      if (!me) return null;
+      try {
+        if (typeof me.isAlive === "function" && !me.isAlive()) return null;
+      } catch {}
+      const troops = Number(readProp(me, "troops")) || 0;
+      let maxT = 0;
+      let regenPerSec = 0;
+      let tick = 0;
+      let spawnPhase = false;
+      try {
+        const cfg = game.config();
+        maxT = Number(cfg.maxTroops(me)) || 0;
+        regenPerSec = (Number(cfg.troopIncreaseRate(me)) || 0) * 10; // per tick → per sec
+      } catch {}
+      try {
+        tick = Number(game.ticks()) || 0;
+      } catch {}
+      try {
+        spawnPhase = !!game.inSpawnPhase?.();
+      } catch {}
+      if (!(maxT > 0)) return null;
+      return { game, troops, maxT, regenPerSec, tick, spawnPhase };
+    }
+
+    function governorActive(s: MeSnapshot): boolean {
+      return (
+        govCfg.running && govCfg.mode !== "manual" && !isReplayMode && !s.spawnPhase
+      );
+    }
+
+    /** Hand the ratio back to the native slider (ControlPanel keeps its own). */
+    function releaseSlider(): void {
+      if (!govWroteSlider) return;
+      govWroteSlider = false;
+      govLastRatio = -1;
+      try {
+        const cp = document.querySelector("control-panel") as any;
+        const us = resolveUIState();
+        if (us && typeof cp?.attackRatio === "number") us.attackRatio = cp.attackRatio;
+      } catch {}
+    }
+
+    function effectiveTroops(s: MeSnapshot, now: number): number {
+      govPending = settlePending(govPending, s.tick, now, s.troops);
+      return Math.max(0, s.troops - pendingTotal(govPending));
+    }
+
+    // Control loop: keep the game's slider at the governed ratio so the game's
+    // own attack math lands on it; the click hook below is the exact enforcer.
+    function governorTick(): void {
+      const s = readMe();
+      if (!s) return;
+      const now = Date.now();
+      const eff = effectiveTroops(s, now);
+      govSlope.push({ t: now, troops: s.troops });
+      while (govSlope.length > 1 && now - govSlope[0].t > 4000) govSlope.shift();
+
+      if (!governorActive(s)) {
+        releaseSlider();
+        return;
+      }
+      if (!govEngaged && eff >= armLevel(govCfg, s.maxT)) govEngaged = true;
+      if (!govEngaged) return; // standby: native slider untouched
+
+      const allowed = allowedSend(govCfg, eff, s.maxT);
+      const ratio = Math.max(0.01, Math.min(1, s.troops > 0 ? allowed / s.troops : 0.01));
+      // The game re-inits uiState each match and its settings modal can
+      // overwrite it mid-match, so reassert every second even when unchanged.
+      if (Math.abs(ratio - govLastRatio) >= 0.005 || now - govLastWriteMs >= 1000) {
+        const us = resolveUIState();
+        if (us) {
+          us.attackRatio = ratio;
+          govWroteSlider = true;
+          govLastRatio = ratio;
+          govLastWriteMs = now;
+        }
+      }
+    }
+
+    function governorTelemetry(): void {
+      const s = readMe();
+      if (!s) return;
+      const now = Date.now();
+      const eff = effectiveTroops(s, now);
+      const active = governorActive(s);
+      const allowed = active && govEngaged ? allowedSend(govCfg, eff, s.maxT) : 0;
+      let netSlope = 0;
+      if (govSlope.length > 1) {
+        const a = govSlope[0];
+        const b = govSlope[govSlope.length - 1];
+        const dt = (b.t - a.t) / 1000;
+        if (dt > 0) netSlope = (b.troops - a.troops) / dt;
+      }
+      const state = !govCfg.running
+        ? "off"
+        : govCfg.mode === "manual"
+          ? "watch"
+          : !active
+            ? "paused"
+            : !govEngaged
+              ? "standby"
+              : allowed > 0
+                ? "governing"
+                : "holding";
+      emit("governor", {
+        state,
+        mode: govCfg.mode,
+        ratio: govLastRatio > 0 ? govLastRatio : 0,
+        troops: s.troops,
+        maxTroops: s.maxT,
+        troopPct: (s.troops / s.maxT) * 100,
+        regenPerSec: s.regenPerSec,
+        netSlope,
+        pending: pendingTotal(govPending),
+        allowed: Number.isFinite(allowed) ? allowed : 0,
+        armPct: (armLevel(govCfg, s.maxT) / s.maxT) * 100,
+        held: govHeld,
+        trimmed: govTrimmed,
+      });
+    }
+
+    /**
+     * Per-click enforcement for the game's own attack events. Runs BEFORE
+     * Transport's listener, so trimming evt.troops (readonly is TS-only) or
+     * dropping the event decides what reaches the server. Never increases a
+     * request — retaliate's min(attack, ratio×troops) semantics survive.
+     */
+    function governClick(evt: any): boolean {
+      const s = readMe();
+      if (!s) return true;
+      const now = Date.now();
+      const eff = effectiveTroops(s, now);
+      if (governorActive(s) && govEngaged) {
+        const d = decideClick(govCfg, Number(evt.troops), eff, s.maxT);
+        if (d.held) {
+          govHeld++;
+          governorTelemetry(); // instant feedback for a held click
+          return false;
+        }
+        if (d.trimmed) {
+          evt.troops = d.troops;
+          govTrimmed++;
+        }
+      }
+      const sent = Number(evt.troops);
+      if (sent > 0) govPending.push({ amount: sent, tick: s.tick, t: now, base: s.troops });
+      return true;
+    }
+
+    intervalIds.push(setInterval(governorTick, 100));
+    intervalIds.push(setInterval(governorTelemetry, 500));
+
     // Wire-budget estimate: timestamps of events that become server intents
     // (the server locks the whole client out at 150 intents/min). We can only
     // count what crosses this bus — attacks, our sends, native comms — so the
@@ -749,113 +965,72 @@ export default defineContentScript({
       return false;
     }
 
-    function wrapEmit(): void {
-      if (emitWrapped || !eventBus || typeof eventBus.emit !== "function") return;
-      const origEmit = eventBus.emit.bind(eventBus);
-      eventBus.emit = function (evt: any, ...rest: any[]) {
+    intervalIds.push(
+      setInterval(() => {
+        const cutoff = Date.now() - 60_000;
+        while (wireStamps.length && wireStamps[0] < cutoff) wireStamps.shift();
+        if (wireStamps.length !== lastWireCount) {
+          lastWireCount = wireStamps.length;
+          emit("wire-stats", { count60: lastWireCount });
+        }
+      }, 1000),
+    );
+
+    // Wrap a bus's emit so the game's own attack events pass through
+    // governClick before Transport sees them. Flagged per bus instance, so a
+    // replaced bus (e.g. the replay viewer's) gets wrapped too. The extension's
+    // own sends never match the attack signature ({targetID|dst, troops} with
+    // no recipient), so they're never governed here.
+    function wrapEmit(bus: any): void {
+      if (!bus || typeof bus.emit !== "function" || bus.__hammerWrapped) return;
+      const origEmit = bus.emit.bind(bus);
+      bus.emit = function (evt: any, ...rest: any[]) {
         try {
-          if (attackFloorAbs > 0 && isAttackEvent(evt)) {
-            const mine = getMyPlayerView();
-            const live =
-              mine && typeof mine.troops === "function"
-                ? Number(mine.troops())
-                : NaN;
-            const res = clampAttackTroops(evt.troops, live, attackFloorAbs);
-            if (res.swallow) return undefined; // no headroom — drop the attack
-            if (res.clamped) evt.troops = res.troops;
-          }
+          if (isAttackEvent(evt) && !governClick(evt)) return undefined;
           if (looksLikeWireIntent(evt)) wireStamps.push(Date.now());
         } catch {}
         return origEmit(evt, ...rest);
       };
-      emitWrapped = true;
-      // Push the 60s count to the bridge ~1/sec, only when it changed.
-      intervalIds.push(
-        setInterval(() => {
-          const cutoff = Date.now() - 60_000;
-          while (wireStamps.length && wireStamps[0] < cutoff) wireStamps.shift();
-          if (wireStamps.length !== lastWireCount) {
-            lastWireCount = wireStamps.length;
-            emit("wire-stats", { count60: lastWireCount });
-          }
-        }, 1000),
-      );
-      console.log("[Hammer:Main] Wrapped eventBus.emit for attack-floor clamp + wire count");
+      bus.__hammerWrapped = true;
+      console.log("[Hammer:Main] Wrapped eventBus.emit for attack governor + wire count");
     }
 
-    function findEventBus(): boolean {
-      if (eventBus) return true;
-      ebAttempts++;
-
-      for (const [selector, prop] of [
-        ["events-display", "eventBus"],
-        ["game-view", "eventBus"],
-      ] as [string, string][]) {
+    function locateEventBus(): any {
+      for (const selector of ["events-display", "game-view"]) {
         try {
-          const el = document.querySelector(selector) as any;
-          if (el?.[prop]) {
-            eventBus = el[prop];
-            wrapEmit();
-            console.log(
-              "[Hammer:Main] Found EventBus via",
-              selector,
-            );
-            // Retry discovery at increasing delays — game may not have registered listeners yet
-            for (const delay of [100, 500, 1000, 2000, 5000]) {
-              timeoutIds.push(setTimeout(discoverEventClasses, delay));
-            }
-            return true;
-          }
+          const bus = (document.querySelector(selector) as any)?.eventBus;
+          if (bus && typeof bus.emit === "function") return bus;
         } catch {}
       }
-
-      // Try window properties
-      for (const prop of [
-        "eventBus",
-        "_eventBus",
-        "bus",
-        "events",
-      ]) {
+      for (const prop of ["eventBus", "_eventBus", "bus", "events"]) {
         try {
           const val = (window as any)[prop];
-          if (val && typeof val.emit === "function") {
-            eventBus = val;
-            wrapEmit();
-            console.log(
-              `[Hammer:Main] Found EventBus at window.${prop}`,
-            );
-            for (const delay of [100, 500, 1000, 2000, 5000]) {
-              timeoutIds.push(setTimeout(discoverEventClasses, delay));
-            }
-            return true;
-          }
+          if (val && typeof val.emit === "function") return val;
         } catch {}
       }
-
-      return false;
+      return null;
     }
 
-    // Never give up — EventBus only exists after game starts.
-    // Fast poll for 10s, then slow poll every 2s indefinitely.
-    const ebInterval = setInterval(() => {
-      if (findEventBus()) {
-        clearInterval(ebInterval);
+    /**
+     * Adopt whatever bus the HUD currently uses. Re-checked continuously by the
+     * lifecycle watchdog: the main game keeps one bus, but the replay viewer
+     * swaps in its own, and a stale cached bus would make every send vanish.
+     */
+    function findEventBus(): boolean {
+      ebAttempts++;
+      const bus = locateEventBus();
+      if (!bus) return !!eventBus;
+      if (bus !== eventBus) {
+        eventBus = bus;
+        wrapEmit(bus);
+        console.log("[Hammer:Main] Adopted EventBus");
+        // Retry discovery at increasing delays — game may not have registered listeners yet
+        for (const delay of [100, 500, 1000, 2000, 5000]) {
+          timeoutIds.push(setTimeout(discoverEventClasses, delay));
+        }
       }
-    }, 200);
-    intervalIds.push(ebInterval);
-
-    timeoutIds.push(
-      setTimeout(() => {
-        if (eventBus) return;
-        clearInterval(ebInterval);
-        const slowEbInterval = setInterval(() => {
-          if (findEventBus()) {
-            clearInterval(slowEbInterval);
-          }
-        }, 2000);
-        intervalIds.push(slowEbInterval);
-      }, 10_000),
-    );
+      return true;
+    }
 
     // ============================
     // BOOTSTRAP
@@ -1214,6 +1389,18 @@ export default defineContentScript({
       // Retry discovery if classes are missing (they may not have been ready on first attempt)
       ensureEventClasses();
 
+      // The binary wire doesn't validate on encode, and the server KICKS on a
+      // donation with a NaN/negative amount (the game guards only attacks).
+      // null is legitimate — it means the game's default "send a third".
+      if ((action === "troops" || action === "gold") && amount != null) {
+        const n = Number(amount);
+        if (!Number.isFinite(n) || n < 0) {
+          console.warn("[Hammer:Main] Refusing donation with invalid amount:", amount);
+          emit("send-result", { action, success: false, reason: "invalid-amount" });
+          return;
+        }
+      }
+
       if (action === "troops") {
         if (eventBus && eventClasses.troops) {
           const pv = getPlayerView(targetId);
@@ -1246,7 +1433,7 @@ export default defineContentScript({
             try {
               const evt = new eventClasses.gold(
                 pv,
-                BigInt(Number(amount)),
+                BigInt(Math.floor(Number(amount))),
               );
               eventBus.emit(evt);
               emit("send-result", { action, success: true, method: "eventbus" });
@@ -1353,13 +1540,14 @@ export default defineContentScript({
         console.warn("[Hammer:Main] Alliance send failed:", diag);
         emit("send-result", diag);
       } else if (action === "betray") {
-        // Betray uses the SAME EventBus class as alliance — it's a toggle
-        if (eventBus && eventClasses.alliance && recipientId) {
+        // Breaking an alliance needs SendBreakAllianceIntentEvent — re-sending
+        // an alliance REQUEST to an existing ally is ignored by the engine.
+        if (eventBus && eventClasses.breakAlliance && recipientId) {
           const myPv = getMyPlayerView();
           const pv = getPlayerView(recipientId);
           if (myPv && pv) {
             try {
-              const evt = new eventClasses.alliance(myPv, pv);
+              const evt = new eventClasses.breakAlliance(myPv, pv);
               eventBus.emit(evt);
               emit("send-result", { action: "betray", recipientId, success: true, method: "eventbus" });
               return;
@@ -1463,36 +1651,25 @@ export default defineContentScript({
         } else {
           emit("mouse-target", { found: false, reason: "no-owner" });
         }
-      } else if (action === "set-attack-ratio") {
-        // Pure client-side write — sets the attack-ratio slider value the game
-        // multiplies by troops on the player's next manual attack. No intent is
-        // sent to the server, so this carries no rate-limit / kick risk.
-        const ratio = Math.max(0.01, Math.min(1.0, Number(amount)));
-        const us = resolveUIState();
-        if (us) {
-          us.attackRatio = ratio;
-          emit("send-result", { action, success: true, ratio });
-        } else {
-          emit("send-result", { action, success: false });
+      } else if (action === "governor-config") {
+        // Config pushed by the ISOLATED world on every change (+ heartbeat).
+        // The governor itself runs here — see ATTACK GOVERNOR above.
+        const c = data.config ?? {};
+        const mode = ["manual", "assist", "breakeven", "peak"].includes(c.mode)
+          ? c.mode
+          : "peak";
+        govCfg = {
+          running: !!c.running,
+          mode,
+          fixedPct: Number(c.fixedPct) || 0,
+          holdPct: Number(c.holdPct) || 0,
+          floorPct: Number(c.floorPct) || 0,
+          capPct: Number(c.capPct) || 0,
+        };
+        if (!govCfg.running || govCfg.mode === "manual") {
+          govEngaged = false;
+          releaseSlider();
         }
-      } else if (action === "set-attack-floor") {
-        // Governor pushes its absolute reserve floor (internal troop units) each
-        // tick; the emit-wrap clamp reads it live. 0 / negative disarms.
-        attackFloorAbs = Math.max(0, Number(amount) || 0);
-      } else if (action === "release-attack-ratio") {
-        // Hand control back to the native slider: the ControlPanel keeps its own
-        // `attackRatio` (updated by the player's drag / T-Y), so copy it into the
-        // shared uiState. After this the visible slider is authoritative again.
-        // Also disarm the per-click attack clamp — the governor is disengaging.
-        attackFloorAbs = 0;
-        const us = resolveUIState();
-        let restored: number | null = null;
-        try {
-          const cp = document.querySelector("control-panel") as any;
-          if (cp && typeof cp.attackRatio === "number") restored = cp.attackRatio;
-        } catch {}
-        if (us && restored != null) us.attackRatio = restored;
-        emit("send-result", { action, success: us != null, ratio: restored ?? undefined });
       }
     }
 
@@ -1569,7 +1746,7 @@ export default defineContentScript({
         timeoutIds.length = 0;
         intervalIds.length = 0;
       },
-      version: "15.23.0-ext",
+      version: "15.24.0-ext",
     };
 
     console.log("[Hammer:Main] Hooks installed at document_start");

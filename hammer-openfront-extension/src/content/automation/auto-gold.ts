@@ -123,21 +123,24 @@ function asGoldTick(): void {
 
 // ---------- Start / Stop ----------
 
+// UI toggles only flip the flag; the loop runs in the game tab (automation runtime).
 export function asGoldStart(): void {
-  const s = useStore.getState();
-  if (s.asGoldRunning) return; // Already running
-  s.setAsGoldRunning(true);
-  if (asGoldTimer) clearInterval(asGoldTimer);
-  asGoldTimer = setInterval(asGoldTick, 800);
-  registerInterval(asGoldTimer);
-  log("[AUTO-GOLD] Started");
+  useStore.getState().setAsGoldRunning(true);
 }
 
 export function asGoldStop(): void {
   useStore.getState().setAsGoldRunning(false);
-  if (asGoldTimer) {
+}
+
+/** Game tab only (automation runtime): run or halt the loop to match the flag. */
+export function syncGoldLoop(running: boolean): void {
+  if (running && !asGoldTimer) {
+    asGoldTimer = setInterval(asGoldTick, 800);
+    registerInterval(asGoldTimer);
+    log("[AUTO-GOLD] Started");
+  } else if (!running && asGoldTimer) {
     clearInterval(asGoldTimer);
     asGoldTimer = null;
+    log("[AUTO-GOLD] Stopped");
   }
-  log("[AUTO-GOLD] Stopped");
 }

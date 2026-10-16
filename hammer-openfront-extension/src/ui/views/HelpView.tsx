@@ -10,7 +10,8 @@ const TABS_HELP = [
   { title: "AutoTroops", desc: "Configure automatic troop sending to teammates and allies." },
   { title: "AutoGold", desc: "Configure automatic gold sending with ratio and threshold." },
   { title: "Reciprocate", desc: "Auto or manual reciprocation when someone sends you resources." },
-  { title: "Comms", desc: "Emoji picker and categorized quickchat for any player." },
+  { title: "Comms", desc: "Emoji picker and categorized quickchat for any player. Pace sets the spacing for multi-player sends." },
+  { title: "Attack Ratio", desc: "Attack governor: each attack sends only your surplus above the target (42% = fastest regen), counting troops already in flight so spam-clicking can't overspend. Stays in standby each match until you reach the target." },
   { title: "CIA", desc: "Server-wide intelligence: economy rates, flows, alerts, live feed." },
 ];
 
@@ -24,6 +25,11 @@ const HOTKEYS = [
     keys: ["ALT", "F"],
     label: "Toggle auto-feed",
     detail: "Quickly enable/disable Auto Troops and Auto Gold.",
+  },
+  {
+    keys: ["ALT", "G"],
+    label: "Toggle attack governor",
+    detail: "On/off mid-fight — e.g. to land a counter-attack it's holding below your target.",
   },
   {
     keys: ["ALT", "SHIFT", "H"],

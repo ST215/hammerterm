@@ -12,24 +12,25 @@ import { short, comma, dTroops, fmtSec } from "@shared/utils";
 import { estimateMaxTroops } from "@shared/logic/city";
 import { cityLevelSumByOwner } from "@content/hooks/worker-hook";
 import { troopGrowthPerSec, timeToReach, OPTIMAL_REGEN_PCT } from "@shared/logic/troop-math";
-import { Section, DataRow, PercentBar, PresetButton, Badge } from "@ui/components/ds";
+import { Section, DataRow, PercentBar, PresetButton } from "@ui/components/ds";
 import { asAttackRatioStart, asAttackRatioStop } from "@content/automation/attack-ratio";
 import type { AttackRatioMode } from "@store/slices/attack-ratio";
 import { useSortedEntries } from "./SummaryView";
+import { governorStatusLine } from "./AttackRatioView";
 
 // Force-monitor bands on troops/max capacity.
 const CHARGING_MAX = 37;
 const READY_MIN = 47;
 
 const MODES: { id: AttackRatioMode; label: string }[] = [
-  { id: "manual", label: "Manual" },
-  { id: "assist", label: "Assist" },
-  { id: "breakeven", label: "Break-even" },
-  { id: "peak", label: "Peak" },
+  { id: "peak", label: "Peak 42%" },
+  { id: "breakeven", label: "Hold %" },
+  { id: "assist", label: "Fixed %" },
+  { id: "manual", label: "Watch" },
 ];
 
-const FLOOR_PRESETS = [0, 25, 42, 50, 60];
-const CAP_PRESETS = [15, 20, 25, 30, 50, 75, 100];
+const FLOOR_PRESETS = [0, 25, 42, 50];
+const CAP_PRESETS = [25, 50, 75, 100];
 
 function fmtAgo(d: Date | null): string {
   if (!d) return "";
@@ -50,6 +51,8 @@ export default function HammerView() {
   const floorPct = useStore((s) => s.attackRatioFloorPct);
   const maxCap = useStore((s) => s.attackRatioMaxCap);
   const tel = useStore((s) => s.attackRatioTelemetry);
+  const exactMaxT = useStore((s) => s.myMaxTroops);
+  const exactRegen = useStore((s) => s.myRegenPerSec);
   const setMode = useStore((s) => s.setAttackRatioMode);
   const setFloorPct = useStore((s) => s.setAttackRatioFloorPct);
   const setMaxCap = useStore((s) => s.setAttackRatioMaxCap);
@@ -85,9 +88,11 @@ export default function HammerView() {
   const myTeam = me!.team ?? "";
   const tiles = me!.tilesOwned ?? 0;
   const gold = Number(me!.gold ?? 0);
-  const maxT = estimateMaxTroops(tiles, me!.smallID ?? 0, cityLevelSumByOwner);
+  // Exact cap/regen from the game when known (cities included); the tiles-only
+  // estimate is just a fallback before the first governor telemetry arrives.
+  const maxT = exactMaxT > 0 ? exactMaxT : estimateMaxTroops(tiles, me!.smallID ?? 0, cityLevelSumByOwner);
   const troopPct = maxT > 0 ? (rawTroops / maxT) * 100 : 0;
-  const growthSec = maxT > 0 ? troopGrowthPerSec(rawTroops, maxT) : 0;
+  const growthSec = exactRegen > 0 ? exactRegen : maxT > 0 ? troopGrowthPerSec(rawTroops, maxT) : 0;
 
   // Band
   let band: string, bandColor: string, barColor: string;
@@ -113,9 +118,7 @@ export default function HammerView() {
   for (const [, rec] of inbound) { inGold += rec.gold; inTroops += rec.troops; }
   const topSupporters = sortedInbound.slice(0, 3);
 
-  // Attack-ratio live badge
-  const ratioLabel = tel?.belowSetpoint ? "min" : tel ? `${Math.round(tel.ratio * 100)}%` : "—";
-  const isManual = mode === "manual";
+  const govStatus = governorStatusLine(running, tel);
 
   return (
     <div className="relative font-mono select-none" style={{ minHeight: 320 }}>
@@ -184,14 +187,16 @@ export default function HammerView() {
 
       {/* ── Attack-ratio quick controls ── */}
       <Section title="Attack Ratio">
-        <div className="flex items-center justify-between mb-1_5">
-          <div className="flex items-center gap-2">
-            <span className={`inline-block w-2 h-2 rounded-full ${running ? "bg-hammer-green animate-pulse" : "bg-hammer-dim"}`} />
-            {running && !isManual && (
-              <Badge label={ratioLabel} color={tel?.belowSetpoint ? "warn" : "green"} />
-            )}
-            {running && isManual && <span className="text-2xs text-hammer-muted">watching</span>}
-            {!running && <span className="text-2xs text-hammer-dim">off</span>}
+        <div className="flex items-center justify-between gap-2 mb-1_5">
+          <div className="flex items-center gap-2 min-w-0">
+            <span className={`inline-block w-2 h-2 rounded-full shrink-0 ${running ? "bg-hammer-green animate-pulse" : "bg-hammer-dim"}`} />
+            <span
+              className={`text-2xs truncate ${
+                govStatus.tone === "on" ? "text-hammer-green" : govStatus.tone === "warn" ? "text-hammer-warn" : "text-hammer-dim"
+              }`}
+            >
+              {govStatus.text}
+            </span>
           </div>
           <button
             onClick={() => (running ? asAttackRatioStop() : asAttackRatioStart())}
@@ -209,18 +214,22 @@ export default function HammerView() {
             <PresetButton key={m.id} label={m.label} active={mode === m.id} onClick={() => setMode(m.id)} />
           ))}
         </div>
-        {!isManual && (
+        {(mode === "peak" || mode === "breakeven") && (
           <>
-            <div className="text-2xs text-hammer-dim mt-1_5 mb-0_5">Floor reserve</div>
-            <div className="flex flex-wrap gap-1">
-              {FLOOR_PRESETS.map((p) => (
-                <PresetButton key={p} label={p === 0 ? "Off" : `${p}%`} active={floorPct === p} onClick={() => setFloorPct(p)} />
-              ))}
-            </div>
-            <div className="text-2xs text-hammer-dim mt-1_5 mb-0_5">Send cap</div>
+            <div className="text-2xs text-hammer-dim mt-1_5 mb-0_5">Max per attack</div>
             <div className="flex flex-wrap gap-1">
               {CAP_PRESETS.map((p) => (
                 <PresetButton key={p} label={`${p}%`} active={maxCap === p} onClick={() => setMaxCap(p)} />
+              ))}
+            </div>
+          </>
+        )}
+        {mode === "assist" && (
+          <>
+            <div className="text-2xs text-hammer-dim mt-1_5 mb-0_5">Never drop below</div>
+            <div className="flex flex-wrap gap-1">
+              {FLOOR_PRESETS.map((p) => (
+                <PresetButton key={p} label={p === 0 ? "Off" : `${p}%`} active={floorPct === p} onClick={() => setFloorPct(p)} />
               ))}
             </div>
           </>

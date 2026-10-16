@@ -1,4 +1,5 @@
 import AutoSendView, { type ResourceConfig } from "./AutoSendView";
+import { useStore } from "@store/index";
 import { asTroopsStart, asTroopsStop } from "@content/automation/auto-troops";
 import { dTroops } from "@shared/utils";
 import { TROOP_DISPLAY_DIV } from "@shared/constants";
@@ -10,7 +11,11 @@ const TROOPS_CONFIG: ResourceConfig = {
   unit: "t",
   accentColor: "hammer-blue",
   getMyAmount: (me) => dTroops(me?.troops),
-  getMaxAmount: (me) => estimateMaxTroops(me?.tilesOwned ?? 0, me?.smallID ?? 0, cityLevelSumByOwner) / TROOP_DISPLAY_DIV,
+  getMaxAmount: (me) => {
+    const exact = useStore.getState().myMaxTroops;
+    const maxT = exact > 0 ? exact : estimateMaxTroops(me?.tilesOwned ?? 0, me?.smallID ?? 0, cityLevelSumByOwner);
+    return maxT / TROOP_DISPLAY_DIV;
+  },
   thresholdMode: "pct",
   thresholdPresets: [0, 25, 42, 50, 60, 75],
   thresholdLabel: "Threshold (min troops %)",

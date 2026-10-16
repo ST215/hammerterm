@@ -26,7 +26,7 @@ function broadcastTick(): void {
   if (s.isReplay) return; // no automation during replay playback
 
   if (!s.broadcastEnabled) {
-    broadcastStop();
+    syncBroadcastLoop(false);
     return;
   }
 
@@ -43,24 +43,27 @@ function broadcastTick(): void {
   log("[BROADCAST] Sent emoji", emoji);
 }
 
+// UI toggles only flip the flag; the loop runs in the game tab (automation runtime).
 export function broadcastStart(): void {
-  const s = useStore.getState();
-  if (s.broadcastEnabled) return;
-  s.setBroadcastEnabled(true);
-  sequenceIdx = 0;
-  if (broadcastTimer) clearInterval(broadcastTimer);
-  broadcastTick(); // Send immediately
-  broadcastTimer = setInterval(broadcastTick, BROADCAST_INTERVAL_MS);
-  registerInterval(broadcastTimer);
-  log("[BROADCAST] Started");
+  useStore.getState().setBroadcastEnabled(true);
 }
 
 export function broadcastStop(): void {
   useStore.getState().setBroadcastEnabled(false);
-  if (broadcastTimer) {
+}
+
+/** Game tab only (automation runtime): run or halt the loop to match the flag. */
+export function syncBroadcastLoop(enabled: boolean): void {
+  if (enabled && !broadcastTimer) {
+    sequenceIdx = 0;
+    broadcastTimer = setInterval(broadcastTick, BROADCAST_INTERVAL_MS);
+    registerInterval(broadcastTimer);
+    broadcastTick(); // Send immediately
+    log("[BROADCAST] Started");
+  } else if (!enabled && broadcastTimer) {
     clearInterval(broadcastTimer);
     broadcastTimer = null;
+    sequenceIdx = 0;
+    log("[BROADCAST] Stopped");
   }
-  sequenceIdx = 0;
-  log("[BROADCAST] Stopped");
 }

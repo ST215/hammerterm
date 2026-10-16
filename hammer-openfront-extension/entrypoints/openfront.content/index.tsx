@@ -2,6 +2,7 @@ import ReactDOM from "react-dom/client";
 import { installBridge } from "@content/bridge";
 import { installKeyboardHandler, removeKeyboardHandler } from "@content/game/keyboard";
 import { startReciprocateProcessor } from "@content/automation/reciprocate-engine";
+import { installAutomationRuntime } from "@content/automation/runtime";
 import { cleanupAll } from "@content/cleanup";
 import { useStore } from "@store/index";
 import { hydrateSettings, startSettingsAutosave } from "@content/persistence";
@@ -28,6 +29,10 @@ export default defineContentScript({
     // (The MAIN world hooks.content.ts handles Worker/WebSocket/Canvas/GameView
     //  interception and forwards data via window.postMessage)
     installBridge();
+
+    // Automation loops (auto-troops/gold, broadcast) and the attack governor's
+    // config sync run HERE, in the game tab, no matter which window toggled them.
+    installAutomationRuntime();
 
     // Boot sync: the overlay defaults to hidden, but if a page reload happened
     // while the external dashboard window is still open, ask the background for
@@ -79,7 +84,7 @@ export default defineContentScript({
         ui.remove();
         delete (window as any).__HAMMER__;
       },
-      version: "15.23.0-ext",
+      version: "15.24.0-ext",
     };
 
     // Listen for messages from popup/background. The store here is the source

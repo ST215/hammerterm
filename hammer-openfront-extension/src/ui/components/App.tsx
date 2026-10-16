@@ -86,14 +86,15 @@ export default function App({ mode }: AppProps) {
   const view = useStore((s) => s.view);
   const inGameView = useStore((s) => s.inGameView);
   const screenPopupsEnabled = useStore((s) => s.screenPopupsEnabled);
+  const donationAlertsEnabled = useStore((s) => s.donationAlertsEnabled);
 
   // ── OVERLAY (in-browser, on the game page) ──
   if (mode === "overlay") {
     // Popups render on the game screen in EVERY view mode — including "hidden"
-    // — gated only by the master screenPopupsEnabled switch (each popup also has
-    // its own toggle internally). Decoupled from inGameView so notifications
-    // work regardless of whether the panel is shown. Each popup is
-    // fixed-positioned. Default OFF — the user opts in via Settings.
+    // — decoupled from inGameView so they work whether or not the panel shows.
+    // The master switch (default OFF) gates everything; inbound donation alerts
+    // ("X sent you troops/gold") have their own switch (default ON) so they can
+    // stay on while every other popup is off.
     const notifications = screenPopupsEnabled ? (
       <>
         <DonationToast />
@@ -101,6 +102,8 @@ export default function App({ mode }: AppProps) {
         <StatusToast />
         <GrowthHUD />
       </>
+    ) : donationAlertsEnabled ? (
+      <DonationToast inboundOnly />
     ) : null;
 
     // "hidden": only popups on the game screen (no panel chrome at all).

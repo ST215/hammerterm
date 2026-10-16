@@ -1,18 +1,17 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useStore } from "@store/index";
 import { deserializeWithSharing, mapsEqual, setsEqual } from "@shared/serialize";
 import HammerApp from "@ui/components/App";
 
-// Keys that are local to the dashboard UI — never overwritten by snapshots.
-// These let the user navigate tabs, select comms targets, etc. without
-// the 500ms sync clobbering their interactions.
+// Keys the user edits in this window. Edits push to the game tab immediately
+// (sync-local); see WINDOW_ONLY_KEYS below for which of them also flow back.
 const LOCAL_KEYS = new Set([
   // UI navigation / presentation
   "view", "paused", "sizeIdx", "inGameView", "externalOpen",
   // Comms selections (user picks targets in dashboard)
   "commsTargets", "commsGroupMode", "commsOthersExpanded",
   "commsPendingQC", "commsRecentSent", "allianceCommsExpanded",
-  "commsPaceProfile", "commsActiveBatch",
+  "commsPaceMs", "commsPaceHuman", "commsActiveBatch",
   // Reciprocate config
   "reciprocateMode", "reciprocateAutoPct", "reciprocateNotifyDuration",
   "reciprocateEnabled", "reciprocateOnGold", "reciprocateOnTroops",
@@ -30,7 +29,7 @@ const LOCAL_KEYS = new Set([
   "attackRatioRunning", "attackRatioMode", "attackRatioBasePct",
   "attackRatioBreakevenPct", "attackRatioFloorPct", "attackRatioMaxCap",
   // Activity feed toggles
-  "screenPopupsEnabled", "growthHudEnabled",
+  "screenPopupsEnabled", "donationAlertsEnabled", "growthHudEnabled",
   "toastInboundTroops", "toastInboundGold", "toastOutboundTroops", "toastOutboundGold",
   "toastScale", "statusToastScale",
   // Notification positions
@@ -44,11 +43,28 @@ const LOCAL_KEYS = new Set([
   "recorderOn",
 ]);
 
+// Window-local presentation & in-progress selections: never adopted from the
+// game tab. Every OTHER LOCAL_KEY is a setting/toggle the GAME TAB owns: it's
+// adopted from snapshots (so this window opens showing your real settings and
+// reflects changes made in the overlay or by hotkey) unless you edited it here
+// within TOUCH_GUARD_MS — so an in-flight snapshot can't revert your click.
+const WINDOW_ONLY_KEYS = new Set([
+  "view", "paused", "sizeIdx", "inGameView", "externalOpen",
+  "commsTargets", "commsGroupMode", "commsOthersExpanded",
+  "commsPendingQC", "commsRecentSent", "allianceCommsExpanded", "commsActiveBatch",
+]);
+const TOUCH_GUARD_MS = 2000;
+
 export default function DashboardApp() {
   const [connected, setConnected] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [unlocked, setUnlocked] = useState(false);
   const [retryKey, setRetryKey] = useState(0);
+  // Once this window has shown data, a dropped connection (the game page
+  // reloads at the end of EVERY match) keeps the terminal up with a banner
+  // instead of blanking or erroring.
+  const [everConnected, setEverConnected] = useState(false);
+  const everConnectedRef = useRef(false);
 
   // This window's own store always shows the full terminal (mode="window"
   // ignores inGameView). The game-tab overlay's externalOpen/inGameView is
@@ -58,6 +74,50 @@ export default function DashboardApp() {
     let port: chrome.runtime.Port | null = null;
     let disposed = false;
     let unsub: (() => void) | null = null;
+    const touchedAt = new Map<string, number>();
+    let applyingSnapshot = false;
+
+    // LOCAL_KEY edits made while disconnected (the game page reloads at the
+    // end of every match), replayed on reconnect.
+    const pendingLocal = new Set<string>();
+
+    // Reverse sync: push LOCAL_KEY edits to the game tab. Lives for the whole
+    // window (not per connection) so edits during a reload aren't dropped.
+    unsub = useStore.subscribe((state, prev) => {
+      if (applyingSnapshot) return;
+
+      // Forward notification dismissals to game tab
+      if (port && state.reciprocateNotifications !== prev.reciprocateNotifications) {
+        for (const n of state.reciprocateNotifications) {
+          const old = prev.reciprocateNotifications.find((p) => p.id === n.id);
+          if (n.dismissed && old && !old.dismissed) {
+            try { port.postMessage({ type: "dismiss-notification", id: n.id }); } catch { /* port died */ }
+          }
+        }
+      }
+
+      const changes: Record<string, unknown> = {};
+      for (const key of LOCAL_KEYS) {
+        const curr = (state as any)[key];
+        const old = (prev as any)[key];
+        if (curr instanceof Map && old instanceof Map) {
+          if (!mapsEqual(curr, old)) changes[key] = curr;
+        } else if (curr instanceof Set && old instanceof Set) {
+          if (!setsEqual(curr, old)) changes[key] = curr;
+        } else if (curr !== old) {
+          changes[key] = curr;
+        }
+      }
+      const keys = Object.keys(changes);
+      if (keys.length === 0) return;
+      const now = Date.now();
+      for (const key of keys) touchedAt.set(key, now);
+      if (!port) {
+        for (const key of keys) pendingLocal.add(key);
+        return;
+      }
+      try { port.postMessage({ type: "sync-local", data: changes }); } catch { /* port died */ }
+    });
 
     // Intercept sendToMainWorld calls (window.postMessage with __hammer flag)
     // and forward them through the port to the content script
@@ -89,14 +149,29 @@ export default function DashboardApp() {
 
         port.onMessage.addListener((msg) => {
           if (msg.type === "snapshot" && msg.data) {
+            attempt = 0; // connection proven — reset the backoff
+            // Edits made while the game tab was reloading: replay them now that
+            // the connection is proven, and guard them so this very snapshot
+            // (built before the replay lands) can't revert them.
+            if (pendingLocal.size > 0 && port) {
+              const state = useStore.getState() as any;
+              const data: Record<string, unknown> = {};
+              const now = Date.now();
+              for (const key of pendingLocal) {
+                data[key] = state[key];
+                touchedAt.set(key, now);
+              }
+              pendingLocal.clear();
+              try { port.postMessage({ type: "sync-local", data }); } catch { /* port died */ }
+            }
             const currentState = useStore.getState();
             const data = deserializeWithSharing(msg.data, currentState);
-            // Apply only game-data fields, skip local UI keys and functions
+            const now = Date.now();
             const patch: Record<string, any> = {};
             for (const [key, val] of Object.entries(data)) {
-              if (typeof val !== "function" && !LOCAL_KEYS.has(key)) {
-                patch[key] = val;
-              }
+              if (typeof val === "function" || WINDOW_ONLY_KEYS.has(key)) continue;
+              if (LOCAL_KEYS.has(key) && now - (touchedAt.get(key) ?? 0) < TOUCH_GUARD_MS) continue;
+              patch[key] = val;
             }
 
             // Preserve dismissed state for notifications: if the dashboard
@@ -123,83 +198,60 @@ export default function DashboardApp() {
               }
             }
             if (Object.keys(finalPatch).length > 0) {
-              useStore.setState(finalPatch);
+              // Adopted values must not echo back to the game tab as "edits".
+              applyingSnapshot = true;
+              try {
+                useStore.setState(finalPatch);
+              } finally {
+                applyingSnapshot = false;
+              }
             }
-            if (!connected) setConnected(true);
+            setConnected(true);
+            everConnectedRef.current = true;
+            setEverConnected(true);
+            setError(null);
           }
         });
 
         port.onDisconnect.addListener(() => {
-          // Null out port immediately so the subscribe listener stops using it
-          const deadPort = port;
+          // Null out port immediately so edits queue in pendingLocal instead.
           port = null;
-          // Unsubscribe from store to prevent further postMessage on dead port
-          unsub?.();
-          unsub = null;
 
           if (!disposed) {
             setConnected(false);
-            if (attempt < maxAttempts) {
-              setTimeout(tryConnect, 1000);
-            } else {
-              setError("Connection to game tab lost. Close and reopen.");
-            }
+            scheduleRetry();
           }
         });
 
-        // Reverse sync: push LOCAL_KEY changes back to the content script
-        unsub = useStore.subscribe((state, prev) => {
-          if (!port) return;
 
-          // Forward notification dismissals to game tab
-          if (state.reciprocateNotifications !== prev.reciprocateNotifications) {
-            for (const n of state.reciprocateNotifications) {
-              const old = prev.reciprocateNotifications.find((p) => p.id === n.id);
-              if (n.dismissed && old && !old.dismissed) {
-                try { port.postMessage({ type: "dismiss-notification", id: n.id }); } catch { /* port died */ }
-              }
-            }
-          }
-
-          const changes: Record<string, unknown> = {};
-          for (const key of LOCAL_KEYS) {
-            const curr = (state as any)[key];
-            const old = (prev as any)[key];
-            if (curr instanceof Map && old instanceof Map) {
-              if (!mapsEqual(curr, old)) changes[key] = curr;
-            } else if (curr instanceof Set && old instanceof Set) {
-              if (!setsEqual(curr, old)) changes[key] = curr;
-            } else if (curr !== old) {
-              changes[key] = curr;
-            }
-          }
-          if (Object.keys(changes).length > 0) {
-            try { port.postMessage({ type: "sync-local", data: changes }); } catch { /* port died */ }
-          }
-        });
-
-        setConnected(true);
-        setError(null);
+        // Connected only once a snapshot arrives: a tab whose content script
+        // isn't listening yet (page still loading) just drops the port.
       } catch (err: any) {
         if (!disposed) {
-          setError(err?.message || "Failed to connect to game tab");
+          lastError = err?.message || "Failed to connect to game tab";
+          scheduleRetry();
         }
       }
     }
 
-    // Retry connection up to 5 times with 1s delay.
-    // The content script may not have its onConnect listener ready yet.
+    // Retry for as long as this window is open. The game page reloads at the
+    // end of every match and takes several seconds to bring its content script
+    // back, so a fixed retry budget (the old 5×1s, never reset) killed this
+    // window after the first match. Backoff caps at 3s.
     let attempt = 0;
-    const maxAttempts = 5;
+    let lastError = "No active game tab found. Open OpenFront.io first.";
+    const SHOW_ERROR_AFTER = 10; // only if we've never connected
+
+    function scheduleRetry() {
+      if (disposed) return;
+      attempt++;
+      if (attempt >= SHOW_ERROR_AFTER && !everConnectedRef.current) setError(lastError);
+      setTimeout(tryConnect, Math.min(3000, 500 * attempt));
+    }
 
     function tryConnect() {
       if (disposed) return;
-      attempt++;
-      connect().catch(() => {
-        if (!disposed && attempt < maxAttempts) {
-          setTimeout(tryConnect, 1000);
-        }
-      });
+      connect();
     }
 
     tryConnect();
@@ -273,7 +325,7 @@ export default function DashboardApp() {
     );
   }
 
-  if (!connected) {
+  if (!connected && !everConnected) {
     return (
       <div
         style={{
@@ -331,5 +383,29 @@ export default function DashboardApp() {
     );
   }
 
-  return <HammerApp mode="window" />;
+  return (
+    <>
+      {!connected && (
+        <div
+          style={{
+            position: "fixed",
+            top: 0,
+            left: 0,
+            right: 0,
+            zIndex: 10,
+            padding: "2px 8px",
+            fontSize: 11,
+            fontFamily: "'JetBrains Mono', ui-monospace, monospace",
+            color: "#f2c94c",
+            background: "rgba(11, 18, 32, 0.92)",
+            borderBottom: "1px solid #1e3558",
+            textAlign: "center",
+          }}
+        >
+          game tab reloading — reconnecting…
+        </div>
+      )}
+      <HammerApp mode="window" />
+    </>
+  );
 }

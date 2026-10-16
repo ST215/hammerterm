@@ -22,13 +22,15 @@ export default function GrowthHUD() {
   const ratio = useStore((s) => s.asTroopsRatio);
   const position = useStore((s) => s.growthPosition);
   const me = useMyPlayer();
+  const exactMaxT = useStore((s) => s.myMaxTroops);
+  const exactRegen = useStore((s) => s.myRegenPerSec);
 
   if (!enabled || !running || !me) return null;
 
   const troops = Number(me.troops || 0);
-  const maxT = estimateMaxTroops(me.tilesOwned ?? 0, me.smallID ?? 0, cityLevelSumByOwner);
+  const maxT = exactMaxT > 0 ? exactMaxT : estimateMaxTroops(me.tilesOwned ?? 0, me.smallID ?? 0, cityLevelSumByOwner);
   const pctOfMax = maxT > 0 ? (troops / maxT) * 100 : 0;
-  const growthSec = maxT > 0 ? troopGrowthPerSec(troops, maxT) : 0;
+  const growthSec = exactRegen > 0 ? exactRegen : maxT > 0 ? troopGrowthPerSec(troops, maxT) : 0;
   const displayGrowth = dTroops(Math.round(growthSec));
   const isPalantir = ratio === PALANTIR_RATIO;
 
