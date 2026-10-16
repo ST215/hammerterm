@@ -113,8 +113,29 @@ export interface PendingSend {
   amount: number; // troops leaving: an attack, or a troop donation
   tick: number; // game tick when it was emitted
   t: number; // wall-clock ms when emitted
-  base: number; // observed troops at emit time
 }
+
+/**
+ * Troops sent but not yet deducted by the server, plus the ANCHOR: the troop
+ * level we'd observe right now if none of those sends had been deducted yet.
+ * The anchor is set from the observed count when the ledger starts, advanced
+ * every tick by the game's own (signed) regen rate, and lowered by exactly a
+ * send's amount when that send is confirmed. A deduction shows as the
+ * observed count falling below the anchor.
+ *
+ * (An earlier version re-derived the baseline from each send's own
+ * observed-at-click count. A send clicked before an earlier send's deduction
+ * landed carries that earlier troop count in its baseline, so the earlier
+ * deduction "confirmed" it early — with a ~400ms+ round trip, rapid clicks
+ * drained to ~26%. The anchor never re-derives while sends are pending.)
+ */
+export interface Ledger {
+  sends: PendingSend[];
+  anchor: number;
+  anchorTick: number;
+}
+
+export const emptyLedger = (): Ledger => ({ sends: [], anchor: 0, anchorTick: 0 });
 
 /** Earliest a deduction can be visible (one server round trip in ticks). */
 export const SETTLE_TICKS = 4;
@@ -122,44 +143,44 @@ export const SETTLE_TICKS = 4;
 export const SETTLE_MAX_MS = 3000;
 
 /**
- * Drop sends whose deduction is now reflected in the observed count.
- *
- * The server executes intents in order, so deductions land FIFO: walk the
- * oldest sends first and settle each only once troops have dropped by (at
- * least half of) everything sent up to and including it, measured from the
- * oldest pending send's base. Requiring an actual drop — not just elapsed
- * ticks — keeps a slow round trip from settling a send early (ticks keep
- * arriving at 10/s even when the deduction lands late), and a dip from
- * something unrelated rarely matches a cumulative drop of that size. Regen
- * keeps adding troops meanwhile, so the bar rises by the expected regen since
- * the oldest send (otherwise regen masks small, peak-farming-sized sends).
- * A rejected attack never deducts, so it lingers until SETTLE_MAX_MS — erring
- * toward holding, never toward over-sending.
+ * Advance the ledger to `nowTick` and confirm sends whose deduction is now
+ * visible. The server executes intents in order, so deductions land FIFO:
+ * the oldest send is confirmed once the observed count has fallen at least
+ * half its amount below the anchor (half leaves room for estimate error).
+ * Requiring an actual drop — not elapsed time — keeps a slow round trip from
+ * confirming early (ticks keep arriving at 10/s while the deduction is late).
+ * A rejected attack never deducts: it's dropped at SETTLE_MAX_MS without
+ * touching the anchor — erring toward holding, never toward over-sending.
  */
-export function settlePending(
-  pending: PendingSend[],
+export function settleLedger(
+  ledger: Ledger,
   nowTick: number,
   nowMs: number,
   observedTroops: number,
-  regenPerTick = 0,
-): PendingSend[] {
-  const live = pending.filter((p) => nowMs - p.t < SETTLE_MAX_MS);
-  if (live.length === 0) return live;
-  const base = live[0].base + Math.max(0, regenPerTick) * Math.max(0, nowTick - live[0].tick);
-  let dropped = 0;
-  let k = 0;
-  for (; k < live.length; k++) {
-    const p = live[k];
-    if (nowTick - p.tick < SETTLE_TICKS) break;
-    if (observedTroops > base - dropped - 0.5 * p.amount) break;
-    dropped += p.amount;
+  regenPerTick: number,
+): Ledger {
+  if (ledger.sends.length === 0) {
+    return { sends: [], anchor: observedTroops, anchorTick: nowTick };
   }
-  return k === 0 ? live : live.slice(k);
+  let anchor = ledger.anchor;
+  if (nowTick > ledger.anchorTick) {
+    anchor += (Number.isFinite(regenPerTick) ? regenPerTick : 0) * (nowTick - ledger.anchorTick);
+  }
+  let k = 0;
+  for (; k < ledger.sends.length; k++) {
+    const p = ledger.sends[k];
+    if (nowTick - p.tick < SETTLE_TICKS) break;
+    if (observedTroops > anchor - 0.5 * p.amount) break;
+    anchor -= p.amount;
+  }
+  const sends = ledger.sends.slice(k).filter((p) => nowMs - p.t < SETTLE_MAX_MS);
+  if (sends.length === 0) return { sends, anchor: observedTroops, anchorTick: nowTick };
+  return { sends, anchor, anchorTick: Math.max(nowTick, ledger.anchorTick) };
 }
 
-export function pendingTotal(pending: PendingSend[]): number {
+export function pendingTotal(ledger: Ledger): number {
   let sum = 0;
-  for (const p of pending) sum += p.amount;
+  for (const p of ledger.sends) sum += p.amount;
   return sum;
 }
 
@@ -170,13 +191,13 @@ export interface ClickContext {
   engaged: boolean; // past standby this match
   troops: number; // observed troops (server-confirmed)
   maxTroops: number;
-  regenPerTick: number;
+  regenPerTick: number; // signed: troops above max decay
   tick: number;
   nowMs: number;
 }
 
 export interface ClickOutcome extends ClickDecision {
-  pending: PendingSend[];
+  ledger: Ledger;
 }
 
 /**
@@ -184,27 +205,30 @@ export interface ClickOutcome extends ClickDecision {
  * troops that are really still home, and record whatever is sent. This is the
  * exact path the MAIN-world emit wrap runs.
  */
-export function governAttack(
-  ctx: ClickContext,
-  pending: PendingSend[],
-  requested: number,
-): ClickOutcome {
-  const settled = settlePending(pending, ctx.tick, ctx.nowMs, ctx.troops, ctx.regenPerTick);
+export function governAttack(ctx: ClickContext, ledger: Ledger, requested: number): ClickOutcome {
+  const settled = settleLedger(ledger, ctx.tick, ctx.nowMs, ctx.troops, ctx.regenPerTick);
   const eff = Math.max(0, ctx.troops - pendingTotal(settled));
   let d: ClickDecision = { troops: requested, held: false, trimmed: false };
   if (ctx.active && ctx.engaged) d = decideClick(ctx.cfg, requested, eff, ctx.maxTroops);
   const out = d.held ? settled : recordSend(settled, d.troops, ctx);
-  return { ...d, pending: out };
+  return { ...d, ledger: out };
 }
 
-/** Record troops leaving (attacks AND troop donations) so later clicks see them. */
+/**
+ * Record troops leaving (attacks AND troop donations) so later clicks see
+ * them. Call on a ledger already settled to this tick.
+ */
 export function recordSend(
-  pending: PendingSend[],
+  ledger: Ledger,
   amount: number,
   ctx: Pick<ClickContext, "troops" | "tick" | "nowMs">,
-): PendingSend[] {
-  if (!(amount > 0) || !Number.isFinite(amount)) return pending;
-  return [...pending, { amount, tick: ctx.tick, t: ctx.nowMs, base: ctx.troops }];
+): Ledger {
+  if (!(amount > 0) || !Number.isFinite(amount)) return ledger;
+  const send = { amount, tick: ctx.tick, t: ctx.nowMs };
+  if (ledger.sends.length === 0) {
+    return { sends: [send], anchor: ctx.troops, anchorTick: ctx.tick };
+  }
+  return { ...ledger, sends: [...ledger.sends, send] };
 }
 
 function clamp01(x: number): number {

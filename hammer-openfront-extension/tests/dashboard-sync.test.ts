@@ -8,6 +8,7 @@ import type { CIAState } from "../src/shared/types";
 import { createCIAState } from "../src/shared/logic/cia";
 import {
   LOCAL_KEYS,
+  MATCH_SCOPED_KEYS,
   TOUCH_GUARD_MS,
   WINDOW_ONLY_KEYS,
   filterSnapshotPatch,
@@ -74,6 +75,15 @@ describe("snapshot adoption", () => {
 
   test("every window-only key is also a LOCAL_KEY (edits still push to the game tab)", () => {
     for (const key of WINDOW_ONLY_KEYS) expect(LOCAL_KEYS.has(key), key).toBe(true);
+  });
+
+  test("match-scoped sending toggles are never replayed into the next match", () => {
+    for (const key of ["asTroopsRunning", "asGoldRunning", "broadcastEnabled", "reciprocateMode"]) {
+      expect(MATCH_SCOPED_KEYS.has(key), key).toBe(true);
+    }
+    // ...but the governor (sends nothing, persisted) and settings are.
+    expect(MATCH_SCOPED_KEYS.has("attackRatioRunning")).toBe(false);
+    expect(MATCH_SCOPED_KEYS.has("commsPaceMs")).toBe(false);
   });
 
   test("new governor, pace and alert settings are synced keys", () => {

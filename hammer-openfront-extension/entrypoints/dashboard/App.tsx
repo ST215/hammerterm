@@ -4,6 +4,7 @@ import { deserializeWithSharing, mapsEqual, serialize, setsEqual } from "@shared
 import HammerApp from "@ui/components/App";
 import {
   LOCAL_KEYS,
+  MATCH_SCOPED_KEYS,
   TOUCH_GUARD_MS,
   filterSnapshotPatch,
 } from "@shared/dashboard-sync";
@@ -67,7 +68,7 @@ export default function DashboardApp() {
       const now = Date.now();
       for (const key of keys) touchedAt.set(key, now);
       if (!port) {
-        for (const key of keys) pendingLocal.add(key);
+        for (const key of keys) if (!MATCH_SCOPED_KEYS.has(key)) pendingLocal.add(key);
         return;
       }
       try { port.postMessage({ type: "sync-local", data: serialize(changes) }); } catch { /* port died */ }
@@ -167,7 +168,9 @@ export default function DashboardApp() {
           // (every match ends in a navigation) — queue those for replay too.
           port = null;
           const cutoff = Date.now() - TOUCH_GUARD_MS;
-          for (const [key, at] of touchedAt) if (at >= cutoff) pendingLocal.add(key);
+          for (const [key, at] of touchedAt) {
+            if (at >= cutoff && !MATCH_SCOPED_KEYS.has(key)) pendingLocal.add(key);
+          }
 
           if (!disposed) {
             setConnected(false);

@@ -16,11 +16,12 @@ import {
   allowedSend,
   armLevel,
   governAttack,
+  emptyLedger,
   pendingTotal,
   recordSend,
-  settlePending,
+  settleLedger,
   type GovernorConfig,
-  type PendingSend,
+  type Ledger,
 } from "@shared/logic/attack-governor";
 
 export default defineContentScript({
@@ -752,7 +753,10 @@ export default defineContentScript({
     };
     let govGame: any = null; // GameView the per-match state below belongs to
     let govEngaged = false; // arms once troops first reach the arm level each match
-    let govPending: PendingSend[] = []; // sent but not yet deducted by the server
+    let govLedger: Ledger = emptyLedger(); // sent but not yet deducted by the server
+    // Donation events the extension itself builds (auto-troops, reciprocate):
+    // recorded in the ledger but never touched by the radial-ratio fix below.
+    const ownSendEvents = new WeakSet<object>();
     let govHeld = 0;
     let govTrimmed = 0;
     let govLastRatio = -1;
@@ -776,7 +780,7 @@ export default defineContentScript({
     function resetGovernorMatch(game: any): void {
       govGame = game;
       govEngaged = false;
-      govPending = [];
+      govLedger = emptyLedger();
       govHeld = 0;
       govTrimmed = 0;
       govLastRatio = -1;
@@ -851,8 +855,8 @@ export default defineContentScript({
     }
 
     function effectiveTroops(s: MeSnapshot): number {
-      govPending = settlePending(govPending, s.tick, s.now, s.troops, s.regenPerSec / 10);
-      return Math.max(0, s.troops - pendingTotal(govPending));
+      govLedger = settleLedger(govLedger, s.tick, s.now, s.troops, s.regenPerSec / 10);
+      return Math.max(0, s.troops - pendingTotal(govLedger));
     }
 
     // Control loop: keep the game's slider at the governed ratio so the game's
@@ -931,7 +935,7 @@ export default defineContentScript({
         troopPct: (s.troops / s.maxT) * 100,
         regenPerSec: s.regenPerSec,
         netSlope,
-        pending: pendingTotal(govPending),
+        pending: pendingTotal(govLedger),
         allowed: Number.isFinite(allowed) ? allowed : 0,
         armPct: (armLevel(govCfg, s.maxT) / s.maxT) * 100,
         held: govHeld,
@@ -960,10 +964,10 @@ export default defineContentScript({
           tick: s.tick,
           nowMs: s.now,
         },
-        govPending,
+        govLedger,
         Number(evt.troops),
       );
-      govPending = out.pending;
+      govLedger = out.ledger;
       if (out.held) {
         govHeld++;
         governorTelemetry(); // instant feedback for a held click
@@ -989,7 +993,13 @@ export default defineContentScript({
     function trackDonation(evt: any): void {
       const s = readMe();
       if (!s) return;
-      if (govWroteSlider && govLastRatio > 0 && typeof evt.troops === "number") {
+      effectiveTroops(s); // settle the ledger to this tick before recording
+      if (
+        !ownSendEvents.has(evt) &&
+        govWroteSlider &&
+        govLastRatio > 0 &&
+        typeof evt.troops === "number"
+      ) {
         const viaGovernedRatio = Math.floor(govLastRatio * s.troops);
         if (Math.abs(evt.troops - viaGovernedRatio) <= 1) {
           try {
@@ -1002,7 +1012,7 @@ export default defineContentScript({
       }
       // null = the engine's default (a third of troops, capped by recipient room).
       const amount = typeof evt.troops === "number" ? evt.troops : s.troops / 3;
-      govPending = recordSend(govPending, amount, {
+      govLedger = recordSend(govLedger, amount, {
         troops: s.troops,
         tick: s.tick,
         nowMs: s.now,
@@ -1480,6 +1490,7 @@ export default defineContentScript({
                 pv,
                 amount == null ? null : Number(amount),
               );
+              ownSendEvents.add(evt);
               eventBus.emit(evt);
               emit("send-result", { action, success: true, method: "eventbus" });
               return;

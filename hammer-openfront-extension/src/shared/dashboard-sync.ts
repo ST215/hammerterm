@@ -56,6 +56,14 @@ export const WINDOW_ONLY_KEYS = new Set([
 ]);
 export const TOUCH_GUARD_MS = 2000;
 
+// Sending toggles and their per-match targets reset with every match (the game
+// page reloads). An edit to one of these that was in flight across the
+// match-end reload belongs to the OLD match — never replay it into the next.
+export const MATCH_SCOPED_KEYS = new Set([
+  "asTroopsRunning", "asTroopsTargets", "asGoldRunning", "asGoldTargets",
+  "broadcastEnabled", "reciprocateMode", "recorderOn",
+]);
+
 /**
  * The part of a game-tab snapshot the external window should adopt: drop
  * functions and WINDOW_ONLY_KEYS, and skip settings the user edited here

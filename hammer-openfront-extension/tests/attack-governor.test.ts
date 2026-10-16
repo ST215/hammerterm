@@ -9,14 +9,15 @@ import {
   allowedSend,
   armLevel,
   decideClick,
+  emptyLedger,
   governAttack,
   pendingTotal,
   recordSend,
-  settlePending,
+  settleLedger,
   targetFraction,
   type ClickContext,
   type GovernorConfig,
-  type PendingSend,
+  type Ledger,
 } from "../src/shared/logic/attack-governor";
 
 const M = 1_000_000; // max troops (internal units)
@@ -152,15 +153,15 @@ describe("clobbering: rapid clicks before the server deducts (real governAttack 
     // Five clicks land before the first deduction is visible: observed troops
     // stay at 80% for all of them. Each click goes through the same function
     // the MAIN-world emit wrap runs; the ledger it returns carries forward.
-    let pending: PendingSend[] = [];
+    let ledger = emptyLedger();
     let total = 0;
     for (let i = 0; i < 5; i++) {
-      const out = governAttack(ctx({ nowMs: i * 30 }), pending, 0.8 * M * 0.75);
-      pending = out.pending;
+      const out = governAttack(ctx({ nowMs: i * 30 }), ledger, 0.8 * M * 0.75);
+      ledger = out.ledger;
       if (!out.held) total += out.troops;
     }
     expect(0.8 * M - total).toBeGreaterThanOrEqual(PEAK_PCT * M - 1);
-    expect(pendingTotal(pending)).toBe(total);
+    expect(pendingTotal(ledger)).toBe(total);
   });
 
   test("without the ledger the same burst would drain the army", () => {
@@ -176,60 +177,125 @@ describe("clobbering: rapid clicks before the server deducts (real governAttack 
   });
 
   test("standby / inactive: clicks pass untouched but are still recorded", () => {
-    const out = governAttack(ctx({ engaged: false }), [], 12345);
+    const out = governAttack(ctx({ engaged: false }), emptyLedger(), 12345);
     expect(out).toMatchObject({ troops: 12345, held: false, trimmed: false });
-    expect(pendingTotal(out.pending)).toBe(12345);
+    expect(pendingTotal(out.ledger)).toBe(12345);
   });
 
   test("a held click records nothing", () => {
-    const out = governAttack(ctx({ troops: 0.3 * M }), [], 5000);
+    const out = governAttack(ctx({ troops: 0.3 * M }), emptyLedger(), 5000);
     expect(out.held).toBe(true);
-    expect(out.pending).toHaveLength(0);
+    expect(out.ledger.sends).toHaveLength(0);
   });
 
   test("troop donations in flight count against the next attack", () => {
     // 0.8M home, a 300k donation just left (not yet deducted): only 500k is
     // really home → surplus above 420k is 80k, not 380k.
-    const pending = recordSend([], 300_000, { troops: 0.8 * M, tick: 100, nowMs: 0 });
-    const out = governAttack(ctx({ nowMs: 10 }), pending, 0.8 * M * 0.75);
+    const ledger = recordSend(emptyLedger(), 300_000, { troops: 0.8 * M, tick: 100, nowMs: 0 });
+    const out = governAttack(ctx({ nowMs: 10 }), ledger, 0.8 * M * 0.75);
     expect(out.troops).toBe(Math.floor(0.5 * M - PEAK_PCT * M));
   });
 });
 
-describe("settlePending", () => {
-  const send = (amount: number, tick = 10, t = 0, base = 1000): PendingSend => ({ amount, tick, t, base });
+/**
+ * Game-faithful simulation: the engine's regen formula each tick, deductions
+ * landing `latency` ticks after each click capped at what's left
+ * (AttackExecution min), the governor settling every tick (MAIN-world 100ms
+ * loop) and judging every click through governAttack. Returns the lowest troop
+ * level reached as a fraction of max.
+ */
+function simulate(opts: { latency: number; clickEvery: number; capPct?: number; ticks?: number }): number {
+  const { latency, clickEvery, capPct = 25, ticks = 400 } = opts;
+  const max = M;
+  const regen = (t: number) => (10 + Math.pow(t, 0.73) / 4) * (1 - t / max);
+  const c = cfg({ capPct });
+  let troops = 0.9 * max;
+  let ledger: Ledger = emptyLedger();
+  const landing: Array<{ at: number; amount: number }> = [];
+  let low = troops;
+  for (let tick = 0; tick < ticks; tick++) {
+    // Server turn: deductions due now (capped), then regen.
+    for (const d of landing.filter((x) => x.at === tick)) troops -= Math.min(troops, d.amount);
+    troops = Math.min(max, troops + regen(troops));
+    low = Math.min(low, troops);
+    const base: Omit<ClickContext, "cfg"> = {
+      active: true,
+      engaged: true,
+      troops,
+      maxTroops: max,
+      regenPerTick: regen(troops),
+      tick,
+      nowMs: tick * 100,
+    };
+    ledger = settleLedger(ledger, tick, tick * 100, troops, regen(troops));
+    if (tick % clickEvery === 0) {
+      // The game asks for ratio × troops; ask big and let the governor trim.
+      const out = governAttack({ cfg: c, ...base }, ledger, troops * 0.75);
+      ledger = out.ledger;
+      if (!out.held && out.troops > 0) landing.push({ at: tick + latency, amount: out.troops });
+    }
+  }
+  return low / max;
+}
 
-  test("settles once ticks have passed AND troops actually dropped", () => {
-    const p = [send(100)];
-    expect(settlePending(p, 10 + SETTLE_TICKS - 1, 500, 900)).toHaveLength(1); // too soon
-    expect(settlePending(p, 10 + SETTLE_TICKS, 500, 1001)).toHaveLength(1); // no drop yet
-    expect(settlePending(p, 10 + SETTLE_TICKS, 500, 900)).toHaveLength(0);
+describe("simulation: spam-clicking holds the 42% target at real-world latencies", () => {
+  for (const latency of [1, 2, 3, 4, 5, 6, 8, 10, 12]) {
+    for (const clickEvery of [1, 2, 5]) {
+      test(`round trip ${latency} ticks, click every ${clickEvery}`, () => {
+        // The pre-fix ledger drained to ~26% at latency ≥ 5.
+        expect(simulate({ latency, clickEvery })).toBeGreaterThan(PEAK_PCT - 0.01);
+      });
+    }
+  }
+});
+
+describe("settleLedger", () => {
+  const at = (amount: number, tick = 10, t = 0) => ({ amount, tick, t });
+  const ledgerOf = (sends: Array<ReturnType<typeof at>>, anchor = 1000, anchorTick = 10): Ledger => ({
+    sends,
+    anchor,
+    anchorTick,
   });
 
-  test("a slow round trip doesn't settle early — ticks alone aren't enough", () => {
-    // 20 ticks later, deduction still not visible: stays pending.
-    expect(settlePending([send(100)], 30, 2000, 1000)).toHaveLength(1);
+  test("confirms once ticks have passed AND troops actually dropped", () => {
+    const l = ledgerOf([at(100)]);
+    expect(settleLedger(l, 10 + SETTLE_TICKS - 1, 500, 900, 0).sends).toHaveLength(1); // too soon
+    expect(settleLedger(l, 10 + SETTLE_TICKS, 500, 1001, 0).sends).toHaveLength(1); // no drop yet
+    expect(settleLedger(l, 10 + SETTLE_TICKS, 500, 900, 0).sends).toHaveLength(0);
   });
 
-  test("FIFO: a big first deduction doesn't settle the second send too", () => {
-    const p = [send(500), send(100)];
-    // Only the first 500 has landed: 1000 → 500.
-    const left = settlePending(p, 10 + SETTLE_TICKS, 500, 500);
-    expect(left).toHaveLength(1);
-    expect(left[0].amount).toBe(100);
-    // Both landed: 1000 → 400.
-    expect(settlePending(p, 10 + SETTLE_TICKS, 500, 400)).toHaveLength(0);
+  test("a slow round trip doesn't confirm early — ticks alone aren't enough", () => {
+    expect(settleLedger(ledgerOf([at(100)]), 30, 2000, 1000, 0).sends).toHaveLength(1);
   });
 
-  test("regen since the send is accounted for (it would mask small sends)", () => {
-    // 100 sent; 10 ticks of +30 regen = +300 → observed 1200 even after the
-    // 100 deduction (1000 − 100 + 300). Without regen accounting this never
-    // settles; with it, the expected no-deduction level is 1300.
-    expect(settlePending([send(100)], 20, 900, 1200, 0)).toHaveLength(1);
-    expect(settlePending([send(100)], 20, 900, 1200, 30)).toHaveLength(0);
+  test("FIFO: a big first deduction doesn't confirm the second send too", () => {
+    const l = ledgerOf([at(500), at(100)]);
+    const after = settleLedger(l, 10 + SETTLE_TICKS, 500, 500, 0);
+    expect(after.sends.map((p) => p.amount)).toEqual([100]);
+    // The anchor carries forward (1000 − 500), it is NOT re-derived.
+    expect(after.anchor).toBe(500);
+    expect(settleLedger(l, 10 + SETTLE_TICKS, 500, 400, 0).sends).toHaveLength(0);
+  });
+
+  test("the anchor integrates regen tick by tick (regen would mask small sends)", () => {
+    // 100 sent; +30/tick for 10 ticks → 1300 expected with no deduction.
+    // Observed 1200 = deducted. Without regen it would look like +200, no drop.
+    const l = ledgerOf([at(100)]);
+    expect(settleLedger(l, 20, 900, 1200, 0).sends).toHaveLength(1);
+    expect(settleLedger(l, 20, 900, 1200, 30).sends).toHaveLength(0);
+  });
+
+  test("negative regen (troops above max decay) isn't mistaken for a deduction", () => {
+    // −50/tick for 10 ticks → expected 500 with no deduction; observed 520.
+    const l = ledgerOf([at(400)]);
+    expect(settleLedger(l, 20, 900, 520, -50).sends).toHaveLength(1);
   });
 
   test("hard-expires after SETTLE_MAX_MS (rejected attack never deducts)", () => {
-    expect(settlePending([send(100)], 11, SETTLE_MAX_MS, 5000)).toHaveLength(0);
+    expect(settleLedger(ledgerOf([at(100)]), 11, SETTLE_MAX_MS, 5000, 0).sends).toHaveLength(0);
+  });
+
+  test("an empty ledger re-anchors on the observed count", () => {
+    expect(settleLedger(emptyLedger(), 50, 0, 777, 5)).toEqual({ sends: [], anchor: 777, anchorTick: 50 });
   });
 });
